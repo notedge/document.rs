@@ -1,0 +1,35 @@
+# Copy to `config.toml` (git ignored) and replace `<your-path>` with your local absolute path.
+# Committed `Cargo.toml` pins git `rev`s; this file only overlays path checkouts for local work.
+
+[patch."https://github.com/yggdrasil-language/oak.rs.git"]
+oak-core = { path = "<your-path>/oaks/projects/oak-core" }
+oak-markdown = { path = "<your-path>/oaks/examples/oak-markdown" }
+oak-notedown = { path = "<your-path>/oaks/examples/oak-notedown" }
+oak-html = { path = "<your-path>/oaks/examples/oak-html" }
+oak-xml = { path = "<your-path>/oaks/examples/oak-xml" }
+oak-org-mode = { path = "<your-path>/oaks/examples/oak-org-mode" }
+oak-css-selector = { path = "<your-path>/oaks/examples/oak-css-selector" }
+oak-xpath = { path = "<your-path>/oaks/examples/oak-xpath" }
+oak-testing = { path = "<your-path>/oaks/projects/oak-testing" }
+oak-tex = { path = "<your-path>/oaks/examples/oak-tex" }
+oak-typst = { path = "<your-path>/oaks/examples/oak-typst" }
+oak-dot = { path = "<your-path>/oaks/examples/oak-dot" }
+oak-mermaid = { path = "<your-path>/oaks/examples/oak-mermaid" }
+oak-uml = { path = "<your-path>/oaks/examples/oak-uml" }
+oak-plantuml = { path = "<your-path>/oaks/examples/oak-plantuml" }
+
+[patch."https://github.com/yggdrasil-language/acorn.rs.git"]
+acorn-codec = { path = "<your-path>/acorn.rs/projects/acorn-codec" }
+acorn-core = { path = "<your-path>/acorn.rs/projects/acorn-core" }
+acorn-cfb = { path = "<your-path>/acorn.rs/examples/acorn-cfb" }
+acorn-doc = { path = "<your-path>/acorn.rs/examples/acorn-doc" }
+acorn-docx = { path = "<your-path>/acorn.rs/examples/acorn-docx" }
+acorn-epub = { path = "<your-path>/acorn.rs/examples/acorn-epub" }
+acorn-ttf = { path = "<your-path>/acorn.rs/projects/acorn-ttf" }
+
+[patch."https://github.com/oovm/rust-boost"]
+boost-benchmark = { path = "<your-path>/rust-boost/projects/boost-benchmark" }
+boost-diagnostic = { path = "<your-path>/rust-boost/projects/boost-diagnostic" }
+boost-log = { path = "<your-path>/rust-boost/projects/boost-log" }
+boost-http = { path = "<your-path>/rust-boost/projects/boost-http" }
+boost-random = { path = "<your-path>/rust-boost/projects/boost-random" }

@@ -1,0 +1,152 @@
+[workspace]
+resolver = "2"
+members = [
+    "projects/plotter/*",
+    "projects/document/*",
+    "projects/crawler/*",
+]
+default-members = [
+    "projects/plotter/plotter",
+    "projects/plotter/plotter.types",
+    "projects/plotter/plotter.scene",
+    "projects/plotter/plotter.diagram",
+    "projects/plotter/plotter.chart",
+    "projects/document/document",
+    "projects/document/document.ir",
+    "projects/document/document.formats",
+    "projects/document/document.convert",
+    "projects/crawler/crawler",
+    "projects/crawler/crawler.types",
+]
+exclude = [
+    "projects/.DS_Store",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Aster <192607617@qq.com>"]
+license = "MPL-2.0"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+
+[workspace.dependencies]
+# --- Plotter (grammar-of-graphics + diagram/chart) ---
+plotter = { path = "projects/plotter/plotter" }
+plotter-types = { path = "projects/plotter/plotter.types" }
+plotter-data = { path = "projects/plotter/plotter.data" }
+plotter-grammar = { path = "projects/plotter/plotter.grammar" }
+plotter-view = { path = "projects/plotter/plotter.view" }
+plotter-layout = { path = "projects/plotter/plotter.layout" }
+plotter-renderer = { path = "projects/plotter/plotter.renderer" }
+plotter-renderer-svg = { path = "projects/plotter/plotter.renderer.svg" }
+plotter-renderer-wgpu = { path = "projects/plotter/plotter.renderer.wgpu" }
+plotter-scene = { path = "projects/plotter/plotter.scene" }
+plotter-diagram = { path = "projects/plotter/plotter.diagram" }
+plotter-chart = { path = "projects/plotter/plotter.chart" }
+plotter-runtime = { path = "projects/plotter/plotter.runtime" }
+plotter-motion = { path = "projects/plotter/plotter.motion" }
+plotter-input-mermaid = { path = "projects/plotter/plotter.input.mermaid" }
+plotter-input-dot = { path = "projects/plotter/plotter.input.dot" }
+plotter-input-plantuml = { path = "projects/plotter/plotter.input.plantuml" }
+
+# --- Document (IR / formats / convert / layout / renderer) ---
+document = { path = "projects/document/document" }
+document-ir = { path = "projects/document/document.ir" }
+document-formats = { path = "projects/document/document.formats", default-features = false }
+document-types = { path = "projects/document/document.types" }
+document-diagnostic = { path = "projects/document/document.diagnostic" }
+document-convert = { path = "projects/document/document.convert" }
+document-compose = { path = "projects/document/document.compose" }
+document-style = { path = "projects/document/document.style" }
+document-text = { path = "projects/document/document.text" }
+document-layout = { path = "projects/document/document.layout" }
+document-presentation = { path = "projects/document/document.presentation" }
+document-renderer = { path = "projects/document/document.renderer" }
+document-renderer-pdf = { path = "projects/document/document.renderer.pdf" }
+document-renderer-svg = { path = "projects/document/document.renderer.svg" }
+document-renderer-html = { path = "projects/document/document.renderer.html" }
+document-renderer-raster = { path = "projects/document/document.renderer.raster" }
+document-input-markdown = { path = "projects/document/document.input.markdown" }
+document-input-tex = { path = "projects/document/document.input.tex" }
+document-input-typst = { path = "projects/document/document.input.typst" }
+
+# --- Crawler ---
+crawler = { path = "projects/crawler/crawler" }
+crawler-types = { path = "projects/crawler/crawler.types" }
+crawler-fetch = { path = "projects/crawler/crawler.fetch" }
+crawler-extract = { path = "projects/crawler/crawler.extract" }
+crawler-store = { path = "projects/crawler/crawler.store", default-features = false }
+
+# --- Boost ---
+boost-benchmark = { git = "https://github.com/oovm/rust-boost", rev = "9aa52745d6eae2d7748c76e4e3e6555e1f6e4b86" }
+boost-diagnostic = { git = "https://github.com/oovm/rust-boost", rev = "9aa52745d6eae2d7748c76e4e3e6555e1f6e4b86", default-features = false, features = ["std", "serde"] }
+boost-log = { git = "https://github.com/oovm/rust-boost", rev = "9aa52745d6eae2d7748c76e4e3e6555e1f6e4b86" }
+boost-http = { git = "https://github.com/oovm/rust-boost", rev = "9aa52745d6eae2d7748c76e4e3e6555e1f6e4b86" }
+boost-random = { git = "https://github.com/oovm/rust-boost", rev = "9aa52745d6eae2d7748c76e4e3e6555e1f6e4b86", default-features = false, features = ["system"] }
+
+# --- Acorn ---
+acorn-codec = { git = "https://github.com/yggdrasil-language/acorn.rs.git", rev = "fbed2df1626ec3800cb2e54b7b9c730bf8a2f996", default-features = false, features = ["compression"] }
+acorn-core = { git = "https://github.com/yggdrasil-language/acorn.rs.git", rev = "fbed2df1626ec3800cb2e54b7b9c730bf8a2f996" }
+acorn-cfb = { git = "https://github.com/yggdrasil-language/acorn.rs.git", rev = "fbed2df1626ec3800cb2e54b7b9c730bf8a2f996" }
+acorn-doc = { git = "https://github.com/yggdrasil-language/acorn.rs.git", rev = "fbed2df1626ec3800cb2e54b7b9c730bf8a2f996" }
+acorn-docx = { git = "https://github.com/yggdrasil-language/acorn.rs.git", rev = "fbed2df1626ec3800cb2e54b7b9c730bf8a2f996" }
+acorn-epub = { git = "https://github.com/yggdrasil-language/acorn.rs.git", rev = "fbed2df1626ec3800cb2e54b7b9c730bf8a2f996" }
+acorn-ttf = { git = "https://github.com/yggdrasil-language/acorn.rs.git", rev = "6798c29abede61043893796b8191aa9acdb8f4fa", default-features = false, features = ["outline-cff"] }
+
+# --- Oak ---
+oak-core = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f" }
+oak-markdown = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+oak-notedown = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+oak-html = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+oak-xml = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+oak-org-mode = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+oak-tex = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+oak-typst = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+oak-testing = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f" }
+oak-dot = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+oak-mermaid = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+oak-uml = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+oak-plantuml = { git = "https://github.com/yggdrasil-language/oak.rs.git", rev = "926c501348e1fa7bc458dcb111b986dad4a1637f", default-features = false, features = ["serde"] }
+
+# --- Store ---
+yydb = { git = "https://github.com/yy-database/yydb.rs", rev = "f7eaf8ecfdb1cbaf6089a4b560caffa0c2acabeb" }
+
+# --- External ---
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+url = { version = "2.5.8", features = ["serde"] }
+source-map = "0.15.0"
+byteorder = "1.5.0"
+blake3 = "1.8.7"
+thiserror = "2.0.21"
+cfb = "0.16.0"
+wgpu = { version = "30.0.1", default-features = true }
+pollster = { version = "1.0.1" }
+bytemuck = { version = "1.25.2", features = ["derive"] }
+flate2 = "1.1.10"
+
+[profile.release]
+lto = true
+opt-level = "s"
+panic = "abort"
+
+# yydb → vos-language?branch=dev and dejavu-engine?branch=dev have drifted.
+# Pin known-good revs via notedge forks (same contract as crawler).
+[patch."https://github.com/voml/vos-language.git"]
+vos = { git = "https://github.com/notedge/vos-language.git", rev = "39cb1a36a9e1e08b237362257b8db6e47e036fe6" }
+vos-format = { git = "https://github.com/notedge/vos-language.git", rev = "39cb1a36a9e1e08b237362257b8db6e47e036fe6" }
+vos-generator = { git = "https://github.com/notedge/vos-language.git", rev = "39cb1a36a9e1e08b237362257b8db6e47e036fe6" }
+vos-types = { git = "https://github.com/notedge/vos-language.git", rev = "39cb1a36a9e1e08b237362257b8db6e47e036fe6" }
+
+[patch."https://github.com/doki-land/dejavu-engine.git"]
+dejavu = { git = "https://github.com/notedge/dejavu-language.git", rev = "c14ad3f786feb30676d809999199a3c867a90cbf" }
+dejavu-engine = { git = "https://github.com/notedge/dejavu-language.git", rev = "c14ad3f786feb30676d809999199a3c867a90cbf" }
+dejavu-ir = { git = "https://github.com/notedge/dejavu-language.git", rev = "c14ad3f786feb30676d809999199a3c867a90cbf" }
+dejavu-language = { git = "https://github.com/notedge/dejavu-language.git", rev = "c14ad3f786feb30676d809999199a3c867a90cbf" }
+dejavu-runtime = { git = "https://github.com/notedge/dejavu-language.git", rev = "c14ad3f786feb30676d809999199a3c867a90cbf" }
+dejavu-types = { git = "https://github.com/notedge/dejavu-language.git", rev = "c14ad3f786feb30676d809999199a3c867a90cbf" }
+
+[workspace.metadata.release]
+push = false
+tag = false
