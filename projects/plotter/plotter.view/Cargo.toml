@@ -1,0 +1,16 @@
+[package]
+name = "plotter-view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Apollo：后端无关 Scene IR"
+publish = false
+
+[dependencies]
+plotter-types = { workspace = true }
+serde = { workspace = true }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"

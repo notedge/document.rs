@@ -1,0 +1,13 @@
+[package]
+name = "plotter-motion"
+version.workspace = true
+authors.workspace = true
+description = "Stable correspondence and transition planning between DaVinci display scenes"
+repository = "https://github.com/notedge/notedown"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+plotter-types = { workspace = true }
+plotter-scene = { workspace = true }

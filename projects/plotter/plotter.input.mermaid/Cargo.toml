@@ -1,0 +1,16 @@
+[package]
+name = "plotter-input-mermaid"
+version.workspace = true
+authors.workspace = true
+description = "Mermaid frontend: Oak AST to plotter DiagramSpec / scene"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+plotter-diagram = { workspace = true }
+plotter-types = { workspace = true }
+plotter-scene = { workspace = true }
+oak-core = { workspace = true }
+oak-mermaid = { workspace = true }
+oak-uml = { workspace = true }

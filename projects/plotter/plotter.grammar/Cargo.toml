@@ -1,0 +1,19 @@
+[package]
+name = "plotter-grammar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Apollo：Grammar of Graphics 的 PlotSpec 合同"
+publish = false
+
+[dependencies]
+plotter-types = { workspace = true }
+plotter-data = { workspace = true }
+plotter-view = { workspace = true }
+plotter-layout = { workspace = true }
+serde = { workspace = true }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"

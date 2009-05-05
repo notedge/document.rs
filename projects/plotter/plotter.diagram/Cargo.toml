@@ -1,0 +1,18 @@
+[package]
+name = "plotter-diagram"
+version.workspace = true
+authors.workspace = true
+description = "DiagramSpec compile/layout/render pipeline (language frontends live in plotter.input.*)"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+plotter-types = { workspace = true }
+plotter-scene = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+plotter-input-mermaid = { workspace = true }
+plotter-input-dot = { workspace = true }
+plotter-input-plantuml = { workspace = true }

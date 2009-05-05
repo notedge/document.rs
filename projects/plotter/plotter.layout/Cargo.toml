@@ -1,0 +1,16 @@
+[package]
+name = "plotter-layout"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Apollo：2D/3D、图、树与标签布局"
+publish = false
+
+[dependencies]
+plotter-types = { workspace = true }
+plotter-data = { workspace = true }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"

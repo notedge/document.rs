@@ -1,0 +1,43 @@
+[package]
+name = "plotter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Plotter — stable public Rust facade over plotter-* crates"
+publish = false
+
+[features]
+default = ["svg"]
+## SVG vector backend (default).
+svg = ["dep:plotter-renderer-svg"]
+## Optional WGPU / WebGPU backend.
+wgpu = ["dep:plotter-renderer-wgpu"]
+
+[dependencies]
+plotter-types = { workspace = true }
+plotter-data = { workspace = true }
+plotter-grammar = { workspace = true }
+plotter-view = { workspace = true }
+plotter-layout = { workspace = true }
+plotter-renderer = { workspace = true }
+plotter-renderer-svg = { workspace = true, optional = true }
+plotter-renderer-wgpu = { workspace = true, optional = true }
+plotter-scene = { workspace = true }
+plotter-diagram = { workspace = true }
+plotter-chart = { workspace = true }
+plotter-runtime = { workspace = true }
+plotter-motion = { workspace = true }
+plotter-input-mermaid = { workspace = true }
+plotter-input-dot = { workspace = true }
+plotter-input-plantuml = { workspace = true }
+
+[dev-dependencies]
+plotter-data = { workspace = true }
+plotter-grammar = { workspace = true }
+plotter-renderer-svg = { workspace = true }
+plotter-renderer-wgpu = { workspace = true }
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"

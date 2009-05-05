@@ -1,0 +1,18 @@
+[package]
+name = "plotter-input-plantuml"
+version.workspace = true
+authors.workspace = true
+description = "PlantUML frontend: Oak AST to plotter DiagramSpec / scene"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+plotter-diagram = { workspace = true }
+plotter-types = { workspace = true }
+plotter-scene = { workspace = true }
+oak-core = { workspace = true }
+oak-plantuml = { workspace = true }
+
+[dev-dependencies]
+plotter-input-mermaid = { workspace = true }
