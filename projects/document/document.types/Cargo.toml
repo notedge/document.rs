@@ -1,0 +1,31 @@
+[package]
+name = "document-types"
+version.workspace = true
+authors.workspace = true
+description = "Document 转换共享类型"
+categories = ["rust-patterns"]
+repository = "https://github.com/notedge/document.rs"
+documentation = "https://docs.rs/document-types"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+exclude = ["package.json", "tests/**"]
+
+[lib]
+doctest = false
+
+[dependencies]
+boost-diagnostic = { workspace = true }
+document-ir = { workspace = true }
+url = { workspace = true }
+source-map = { workspace = true }
+byteorder = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+
+[features]
+default = []
+
+[package.metadata.docs.rs]
+all-features = true

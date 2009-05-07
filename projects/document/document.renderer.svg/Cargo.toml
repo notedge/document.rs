@@ -1,0 +1,23 @@
+[package]
+name = "document-renderer-svg"
+version.workspace = true
+authors.workspace = true
+description = "SVG 输出后端"
+license.workspace = true
+edition.workspace = true
+readme = "readme.md"
+
+[dependencies]
+document-compose = { workspace = true, features = ["serde"] }
+document-layout = { workspace = true }
+document-presentation = { workspace = true }
+document-renderer = { workspace = true }
+
+[dev-dependencies]
+document-ir = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+document-layout = { workspace = true }
+document-presentation = { workspace = true }
+document-renderer-pdf = { workspace = true }
+plotter-scene = { workspace = true }

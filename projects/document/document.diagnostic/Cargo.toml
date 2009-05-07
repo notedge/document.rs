@@ -1,0 +1,22 @@
+[package]
+name = "document-diagnostic"
+version.workspace = true
+authors.workspace = true
+description = "Document 转换域诊断码（共享 diagnostic 合同）"
+license.workspace = true
+edition.workspace = true
+readme = "readme.md"
+
+[dependencies]
+boost-diagnostic = { workspace = true }
+boost-log = { workspace = true, optional = true }
+document-ir = { workspace = true }
+document-types = { workspace = true }
+
+[features]
+default = []
+logger = ["dep:boost-log", "boost-diagnostic/log"]
+
+[dev-dependencies]
+serde_json = { workspace = true }
+serial_test = "3.2.0"

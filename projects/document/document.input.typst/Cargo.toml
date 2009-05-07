@@ -1,0 +1,19 @@
+[package]
+name = "document-input-typst"
+version.workspace = true
+authors.workspace = true
+description = "Typst input adapter: profile selection, conversion report, and closed-loop rendering"
+license.workspace = true
+edition.workspace = true
+readme = "readme.md"
+
+[dependencies]
+document-ir = { workspace = true }
+document-formats = { workspace = true }
+document-compose = { workspace = true }
+document-layout = { workspace = true }
+document-presentation = { workspace = true }
+document-renderer-svg = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

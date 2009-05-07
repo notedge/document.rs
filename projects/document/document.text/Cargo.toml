@@ -1,0 +1,12 @@
+[package]
+name = "document-text"
+version.workspace = true
+authors.workspace = true
+description = "Font discovery, shaping, line breaking, and script runs"
+license.workspace = true
+edition.workspace = true
+readme = "readme.md"
+
+[dependencies]
+document-compose = { workspace = true, features = ["serde"] }
+acorn-ttf = { workspace = true }

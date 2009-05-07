@@ -1,0 +1,45 @@
+[package]
+name = "document-formats"
+version.workspace = true
+authors.workspace = true
+description = "文档格式 import / export（Markdown / Notedown / DOCX / …）"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+boost-diagnostic = { workspace = true }
+document-ir = { workspace = true }
+acorn-codec = { workspace = true, optional = true }
+oak-core = { workspace = true, optional = true }
+oak-markdown = { workspace = true, optional = true }
+oak-notedown = { workspace = true, optional = true }
+acorn-core = { workspace = true, optional = true }
+acorn-doc = { workspace = true, optional = true }
+acorn-docx = { workspace = true, optional = true }
+acorn-epub = { workspace = true, optional = true }
+oak-html = { workspace = true, optional = true }
+oak-xml = { workspace = true, optional = true }
+oak-tex = { workspace = true, optional = true }
+oak-typst = { workspace = true, optional = true }
+
+[features]
+default = ["markdown"]
+markdown = ["dep:oak-core", "dep:oak-markdown", "tex"]
+notedown = ["dep:oak-core", "dep:oak-notedown"]
+docx = ["dep:acorn-core", "dep:acorn-docx", "dep:oak-core", "dep:oak-xml"]
+doc = ["dep:acorn-doc"]
+pdf = ["dep:acorn-codec"]
+epub = ["dep:acorn-core", "dep:acorn-epub", "dep:oak-core", "dep:oak-html"]
+html = ["dep:oak-core", "dep:oak-html"]
+tex = ["dep:oak-core", "dep:oak-tex"]
+typst = ["dep:oak-core", "dep:oak-typst"]
+
+[dev-dependencies]
+serde_json = { workspace = true }
+plotter-input-dot = { workspace = true }
+plotter-input-mermaid = { workspace = true }
+plotter-input-plantuml = { workspace = true }
+acorn-core = { workspace = true }
+acorn-epub = { workspace = true }

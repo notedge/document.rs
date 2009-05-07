@@ -1,0 +1,15 @@
+[package]
+name = "document-ir"
+version.workspace = true
+authors.workspace = true
+description = "文档语义 IR — graph、relations、assets、provenance"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

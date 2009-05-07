@@ -1,0 +1,18 @@
+[package]
+name = "document-input-tex"
+version.workspace = true
+authors.workspace = true
+description = "TeX/LaTeX input profile selecting the document-model lowering"
+license.workspace = true
+edition.workspace = true
+readme = "readme.md"
+
+[dependencies]
+document-ir = { workspace = true }
+document-formats = { workspace = true }
+document-compose = { workspace = true }
+
+[dev-dependencies]
+document-layout = { workspace = true }
+document-presentation = { workspace = true }
+document-renderer-svg = { workspace = true }

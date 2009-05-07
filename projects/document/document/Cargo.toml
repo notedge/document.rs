@@ -1,0 +1,66 @@
+[package]
+name = "document"
+version.workspace = true
+authors.workspace = true
+description = "Document 门面：IR / formats / convert / layout / renderer 的稳定再导出"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+keywords = ["document", "ir", "markdown", "facade"]
+categories = ["text-processing", "parser-implementations"]
+
+[dependencies]
+document-ir = { workspace = true, optional = true }
+document-formats = { workspace = true, optional = true, default-features = false }
+document-types = { workspace = true, optional = true }
+document-diagnostic = { workspace = true, optional = true }
+document-convert = { workspace = true, optional = true }
+document-compose = { workspace = true, optional = true }
+document-style = { workspace = true, optional = true }
+document-text = { workspace = true, optional = true }
+document-presentation = { workspace = true, optional = true }
+document-layout = { workspace = true, optional = true }
+document-renderer = { workspace = true, optional = true }
+document-renderer-svg = { workspace = true, optional = true }
+document-renderer-pdf = { workspace = true, optional = true }
+document-renderer-html = { workspace = true, optional = true }
+document-renderer-raster = { workspace = true, optional = true }
+document-input-markdown = { workspace = true, optional = true }
+document-input-tex = { workspace = true, optional = true }
+document-input-typst = { workspace = true, optional = true }
+
+[features]
+default = []
+ir = ["dep:document-ir"]
+formats = ["dep:document-formats", "dep:document-ir"]
+types = ["dep:document-types"]
+diagnostic = ["dep:document-diagnostic", "types"]
+convert = ["dep:document-convert", "diagnostic"]
+logger = ["convert", "document-convert/logger", "document-diagnostic/logger"]
+compose = ["dep:document-compose"]
+style = ["dep:document-style", "compose"]
+text = ["dep:document-text", "compose"]
+presentation = ["dep:document-presentation", "compose"]
+layout = ["dep:document-layout", "compose", "style", "text"]
+renderer = ["dep:document-renderer", "presentation"]
+renderer-svg = ["renderer", "dep:document-renderer-svg"]
+renderer-pdf = ["renderer", "dep:document-renderer-pdf"]
+renderer-html = ["renderer", "dep:document-renderer-html"]
+renderer-raster = ["renderer", "dep:document-renderer-raster"]
+input-markdown = ["dep:document-input-markdown"]
+input-tex = ["dep:document-input-tex"]
+input-typst = ["dep:document-input-typst"]
+# 格式语言 feature（转发到 document-formats）
+markdown = ["formats", "document-formats/markdown"]
+notedown = ["formats", "document-formats/notedown"]
+docx = ["formats", "document-formats/docx"]
+doc = ["formats", "document-formats/doc"]
+pdf = ["formats", "document-formats/pdf"]
+epub = ["formats", "document-formats/epub"]
+html = ["formats", "document-formats/html"]
+tex = ["formats", "document-formats/tex"]
+typst = ["formats", "document-formats/typst"]
+
+[package.metadata.docs.rs]
+all-features = true

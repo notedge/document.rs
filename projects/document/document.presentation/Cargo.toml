@@ -1,0 +1,18 @@
+[package]
+name = "document-presentation"
+version.workspace = true
+authors.workspace = true
+description = "Display and flow presentation IR"
+license.workspace = true
+edition.workspace = true
+readme = "readme.md"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+document-ir = { workspace = true }
+plotter-scene = { workspace = true }
+document-compose = { workspace = true, features = ["serde"] }
+document-layout = { workspace = true }
+
+[dev-dependencies]
+plotter-scene = { workspace = true }

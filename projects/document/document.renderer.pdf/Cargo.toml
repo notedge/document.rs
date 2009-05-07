@@ -1,0 +1,20 @@
+[package]
+name = "document-renderer-pdf"
+version.workspace = true
+authors.workspace = true
+description = "PDF 输出后端"
+license.workspace = true
+edition.workspace = true
+readme = "readme.md"
+
+[dependencies]
+plotter-scene = { workspace = true }
+plotter-types = { workspace = true }
+document-compose = { workspace = true, features = ["serde"] }
+document-presentation = { workspace = true }
+document-renderer = { workspace = true }
+
+[dev-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+document-layout = { workspace = true }

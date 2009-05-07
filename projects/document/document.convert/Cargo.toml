@@ -1,0 +1,44 @@
+[package]
+
+name = "document-convert"
+
+description = "Document 转换编排：基于 document-ir 的读写与路由"
+
+publish = false
+
+version.workspace = true
+
+authors.workspace = true
+
+license.workspace = true
+
+edition.workspace = true
+
+[dependencies]
+
+boost-diagnostic = { workspace = true }
+document-types = { workspace = true }
+document-diagnostic = { workspace = true }
+
+document-ir = { workspace = true }
+document-formats = { workspace = true, features = ["markdown", "notedown", "docx", "doc", "html", "pdf", "epub"] }
+plotter-diagram = { workspace = true }
+plotter-input-plantuml = { workspace = true }
+plotter-input-dot = { workspace = true }
+plotter-input-mermaid = { workspace = true }
+plotter-chart = { workspace = true, features = ["vega-lite"] }
+plotter-types = { workspace = true }
+acorn-epub = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+
+[features]
+default = []
+logger = ["document-diagnostic/logger"]
+console = ["logger"]
+
+[dev-dependencies]
+boost-log = { workspace = true }
+serial_test = "3.2.0"

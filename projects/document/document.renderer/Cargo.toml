@@ -1,0 +1,12 @@
+[package]
+name = "document-renderer"
+version.workspace = true
+authors.workspace = true
+description = "文档输出后端合同（presentation IR → 各后端）"
+license.workspace = true
+edition.workspace = true
+readme = "readme.md"
+
+[dependencies]
+document-compose = { workspace = true, features = ["serde"] }
+document-presentation = { workspace = true }
