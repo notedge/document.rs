@@ -1,0 +1,25 @@
+[package]
+name = "crawler-fetch"
+version.workspace = true
+authors.workspace = true
+description = "Crawler fetch transports, robots policy, and response caching"
+readme = "readme.md"
+homepage = "https://github.com/notedge/document.rs"
+repository = "https://github.com/notedge/document.rs"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+crawler-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+boost-http = { workspace = true }
+boost-log = { workspace = true, optional = true }
+boost-random = { workspace = true }
+boost-diagnostic = { workspace = true }
+
+[features]
+default = []
+logger = ["dep:boost-log"]

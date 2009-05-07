@@ -1,0 +1,4 @@
+//! 集成测试入口：按域分子模块。
+
+mod html;
+mod inspect;

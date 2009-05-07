@@ -1,0 +1,17 @@
+[package]
+name = "crawler-types"
+version.workspace = true
+authors.workspace = true
+description = "Shared crawl and extraction contracts for Crawler"
+license.workspace = true
+edition.workspace = true
+readme = "readme.md"
+
+[lib]
+doctest = false
+
+[dependencies]
+document-ir = { workspace = true }
+serde = { workspace = true }
+url = { workspace = true }
+boost-diagnostic = { workspace = true }

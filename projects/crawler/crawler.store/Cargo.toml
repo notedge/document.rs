@@ -1,0 +1,24 @@
+[package]
+name = "crawler-store"
+version.workspace = true
+authors.workspace = true
+description = "Crawler persistence store contract with MemoryStore and optional YydbStore"
+readme = "readme.md"
+homepage = "https://github.com/notedge/document.rs"
+repository = "https://github.com/notedge/document.rs"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+blake3 = { workspace = true }
+boost-diagnostic = { workspace = true }
+crawler-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+yydb = { workspace = true, optional = true }
+
+[features]
+default = ["yydb"]
+yydb = ["dep:yydb"]

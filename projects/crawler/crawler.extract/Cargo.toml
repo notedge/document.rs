@@ -1,0 +1,17 @@
+[package]
+name = "crawler-extract"
+version.workspace = true
+authors.workspace = true
+description = "Crawler semantic extractors over fetch artifacts"
+readme = "readme.md"
+homepage = "https://github.com/notedge/document.rs"
+repository = "https://github.com/notedge/document.rs"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+document-formats = { workspace = true, features = ["html"] }
+document-ir = { workspace = true }
+crawler-types = { workspace = true }
+url = { workspace = true }

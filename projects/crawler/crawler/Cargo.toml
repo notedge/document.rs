@@ -1,0 +1,39 @@
+[package]
+name = "crawler"
+version.workspace = true
+authors.workspace = true
+description = "Crawler crawl orchestration and native Rust facade"
+readme = "readme.md"
+homepage = "https://github.com/notedge/document.rs"
+repository = "https://github.com/notedge/document.rs"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+blake3 = { workspace = true }
+acorn-codec = { workspace = true }
+boost-diagnostic = { workspace = true }
+document-ir = { workspace = true }
+document-formats = { workspace = true, features = ["markdown"] }
+crawler-types = { workspace = true }
+crawler-extract = { workspace = true }
+crawler-fetch = { workspace = true }
+crawler-store = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }
+boost-http = { workspace = true }
+oak-xml = { workspace = true }
+
+[dev-dependencies]
+boost-log = { workspace = true }
+serial_test = "3"
+
+[features]
+default = []
+logger = ["crawler-fetch/logger"]
+yydb = ["crawler-store/yydb"]
