@@ -1,14 +1,9 @@
-//! Graphviz DOT frontend.
-//!
-//! This module maps the typed `oak-dot` AST onto [`DiagramSpec`]. It never
-//! builds scene nodes or SVG. Lowering accepts the documented whitelist only:
-//! `digraph` / `graph`, `rankdir` with its four values, one level of
-//! `subgraph cluster_*`, edge labels, and compass ports. Everything outside
-//! that set fails with a [`DiagramError`] carrying the offending byte range.
+#![warn(missing_docs)]
+#![doc = include_str!("readme.md")]
 
 use std::ops::Range;
 
-use oak_core::{Builder, SourceText, parser::session::ParseSession};
+use oak_core::{Builder, SourceText, errors::OakError, parser::session::ParseSession};
 use oak_dot::{
     DotBuilder, DotLanguage,
     ast::{
@@ -53,7 +48,7 @@ const ALLOWED_ELEMENT_KEYS: &[&str] = &["label", "shape", "style"];
 const ALLOWED_GRAPH_KEYS: &[&str] = &["rankdir", "label"];
 
 /// Style tokens accepted by the subset.
-const ALLOWED_STYLE_TOKENS: &[&str] = &["filled", "solid", "bold", "dashed", "dotted"];
+const ALLOWED_STYLE_TOKENS: &[&str] = &["filled", "rounded", "solid", "bold", "dashed", "dotted"];
 
 /// Attribute keys that name layout engines, routing, or interaction surfaces
 /// this frontend does not implement.
@@ -94,8 +89,22 @@ pub fn parse_dot(source: &str) -> Result<DotRoot, DiagramError> {
             source.len()
         ))),
         Ok(root) => Ok(root),
-        Err(error) => Err(DiagramError::parse_failed(format!("`oak-dot` failed to build an AST: {error}"))),
+        Err(error) => Err(spanned_parse_error(source, &error)),
     }
+}
+
+/// Turn an `oak-dot` parser error into a refusal that keeps its span.
+///
+/// A syntax error records the offset of the offending token, so the refused
+/// statement stays locatable instead of collapsing into an unpositioned
+/// "parse failed" message.
+fn spanned_parse_error(source: &str, error: &OakError) -> DiagramError {
+    if let oak_core::errors::OakErrorKind::SyntaxError { message, offset, .. } = error.kind() {
+        let offset = (*offset).min(source.len());
+        let end = source[offset..].find('\n').map(|delta| offset + delta).unwrap_or(source.len());
+        return DiagramError::unsupported(message.clone()).with_span(offset..end);
+    }
+    DiagramError::parse_failed(format!("`oak-dot` failed to build an AST: {error}"))
 }
 
 /// Lower DOT source into a source-independent diagram spec.
@@ -209,10 +218,13 @@ fn approximated_at(message: impl Into<String>, span: Range<usize>) -> Diagnostic
 /// [...]`.
 ///
 /// Defaults apply at creation time, exactly as DOT does: a node keeps the
-/// defaults that were active when the graph first mentioned it.
-#[derive(Default)]
+/// defaults that were active when the graph first mentioned it. A subgraph
+/// lowers against its own copy, so its `node [...]`/`edge [...]` statements
+/// stay inside the block.
+#[derive(Clone, Default)]
 struct Defaults {
     node_shape: Option<NodeShape>,
+    node_rounded: bool,
     node_label: Option<String>,
     edge_style: Option<EdgeStyle>,
     edge_label: Option<String>,
@@ -281,6 +293,9 @@ fn ensure_node(collector: &mut Collector, defaults: &Defaults, id: &str, span: O
     }
     if let Some(shape) = defaults.node_shape {
         collector.nodes[index].shape = shape;
+    }
+    if defaults.node_rounded && collector.nodes[index].shape == NodeShape::Box {
+        collector.nodes[index].shape = NodeShape::Round;
     }
 }
 
@@ -431,7 +446,19 @@ fn graph_attributes(
     Ok(direction)
 }
 
-fn check_attribute(attribute: &Attribute, diagnostics: &mut Vec<Diagnostic>) -> Result<(), DiagramError> {
+/// Whether an attribute belongs to a node or an edge, so `style` tokens are
+/// judged against the surface that can honour them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StyleTarget {
+    Node,
+    Edge,
+}
+
+fn check_attribute(
+    attribute: &Attribute,
+    target: StyleTarget,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(), DiagramError> {
     let key = attribute.name.to_ascii_lowercase();
     let span = span_of(attribute.span);
     if FORBIDDEN_KEYS.iter().any(|forbidden| *forbidden == key) {
@@ -452,7 +479,7 @@ fn check_attribute(attribute: &Attribute, diagnostics: &mut Vec<Diagnostic>) -> 
             }
             Ok(())
         }
-        "style" => check_style(value, span, diagnostics),
+        "style" => check_style(value, target, span, diagnostics),
         _ => Ok(()),
     }
 }
@@ -465,23 +492,45 @@ fn reject_html_label(value: &str, span: Range<usize>) -> Result<(), DiagramError
     Ok(())
 }
 
-fn check_style(value: &str, span: Range<usize>, diagnostics: &mut Vec<Diagnostic>) -> Result<(), DiagramError> {
+fn check_style(
+    value: &str,
+    target: StyleTarget,
+    span: Range<usize>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(), DiagramError> {
     for token in value.split(',') {
         let token = token.trim();
         if !ALLOWED_STYLE_TOKENS.contains(&token) {
             return Err(unsupported_at(format!("style `{token}` is outside the DOT subset"), span));
         }
-        if matches!(token, "dashed" | "dotted") {
-            diagnostics.push(approximated_at(
-                format!("style `{token}` has no dash attribute on the scene surface and is drawn solid"),
-                span.clone(),
-            ));
-        }
-        if token == "bold" && !value.contains(',') {
-            diagnostics.push(approximated_at("style `bold` is not applied as a stroke weight", span.clone()));
+        match token {
+            "rounded" if target == StyleTarget::Edge => {
+                return Err(unsupported_at("`rounded` applies to node outlines and is outside the edge subset", span));
+            }
+            "dashed" | "dotted" => {
+                diagnostics.push(approximated_at(
+                    format!("style `{token}` has no dash attribute on the scene surface and is drawn solid"),
+                    span.clone(),
+                ));
+            }
+            "bold" => {
+                diagnostics.push(approximated_at("style `bold` is not applied as a stroke weight", span.clone()));
+            }
+            "filled" => {
+                diagnostics.push(approximated_at(
+                    "style `filled` carries a fill colour that the scene takes from its theme",
+                    span.clone(),
+                ));
+            }
+            _ => {}
         }
     }
     Ok(())
+}
+
+/// Whether a comma-separated style value contains one token.
+fn style_contains(value: &str, wanted: &str) -> bool {
+    value.split(',').any(|token| token.trim() == wanted)
 }
 
 fn lower_statement(
@@ -502,39 +551,8 @@ fn lower_statement(
             AttributeTarget::Graph => {
                 graph_attributes(&attribute.attributes, Direction::TopDown, diagnostics)?;
             }
-            AttributeTarget::Node => {
-                for child in &attribute.attributes {
-                    check_attribute(child, diagnostics)?;
-                    match child.name.to_ascii_lowercase().as_str() {
-                        "shape" => {
-                            defaults.node_shape =
-                                Some(node_shape(child.value.as_deref().unwrap_or_default(), span_of(child.span), diagnostics)?);
-                        }
-                        "label" => {
-                            if let Some(value) = &child.value {
-                                defaults.node_label = Some(fold_label(value));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            AttributeTarget::Edge => {
-                for child in &attribute.attributes {
-                    check_attribute(child, diagnostics)?;
-                    match child.name.to_ascii_lowercase().as_str() {
-                        "style" => {
-                            defaults.edge_style = Some(style_for(child.value.as_deref().unwrap_or_default(), EdgeStyle::Arrow));
-                        }
-                        "label" => {
-                            if let Some(value) = &child.value {
-                                defaults.edge_label = Some(fold_label(value));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
+            AttributeTarget::Node => apply_node_defaults(&attribute.attributes, defaults, diagnostics)?,
+            AttributeTarget::Edge => apply_edge_defaults(&attribute.attributes, defaults, diagnostics)?,
         },
         Statement::Subgraph(subgraph) => lower_subgraph(subgraph, &graph_type, collector, defaults, diagnostics)?,
         Statement::Assignment(assignment) => {
@@ -555,6 +573,56 @@ fn lower_statement(
     Ok(())
 }
 
+/// Apply one `node [...]` statement to the defaults active at this point.
+fn apply_node_defaults(
+    attributes: &[Attribute],
+    defaults: &mut Defaults,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(), DiagramError> {
+    for child in attributes {
+        check_attribute(child, StyleTarget::Node, diagnostics)?;
+        match child.name.to_ascii_lowercase().as_str() {
+            "shape" => {
+                defaults.node_shape =
+                    Some(node_shape(child.value.as_deref().unwrap_or_default(), span_of(child.span), diagnostics)?);
+            }
+            "style" => {
+                defaults.node_rounded |= style_contains(child.value.as_deref().unwrap_or_default(), "rounded");
+            }
+            "label" => {
+                if let Some(value) = &child.value {
+                    defaults.node_label = Some(fold_label(value));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Apply one `edge [...]` statement to the defaults active at this point.
+fn apply_edge_defaults(
+    attributes: &[Attribute],
+    defaults: &mut Defaults,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<(), DiagramError> {
+    for child in attributes {
+        check_attribute(child, StyleTarget::Edge, diagnostics)?;
+        match child.name.to_ascii_lowercase().as_str() {
+            "style" => {
+                defaults.edge_style = Some(style_for(child.value.as_deref().unwrap_or_default(), EdgeStyle::Arrow));
+            }
+            "label" => {
+                if let Some(value) = &child.value {
+                    defaults.edge_label = Some(fold_label(value));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn lower_node(
     node: &NodeStatement,
     collector: &mut Collector,
@@ -562,7 +630,7 @@ fn lower_node(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<String, DiagramError> {
     for attribute in &node.attributes {
-        check_attribute(attribute, diagnostics)?;
+        check_attribute(attribute, StyleTarget::Node, diagnostics)?;
     }
     let endpoint = endpoint(&node.node_id, collector, defaults, diagnostics)?;
     for attribute in &node.attributes {
@@ -574,6 +642,12 @@ fn lower_node(
         match key.as_str() {
             "label" => collector.set_label(&endpoint.node, value),
             "shape" => collector.set_shape(&endpoint.node, node_shape(value, span_of(attribute.span), diagnostics)?),
+            "style" if style_contains(value, "rounded") => {
+                let index = collector.node_index(&endpoint.node, None);
+                if collector.nodes[index].shape == NodeShape::Box {
+                    collector.nodes[index].shape = NodeShape::Round;
+                }
+            }
             _ => {}
         }
     }
@@ -588,7 +662,7 @@ fn lower_edge(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Vec<String>, DiagramError> {
     for attribute in &edge.attributes {
-        check_attribute(attribute, diagnostics)?;
+        check_attribute(attribute, StyleTarget::Edge, diagnostics)?;
     }
     let mut explicit_label = None;
     let mut explicit_style = None;
@@ -748,15 +822,16 @@ fn lower_subgraph(
         return Err(unsupported_at("nested clusters are outside the DOT subset", span));
     }
 
+    let mut scoped = defaults.clone();
     let mut members = Vec::new();
     let mut label = None;
     let mut rank_same = false;
     for statement in &subgraph.statements {
         match statement {
             Statement::Node(node) => {
-                members.push(lower_node(node, collector, defaults, diagnostics)?);
+                members.push(lower_node(node, collector, &scoped, diagnostics)?);
             }
-            Statement::Edge(edge) => members.extend(lower_edge(edge, graph_type, collector, defaults, diagnostics)?),
+            Statement::Edge(edge) => members.extend(lower_edge(edge, graph_type, collector, &scoped, diagnostics)?),
             Statement::Assignment(assignment) if assignment.id == "label" => {
                 label = Some(fold_label(&assignment.value));
             }
@@ -775,12 +850,16 @@ fn lower_subgraph(
                     span_of(assignment.span),
                 ));
             }
-            Statement::Attribute(attribute) => {
-                return Err(unsupported_at(
-                    "attribute statements inside a subgraph are outside the DOT subset",
-                    span_of(attribute.span),
-                ));
-            }
+            Statement::Attribute(attribute) => match attribute.target {
+                AttributeTarget::Node => apply_node_defaults(&attribute.attributes, &mut scoped, diagnostics)?,
+                AttributeTarget::Edge => apply_edge_defaults(&attribute.attributes, &mut scoped, diagnostics)?,
+                AttributeTarget::Graph => {
+                    return Err(unsupported_at(
+                        "graph attributes inside a subgraph are outside the DOT subset",
+                        span_of(attribute.span),
+                    ));
+                }
+            },
             Statement::Subgraph(nested) => {
                 return Err(unsupported_at("nested clusters are outside the DOT subset", span_of(nested.span)));
             }
