@@ -14,8 +14,8 @@ document-formats = { workspace = true, features = ["tex"] }
 plotter-scene = { workspace = true }
 document-compose = { workspace = true, features = ["serde"] }
 document-text = { workspace = true }
+document-fonts = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 document-renderer-svg = { workspace = true }
-document-fonts = { workspace = true }

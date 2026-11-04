@@ -9,6 +9,6 @@ pub mod math;
 pub mod plan;
 
 pub use diagram::{DiagramScene, Diagrams};
-pub use document::{layout, layout_with_diagrams};
+pub use document::{layout, layout_with_diagnostics, layout_with_diagrams, layout_with_metrics};
 pub use hint::LayoutHint;
 pub use plan::{Graphic, LayoutPage, LayoutPlan};

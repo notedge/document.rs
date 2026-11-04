@@ -207,11 +207,7 @@ pub(crate) fn scene_font_style(weight: Option<u16>) -> FontStyle {
 /// styles never reach the page as text (math paints as outlines), and a
 /// `Monospace` style only names the family, which is handled separately.
 pub(crate) fn body_style(style: FontStyle) -> BodyFaceStyle {
-    match style {
-        FontStyle::Bold => BodyFaceStyle::Bold,
-        FontStyle::Italic => BodyFaceStyle::Italic,
-        _ => BodyFaceStyle::Regular,
-    }
+    document_fonts::body_style(style)
 }
 
 /// Family and style a text run asks the chain for.
@@ -220,15 +216,7 @@ pub(crate) fn body_style(style: FontStyle) -> BodyFaceStyle {
 /// with the prose face, because the bundled set carries one reading face per
 /// script rather than one per declared family name.
 pub(crate) fn chain_key(family: &str, style: FontStyle) -> ChainKey {
-    ChainKey {
-        family: if family.to_ascii_lowercase().contains("mono") {
-            BodyFamily::Mono
-        }
-        else {
-            BodyFamily::Serif
-        },
-        style: body_style(style),
-    }
+    document_fonts::key_for_run(family, style)
 }
 
 /// Whether one text run paints through the embedded font chain.

@@ -22,29 +22,14 @@ use std::{
 use document_fonts::{BODY_FACES, BodyFaceStyle, BodyFamily};
 
 /// Family and style one text run asks the chain for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ChainKey {
-    /// Whether the run wants prose or a fixed-advance face.
-    pub(crate) family: BodyFamily,
-    /// Weight and slant the run asks for.
-    pub(crate) style: BodyFaceStyle,
-}
+///
+/// This is the same key `document_fonts::BodyMetrics` measures with, so the
+/// measured face and the painted face cannot drift apart.
+pub(crate) type ChainKey = document_fonts::BodyFaceKey;
 
 /// Fallback order inside one family: the requested style, then regular.
 fn key_order(key: ChainKey) -> Vec<ChainKey> {
-    let mut order = vec![
-        key,
-        ChainKey { family: key.family, style: BodyFaceStyle::Regular },
-        ChainKey { family: BodyFamily::Serif, style: key.style },
-        ChainKey { family: BodyFamily::Serif, style: BodyFaceStyle::Regular },
-    ];
-    let mut unique: Vec<ChainKey> = Vec::new();
-    for candidate in order.drain(..) {
-        if !unique.contains(&candidate) {
-            unique.push(candidate);
-        }
-    }
-    unique
+    document_fonts::fallback_order(key)
 }
 
 /// Absolute paths probed for a `glyf`-outline font, in preference order.

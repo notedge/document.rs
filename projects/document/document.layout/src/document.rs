@@ -1,15 +1,19 @@
 //! Document layout pass: Notedown block tree to positioned page primitives.
 //!
 //! The pass walks [`DocumentGraph`] blocks in reading order, measures inline
-//! content through `vutex-text` metrics, wraps lines greedily inside the
-//! content width, and paginates at line granularity.
+//! content from the embedded body faces' advance widths, wraps lines greedily
+//! inside the content width, and paginates at line granularity.
 
-use std::collections::HashSet;
+use std::{
+    cell::RefCell,
+    collections::{BTreeSet, HashSet},
+};
 
 use document_compose::{
     Diagnostic, Severity, SourceSpan,
     math::{FontStyle, GlyphKey, MathError},
 };
+use document_fonts::{BodyMetrics, key_for_run};
 use document_ir::{Block, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
 use document_text::math::{FontMetricsSystem, builtin_font_metrics};
 
@@ -87,6 +91,81 @@ const CODE_FACE: TextFace = TextFace { family: MONOSPACE, style: FontStyle::Norm
 /// not monospace measures as body text.
 fn face_for_family(family: &str) -> TextFace {
     if family == MONOSPACE { CODE_FACE } else { BODY_FACE }
+}
+
+/// Width source for body text.
+///
+/// Line breaking must reserve what the renderer paints, so every character is
+/// measured from the advance width of the embedded face that serves it. The
+/// heuristic remains only as a fallback: a face the host did not ship, or a
+/// character no face covers, still gets a width instead of collapsing to zero,
+/// and the gap is reported once per layout pass.
+struct TextMeasure<'a> {
+    /// Heuristic widths from `vutex-text`, used where no face covers a glyph.
+    heuristic: FontMetricsSystem,
+    /// Advance widths of the faces the PDF renderer paints.
+    faces: &'a BodyMetrics,
+    /// Characters no face covered, so the gap is reported once per pass.
+    missing: RefCell<BTreeSet<char>>,
+}
+
+impl<'a> TextMeasure<'a> {
+    fn new(faces: &'a BodyMetrics) -> Self {
+        Self { heuristic: builtin_font_metrics(), faces, missing: RefCell::new(BTreeSet::new()) }
+    }
+
+    /// Advance width of one character in em units under `face`.
+    ///
+    /// The face that serves the run wins; the character class heuristic only
+    /// fills in for characters and faces the metrics do not cover.
+    fn advance_em(&self, ch: char, face: TextFace) -> f64 {
+        if let Some(advance) = self.faces.advance_em(key_for_run(face.family, face.style), ch) {
+            return advance;
+        }
+        self.missing.borrow_mut().insert(ch);
+        heuristic_advance_em(&self.heuristic, ch, face)
+    }
+
+    /// Sum of character advances for a run of text, in points.
+    fn measure(&self, text: &str, size: f64, face: TextFace) -> f64 {
+        text.chars().map(|ch| self.advance_em(ch, face) * size).sum()
+    }
+
+    /// Degradations this pass had to apply, in diagnostic form.
+    ///
+    /// A face that could not be parsed and the characters no face covered are
+    /// each reported once, because per-character diagnostics would flood the
+    /// caller without adding information.
+    fn diagnostics(&self) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
+        let unreadable = self.faces.unreadable();
+        if !unreadable.is_empty() {
+            diagnostics.push(Diagnostic {
+                code: "vutex.layout.metrics.face_unreadable".to_string(),
+                severity: Severity::Warning,
+                message: format!(
+                    "body faces {} supplied no readable metrics, so their text was measured with the heuristic width model",
+                    unreadable.join("`, `")
+                ),
+                span: None,
+            });
+        }
+        let missing = self.missing.borrow();
+        if !missing.is_empty() {
+            let codepoints: Vec<String> = missing.iter().map(|ch| format!("U+{:04X}", *ch as u32)).collect();
+            diagnostics.push(Diagnostic {
+                code: "vutex.layout.metrics.glyph_missing".to_string(),
+                severity: Severity::Warning,
+                message: format!(
+                    "no body face covers {} character(s) ({}), so the heuristic width model measured them",
+                    missing.len(),
+                    codepoints.join(", ")
+                ),
+                span: None,
+            });
+        }
+        diagnostics
+    }
 }
 
 /// Map an inline style name onto the shared text face.
@@ -194,13 +273,28 @@ pub fn layout_with_diagrams(graph: &DocumentGraph, hint: &LayoutHint, diagrams: 
 /// Like [`layout_with_diagrams`] but also reports the degradation the pass had
 /// to apply.
 ///
-/// Today the only source is a math glyph the embedded font supplies no outline
-/// for: it is skipped instead of being painted with a host serif face, so the
-/// caller can surface the gap rather than silently losing the glyph.
+/// Today the sources are a math glyph the embedded font supplies no outline for,
+/// which is skipped instead of being painted with a host serif face, and body
+/// text a face metric could not cover, which keeps the heuristic width.
 pub fn layout_with_diagnostics(graph: &DocumentGraph, hint: &LayoutHint, diagrams: &Diagrams) -> (LayoutPlan, Vec<Diagnostic>) {
-    let mut builder = PageBuilder::new(*hint, diagrams);
+    layout_with_metrics(graph, hint, diagrams, BodyMetrics::bundled())
+}
+
+/// Like [`layout_with_diagnostics`] but measures body text with `metrics`.
+///
+/// Hosts that paint their own faces pass the metrics of exactly those faces, so
+/// the reserved width and the painted width come from the same `hmtx` tables.
+pub fn layout_with_metrics(
+    graph: &DocumentGraph,
+    hint: &LayoutHint,
+    diagrams: &Diagrams,
+    metrics: &BodyMetrics,
+) -> (LayoutPlan, Vec<Diagnostic>) {
+    let mut builder = PageBuilder::new(*hint, diagrams, metrics);
     builder.render_blocks(graph, &root_ids(graph), 0.0);
-    (LayoutPlan { pages: builder.pages }, builder.diagnostics)
+    let mut diagnostics = builder.diagnostics;
+    diagnostics.extend(builder.text.diagnostics());
+    (LayoutPlan { pages: builder.pages }, diagnostics)
 }
 
 /// Block ids that no section or list item claims as a child, in graph order.
@@ -390,7 +484,7 @@ fn display_skips(size: f64, short: bool) -> (DisplaySkip, DisplaySkip) {
 /// Page-filling state for one layout pass.
 struct PageBuilder<'a> {
     hint: LayoutHint,
-    metrics: FontMetricsSystem,
+    text: TextMeasure<'a>,
     pages: Vec<LayoutPage>,
     /// Scenes registered by the host for `diagram` blocks.
     diagrams: &'a Diagrams,
@@ -403,10 +497,10 @@ struct PageBuilder<'a> {
 }
 
 impl<'a> PageBuilder<'a> {
-    fn new(hint: LayoutHint, diagrams: &'a Diagrams) -> Self {
+    fn new(hint: LayoutHint, diagrams: &'a Diagrams, faces: &'a BodyMetrics) -> Self {
         Self {
             hint,
-            metrics: builtin_font_metrics(),
+            text: TextMeasure::new(faces),
             pages: vec![blank_page(&hint)],
             diagrams,
             cursor: hint.margin.top,
@@ -460,7 +554,7 @@ impl<'a> PageBuilder<'a> {
     }
 
     fn wrap(&self, text: &str, size: f64, indent: f64) -> Vec<String> {
-        wrap_text(&self.metrics, text, size, self.content_width(indent))
+        wrap_text(&self.text, text, size, self.content_width(indent))
     }
 
     /// Paint one line at the cursor and advance past its line box.
@@ -476,7 +570,7 @@ impl<'a> PageBuilder<'a> {
     fn emit_baseline(&mut self, text: String, size: f64, family: &str, indent: f64) {
         let x = self.left(indent);
         let y = self.cursor + ASCENT * size;
-        let width = measure_text(&self.metrics, &text, size, face_for_family(family));
+        let width = self.text.measure(&text, size, face_for_family(family));
         self.push(LayoutItem::TextRun(TextRun {
             x,
             y,
@@ -637,7 +731,7 @@ impl<'a> PageBuilder<'a> {
     /// Break inline atoms into lines and paint each composed line.
     fn emit_inline_lines(&mut self, atoms: Vec<InlineAtom>, size: f64, indent: f64) {
         let max_width = self.content_width(indent);
-        for line in break_inline_atoms(&self.metrics, atoms, size, max_width) {
+        for line in break_inline_atoms(&self.text, atoms, size, max_width) {
             self.emit_inline_line(&line, size, indent);
         }
     }
@@ -702,7 +796,7 @@ impl<'a> PageBuilder<'a> {
                         run.title = title.clone();
                     }
                     run.text.push_str(text);
-                    x += measure_text(&self.metrics, text, size, *face);
+                    x += self.text.measure(text, size, *face);
                 }
                 InlineAtom::Math(math) => {
                     self.paint_inline_run(&mut run, run_x, baseline, size);
@@ -725,7 +819,7 @@ impl<'a> PageBuilder<'a> {
         if run.is_empty() {
             return;
         }
-        let width = measure_text(&self.metrics, &run.text, size, run.face);
+        let width = self.text.measure(&run.text, size, run.face);
         let struck = run.face.style == FontStyle::Strike;
         self.push(LayoutItem::TextRun(TextRun {
             x,
@@ -823,7 +917,7 @@ impl<'a> PageBuilder<'a> {
                 (true, None) => format!("{}.", index + 1),
                 (false, _) => "•".to_string(),
             };
-            let marker_width = measure_text(&self.metrics, &marker, size, BODY_FACE);
+            let marker_width = self.text.measure(&marker, size, BODY_FACE);
             let content_indent = indent + LIST_INDENT.max(marker_width + 6.0);
             let atoms = self.compose_atoms(&item.content, size, content_indent, BODY_FACE, ImageMode::AltText);
             self.pad(size * 0.15);
@@ -840,7 +934,7 @@ impl<'a> PageBuilder<'a> {
         let size = self.body_size();
         let quote_indent = indent + 16.0;
         let atoms = self.compose_atoms(content, size, quote_indent, BODY_FACE, ImageMode::AltText);
-        let lines = break_inline_atoms(&self.metrics, atoms, size, self.content_width(quote_indent));
+        let lines = break_inline_atoms(&self.text, atoms, size, self.content_width(quote_indent));
         // The rule spans the real line extents, so a tall formula inside the
         // quote grows the rule instead of hanging outside it.
         let height: f64 = lines
@@ -876,7 +970,7 @@ impl<'a> PageBuilder<'a> {
         for line in &lines {
             // Code lines stay verbatim: no wrapping, overflow is visible rather than hidden.
             let y = self.cursor + padding + ASCENT * size;
-            let width = measure_text(&self.metrics, line, size, CODE_FACE);
+            let width = self.text.measure(line, size, CODE_FACE);
             self.push(LayoutItem::TextRun(TextRun {
                 x: x + padding,
                 y,
@@ -920,7 +1014,7 @@ impl<'a> PageBuilder<'a> {
                     let span = cell.colspan.max(1) as usize;
                     let available = (column_width * span as f64 - padding * 2.0).max(24.0);
                     let atoms = self.compose_atoms(&cell.content, size, indent, BODY_FACE, ImageMode::AltText);
-                    CellLines { span, available, lines: break_inline_atoms(&self.metrics, atoms, size, available) }
+                    CellLines { span, available, lines: break_inline_atoms(&self.text, atoms, size, available) }
                 })
                 .collect();
             let max_lines = cells.iter().map(|cell| cell.lines.len()).max().unwrap_or(1).max(1);
@@ -1160,7 +1254,7 @@ fn split_inline_atoms(text: &str, face: TextFace, href: Option<&str>, title: Opt
 ///
 /// Formula atoms are never split; one that does not fit starts the next line,
 /// and one wider than the whole column occupies a line of its own.
-fn break_inline_atoms(metrics: &FontMetricsSystem, atoms: Vec<InlineAtom>, size: f64, max_width: f64) -> Vec<Vec<InlineAtom>> {
+fn break_inline_atoms(widths: &TextMeasure<'_>, atoms: Vec<InlineAtom>, size: f64, max_width: f64) -> Vec<Vec<InlineAtom>> {
     let mut lines: Vec<Vec<InlineAtom>> = Vec::new();
     let mut current: Vec<InlineAtom> = Vec::new();
     let mut width = 0.0f64;
@@ -1168,7 +1262,7 @@ fn break_inline_atoms(metrics: &FontMetricsSystem, atoms: Vec<InlineAtom>, size:
         match atom {
             InlineAtom::Break => finish_inline_line(&mut lines, &mut current, &mut width),
             InlineAtom::Text { text, face, href, title } => {
-                let atom_width = measure_text(metrics, &text, size, face);
+                let atom_width = widths.measure(&text, size, face);
                 if text.trim().is_empty() {
                     // A space never starts a line and never widens past the column.
                     if !current.is_empty() && width + atom_width <= max_width {
@@ -1185,7 +1279,7 @@ fn break_inline_atoms(metrics: &FontMetricsSystem, atoms: Vec<InlineAtom>, size:
                     let mut chunk = String::new();
                     let mut chunk_width = 0.0;
                     for ch in text.chars() {
-                        let advance = advance_em(metrics, ch, face) * size;
+                        let advance = widths.advance_em(ch, face) * size;
                         if !chunk.is_empty() && chunk_width + advance > max_width {
                             lines.push(vec![InlineAtom::Text {
                                 text: chunk.trim_end().to_string(),
@@ -1273,18 +1367,15 @@ fn blank_page(hint: &LayoutHint) -> LayoutPage {
     LayoutPage { width: hint.page_width, height: hint.page_height, items: Vec::new() }
 }
 
-/// Sum of character advances for a run of text, in points.
-fn measure_text(metrics: &FontMetricsSystem, text: &str, size: f64, face: TextFace) -> f64 {
-    text.chars().map(|ch| advance_em(metrics, ch, face) * size).sum()
-}
-
 /// Advance width of one character in em units under `face`.
 ///
-/// `vutex-text` currently exposes a uniform 0.5 em advance for known glyphs, so
-/// the character class refines that base advance for book-text line breaking.
+/// Fallback only: it applies when the embedded face metrics publish no width,
+/// either because the face file is unavailable or the character is uncovered.
+/// `vutex-text` exposes a uniform 0.5 em advance for known glyphs, so the
+/// character class refines that base advance for book-text line breaking.
 /// Monospace text gets a fixed advance, so positioned runs line up with the
 /// monospace font the renderers actually select.
-fn advance_em(metrics: &FontMetricsSystem, ch: char, face: TextFace) -> f64 {
+fn heuristic_advance_em(metrics: &FontMetricsSystem, ch: char, face: TextFace) -> f64 {
     if face.family == MONOSPACE {
         return MONOSPACE_ADVANCE;
     }
@@ -1338,13 +1429,13 @@ fn split_atoms(text: &str) -> Vec<String> {
 }
 
 /// Greedy first-fit line breaking with word and CJK break opportunities.
-fn wrap_text(metrics: &FontMetricsSystem, text: &str, size: f64, max_width: f64) -> Vec<String> {
+fn wrap_text(widths: &TextMeasure<'_>, text: &str, size: f64, max_width: f64) -> Vec<String> {
     let mut lines = Vec::new();
     for raw in text.split('\n') {
         let mut line = String::new();
         let mut width = 0.0;
         for atom in split_atoms(raw) {
-            let atom_width = measure_text(metrics, &atom, size, BODY_FACE);
+            let atom_width = widths.measure(&atom, size, BODY_FACE);
             if atom.trim().is_empty() {
                 if line.is_empty() || width + atom_width > max_width {
                     continue;
@@ -1363,7 +1454,7 @@ fn wrap_text(metrics: &FontMetricsSystem, text: &str, size: f64, max_width: f64)
                 let mut chunk = String::new();
                 let mut chunk_width = 0.0;
                 for ch in atom.chars() {
-                    let advance = advance_em(metrics, ch, BODY_FACE) * size;
+                    let advance = widths.advance_em(ch, BODY_FACE) * size;
                     if !chunk.is_empty() && chunk_width + advance > max_width {
                         lines.push(chunk.trim_end().to_string());
                         chunk = String::new();
