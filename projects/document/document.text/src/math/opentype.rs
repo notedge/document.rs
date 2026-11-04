@@ -28,9 +28,10 @@ use super::facts::{MathFontFacts, StretchAxis};
 
 /// Selectable OpenType MATH font families.
 ///
-/// This crate owns font *processing* only. Actual OTF payloads live in the
-/// host product (VuTeX) and must be installed through [`install_math_font`]
-/// before [`MathFontFamily::bytes`] returns `Some`. A missing font causes
+/// This crate owns font *processing* only. The OTF payloads ship in the
+/// `document-fonts` crate (whoever hosts the layout still has to install them
+/// through [`install_math_font`]) and must be installed before
+/// [`MathFontFamily::bytes`] returns `Some`. A missing font causes
 /// [`opentype_font_metrics`] to return `None` and callers fall back to
 /// synthetic metrics — [`builtin_default`][Self::builtin_default] picks the
 /// first installed family.
@@ -59,8 +60,9 @@ fn installed_fonts() -> &'static std::sync::RwLock<InstalledMathFonts> {
 
 /// Install host-owned OpenType MATH font bytes for one family.
 ///
-/// VuTeX (or another product host) calls this once at startup with the
-/// `'static` payload it embeds. document.rs never ships the font files.
+/// VuTeX, panduck, or another product host calls this once at startup with the
+/// `'static` payload it embeds; `document_fonts::install_default_math_font`
+/// is the bundled shortcut.
 pub fn install_math_font(family: MathFontFamily, bytes: &'static [u8]) {
     let mut guard = installed_fonts().write().expect("math font registry");
     match family {
