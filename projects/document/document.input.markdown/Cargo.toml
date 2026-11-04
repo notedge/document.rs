@@ -19,3 +19,4 @@ document-compose = { workspace = true }
 document-text = { workspace = true }
 plotter-diagram = { workspace = true }
 plotter-input-mermaid = { workspace = true }
+serde_json = { workspace = true }

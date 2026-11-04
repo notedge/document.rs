@@ -43,4 +43,6 @@ a documented lossy document instead of a failure.
 | `#let` / `#show` / `#import` / `#table` / `#image` 各为一个 `Block::Opaque`，`unsupported` 记 `import.typst.dynamic_content`，诊断 `span` 覆盖各自构造 | `tests/constructs/mod.rs` · `dynamic_constructs_keep_their_kind_and_span` |
 | 行内数学与行间数学分别计入 `report.preserved` | `tests/constructs/mod.rs` · `inline_and_display_math_are_counted_apart` |
 | 无序 / 有序列表、`*strong*` / `_emphasis_`、行内与围栏 raw 代码进 SVG | `tests/constructs/mod.rs` · `lists_styles_and_raw_code_reach_the_rendered_svg` |
-| `#link(...)` 为 `Block::Opaque`，`import.typst.dynamic_content`（`Error`），`span` 覆盖表达式且不进页面 | `tests/constructs/mod.rs` · `hashtag_link_is_reported_as_an_opaque_dynamic_construct` |
+| `#link("url")[text]` / `#link("url")`：映射为 `Inline::Link`，目标统一落 `RelationEndpoint::ExternalUri`（相对路径与绝对 URL 同约定，与 Markdown 链接一致），无 body 时以 URL 作锚文本，SVG 输出 `<a href>` 与锚文本 | `tests/constructs/mod.rs` · `hashtag_link_becomes_an_external_link`、`relative_link_target_follows_the_markdown_destination_convention` |
+| `#link(...)` 参数不合法（非字符串首参、跨行组）仍为 `Block::Opaque` + `import.typst.dynamic_content`（`Error`），`span` 覆盖构造且不进页面 | `tests/constructs/mod.rs` · `invalid_link_arguments_stay_opaque_with_their_span` |
+| `input-contracts.json` 的每条 claimed supported 用其 `sample` 实跑导入与渲染，清单不能比实现乐观 | `tests/contracts/mod.rs` · `every_supported_construct_is_importable_and_renderable` |

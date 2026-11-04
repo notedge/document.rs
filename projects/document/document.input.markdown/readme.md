@@ -57,3 +57,4 @@ as a documented lossy document instead of a failure.
 | 多级引用 | `tests/markdown_pipeline/mod.rs` · `nested_quotes_reach_the_rendered_svg` |
 | HTML 块登记而不进页面 | `tests/markdown_pipeline/mod.rs` · `html_blocks_are_reported_instead_of_reaching_the_rendered_svg` |
 | autolink 与行内原始 HTML、脚注正文与引用 | `tests/markdown_pipeline/mod.rs` · `autolinks_and_raw_html_do_not_disappear_without_a_report`、`footnote_bodies_and_references_do_not_disappear_without_a_report` |
+| `input-contracts.json` 的每条 claimed supported 用其 `sample` 实跑导入与渲染，清单不能比实现乐观 | `tests/contracts/mod.rs` · `every_supported_construct_is_importable_and_renderable` |

@@ -170,6 +170,13 @@ impl<'a> TypstLowerer<'a> {
                     }
                 }
                 TypstItem::Quote(quote) => {
+                    if let Some(segments) = self.link_quote(quote) {
+                        self.line_breaks = 0;
+                        self.cursor = quote.span.end;
+                        self.push_link_segments(segments, &mut sink.inlines);
+                        index += 1;
+                        continue;
+                    }
                     if self.lower_expression(quote, region_end, sink) {
                         return;
                     }
@@ -533,11 +540,14 @@ impl<'a> TypstLowerer<'a> {
                     }
                 }
                 TypstItem::Link(link) => inlines.push(self.link_inline(link)),
-                TypstItem::Quote(_) => self.loss(
-                    "import.typst.dynamic_content",
-                    "dynamic Typst expression cannot be represented as inline content",
-                    SemanticStatus::Unsupported,
-                ),
+                TypstItem::Quote(quote) => match self.link_quote(quote) {
+                    Some(segments) => self.push_link_segments(segments, &mut inlines),
+                    None => self.loss(
+                        "import.typst.dynamic_content",
+                        "dynamic Typst expression cannot be represented as inline content",
+                        SemanticStatus::Unsupported,
+                    ),
+                },
                 TypstItem::Heading(_) | TypstItem::ListItem(_) | TypstItem::EnumItem(_) | TypstItem::Block(_) => self.loss(
                     "import.typst.block_in_inline_context",
                     "block Typst structure cannot be represented as inline content",
@@ -557,6 +567,43 @@ impl<'a> TypstLowerer<'a> {
             .filter(|display| !display.is_empty())
             .unwrap_or_else(|| vec![Inline::Text { text: link.url.clone() }]);
         Inline::Link { target: RelationEndpoint::ExternalUri(link.url.clone()), display, title: None }
+    }
+
+    /// Recover the inline content of a `#` quote span that consists of one or
+    /// more `#link("destination")[body]` expressions separated by plain markup.
+    ///
+    /// `None` keeps the span on the opaque path, so an unbalanced group, a
+    /// cross-line group, a destination that is not a string literal, or any
+    /// other dynamic expression still fails closed with its authored range.
+    fn link_quote(&self, quote: &TypstRoot) -> Option<Vec<QuoteSegment<'a>>> {
+        split_link_quote(self.raw(quote.span.start, quote.span.end))
+    }
+
+    fn push_link_segments(&mut self, segments: Vec<QuoteSegment<'a>>, inlines: &mut Vec<Inline>) {
+        for segment in segments {
+            match segment {
+                QuoteSegment::Text(text) => {
+                    if text.starts_with(char::is_whitespace)
+                        && !inlines.is_empty()
+                        && !last_inline_ends_with_space(inlines)
+                    {
+                        push_inline_text(inlines, " ");
+                    }
+                    push_text_inlines(inlines, text);
+                }
+                QuoteSegment::Link { destination, body } => {
+                    let display = body
+                        .map(|body| self.lower_inline_fragment(body))
+                        .filter(|display| !display.is_empty())
+                        .unwrap_or_else(|| vec![Inline::Text { text: destination.clone() }]);
+                    inlines.push(Inline::Link {
+                        target: RelationEndpoint::ExternalUri(destination),
+                        display,
+                        title: None,
+                    });
+                }
+            }
+        }
     }
 
     fn list_ahead(&self) -> Option<(Vec<ListLine>, bool, usize)> {
@@ -632,6 +679,109 @@ impl<'a> TypstLowerer<'a> {
 struct ListLine {
     number: Option<u32>,
     content: String,
+}
+
+/// One piece of a single-line `#` quote span: authored markup or a link.
+enum QuoteSegment<'a> {
+    Text(&'a str),
+    Link { destination: String, body: Option<&'a str> },
+}
+
+/// Split a single-line quote span into `#link("destination")[body]` expressions
+/// and the markup between them.
+///
+/// The parser only accepts the exact shapes Typst authors use for links: a
+/// string literal first argument and an optional content block. Anything else,
+/// including a group that crosses a line break or a `#` expression that is not
+/// a link, returns `None` so the caller keeps the opaque + span behaviour.
+fn split_link_quote(raw: &str) -> Option<Vec<QuoteSegment<'_>>> {
+    if raw.contains('\n') {
+        return None;
+    }
+    let mut segments = Vec::new();
+    let mut offset = 0usize;
+    while offset < raw.len() {
+        let rest = &raw[offset..];
+        let hashed = match rest.find('#') {
+            Some(hashed) => hashed,
+            None => {
+                segments.push(QuoteSegment::Text(rest));
+                break;
+            }
+        };
+        if hashed > 0 {
+            segments.push(QuoteSegment::Text(&rest[..hashed]));
+        }
+        let (destination, body, consumed) = parse_typst_link(&rest[hashed..])?;
+        segments.push(QuoteSegment::Link { destination, body });
+        offset += hashed + consumed;
+    }
+    Some(segments)
+}
+
+/// Parse a single-line `#link("destination")[body]` expression at the start of
+/// `raw`.
+///
+/// Returns the destination, the raw body between the content brackets, and how
+/// many bytes the expression occupies. The body is omitted when the call has no
+/// content block.
+fn parse_typst_link(raw: &str) -> Option<(String, Option<&str>, usize)> {
+    if raw.contains('\n') {
+        return None;
+    }
+    let rest = raw.strip_prefix("#link")?.trim_start().strip_prefix('(')?.trim_start();
+    if !rest.starts_with('"') {
+        return None;
+    }
+    let mut destination = String::new();
+    let mut index = 1usize;
+    let mut closed = false;
+    while index < rest.len() {
+        let character = rest[index..].chars().next()?;
+        match character {
+            '\\' => {
+                let escaped = rest[index + 1..].chars().next()?;
+                destination.push(escaped);
+                index += 1 + escaped.len_utf8();
+            }
+            '"' => {
+                index += 1;
+                closed = true;
+                break;
+            }
+            other => {
+                destination.push(other);
+                index += other.len_utf8();
+            }
+        }
+    }
+    if !closed {
+        return None;
+    }
+    let rest = rest[index..].trim_start().strip_prefix(')')?.trim_start();
+    let Some(after) = rest.strip_prefix('[')
+    else {
+        let consumed = raw.len() - rest.len();
+        return Some((destination, None, consumed));
+    };
+    let mut depth = 1usize;
+    let mut end = None;
+    for (offset, character) in after.char_indices() {
+        match character {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(offset);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    let consumed = raw.len() - rest.len() + end + 2;
+    Some((destination, Some(&after[..end]), consumed))
 }
 
 fn typst_span(item: &TypstItem) -> Option<oak_core::Range<usize>> {

@@ -10,7 +10,7 @@
     ],
     "codes": "the loss codes recorded by document.formats import lowering plus the adapter constants",
     "downstream": "the same profile / supported / approximated / refused shape as projects/plotter/input-contracts.json",
-    "audit": "each acceptance item of 19 / 20 / 21 was mapped to a named test in the adapter readme, and the construct tables were checked against the lowering branches"
+    "audit": "each acceptance item of 19 / 20 / 21 was mapped to a named test in the adapter readme, the construct tables were checked against the lowering branches, and every claimed supported construct is re-imported and re-rendered from its sample by tests/contracts/mod.rs in each adapter"
   },
   "environment": {
     "math_font": {
@@ -34,7 +34,7 @@
         {"construct": "bold / italic / strikethrough", "sample": "**bold** _italic_ ~~gone~~\n"},
         {"construct": "inline and display math", "sample": "$x^2$\n\n$$\nx^2\n$$\n"},
         {"construct": "Mermaid / DOT / PlantUML diagram fences lowered by the host", "sample": "```mermaid\nflowchart TD\n  A --> B\n```\n"},
-        {"construct": "raw HTML block preserved verbatim", "code": "vutex.input.markdown.preserved_raw_html", "span": "exact"}
+        {"construct": "raw HTML block preserved verbatim", "sample": "<div>\nauthored block\n</div>\n", "code": "vutex.input.markdown.preserved_raw_html", "span": "exact"}
       ],
       "approximated": [
         {"construct": "definition list", "code": "import.markdown.definition_list", "loss": "the description item loses its term/description relation", "span": "exact"},
@@ -68,7 +68,7 @@
         {"construct": "simple tabular table", "sample": "\\begin{tabular}{ll}\nA & B \\\\\n\\end{tabular}\n"},
         {"construct": "inline math and display math source", "sample": "$x^2$\n\n\\begin{equation}\nE = mc^2\n\\end{equation}\n"},
         {"construct": "verbatim code", "sample": "\\begin{verbatim}\nraw\n\\end{verbatim}\n"},
-        {"construct": "label anchor and \\ref / \\eqref", "sample": "\\label{sec:one}\nSee \\ref{sec:one}.\n"},
+        {"construct": "label anchor and \\ref / \\eqref", "sample": "\\section{One}\n\\label{sec:one}\n\nSee \\ref{sec:one} and \\eqref{sec:one}.\n"},
         {"construct": "footnote carried on the reference inline", "sample": "Body\\footnote{note} text.\n"},
         {"construct": "citation with one or more keys", "sample": "\\cite{a,b}\n"},
         {"construct": "\\href external link", "sample": "\\href{https://example.org}{docs}\n"}
@@ -128,7 +128,8 @@
         {"construct": "unordered and ordered lists", "sample": "- one\n- two\n"},
         {"construct": "strong and emphasis spans", "sample": "*bold* and _italic_\n"},
         {"construct": "inline and fenced raw code", "sample": "`x` and ```rust\nfn main() {}\n```\n"},
-        {"construct": "inline and display math source preserved", "sample": "$a^2$\n\n$ x + y $\n"}
+        {"construct": "inline and display math source preserved", "sample": "$a^2$\n\n$ x + y $\n"},
+        {"construct": "#link(\"destination\")[text] and body-less #link(\"destination\") as Inline::Link, destination kept as RelationEndpoint::ExternalUri for both absolute and relative paths, body-less calls use the destination as anchor text", "sample": "See #link(\"https://example.org\")[docs] and #link(\"img/a.pdf\").\n"}
       ],
       "approximated": [
         {"construct": "list markup with no item line", "code": "import.typst.empty_list", "span": "exact"},
@@ -139,7 +140,7 @@
         {"construct": "whole-import coverage summary", "code": "import.typst.partial_coverage", "span": "none"}
       ],
       "refused": [
-        {"construct": "#let / #show / #import / #set / #page / #place / #float / #table / #image / #figure / #link(...) / custom function / script", "code": "import.typst.dynamic_content", "span": "exact"},
+        {"construct": "#let / #show / #import / #set / #page / #place / #float / #table / #image / #figure / #link(...) with a non-string destination or a cross-line group / custom function / script", "code": "import.typst.dynamic_content", "span": "exact"},
         {"construct": "dynamic group whose brackets never balance", "code": "vutex.input.typst.unterminated_dynamic_group", "span": "exact"},
         {"construct": "source above 8 MiB", "code": "vutex.input.typst.source_too_large", "span": "none"},
         {"construct": "source the parser refuses", "code": "vutex.input.typst.import_failed", "span": "none"}
@@ -155,7 +156,8 @@
     {"id": "input-tex-href", "language": "tex", "classification": "accept", "source": "See \\href{https://example.org/docs}{Docs}.\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
     {"id": "input-typst-minimal", "language": "typst", "classification": "accept", "source": "= Title\n\nBody.\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
     {"id": "input-typst-math", "language": "typst", "classification": "accept", "source": "Inline $a^2$ stays.\n\n$ x + y $\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
-    {"id": "input-typst-dynamic", "language": "typst", "classification": "accept", "source": "Before\n\n#figure(\n  rect(width: 2cm),\n  caption: [A box],\n)\n\nAfter\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}}
+    {"id": "input-typst-dynamic", "language": "typst", "classification": "accept", "source": "Before\n\n#figure(\n  rect(width: 2cm),\n  caption: [A box],\n)\n\nAfter\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-typst-link", "language": "typst", "classification": "accept", "source": "See #link(\"https://example.org\")[docs] and #link(\"https://example.org/raw\").\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}}
   ],
   "rejections": [
     {"id": "input-markdown-front-matter", "language": "markdown", "source": "---\ntitle: ignored\n---\n\nBody\n", "code": "vutex.input.markdown.opaque_block", "severity": "error", "spanText": "---\ntitle: ignored\n---"},

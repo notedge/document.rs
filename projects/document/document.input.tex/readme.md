@@ -63,3 +63,4 @@ source imports as a documented lossy document instead of a failure.
 | `\cite{a,b}` 与 `\cite[p.~3]{c}`：每个 key 各出一条 `[@key]` 标记，可选说明无 IR 载体并登记 `import.tex.citation_note` | `tests/constructs/mod.rs` · `citations_keep_every_key_and_ignore_the_optional_note` |
 | 脚注正文挂在引用 `Inline::Note` 上，不摊平进段落文本，`import.tex.footnote_body` 仍登记 | `tests/constructs/mod.rs` · `footnote_body_is_carried_on_the_reference_not_the_flow` |
 | metadata `\title` / `\author`、`\textbf` / `\emph` / `\texttt`、`verbatim`、`enumerate` 进页面 | `tests/constructs/mod.rs` · `metadata_verbatim_inline_styles_and_lists_reach_the_page` |
+| `input-contracts.json` 的每条 claimed supported 用其 `sample` 实跑导入与渲染（`\label` 必须绑定前序块，`\ref` 才解析），清单不能比实现乐观 | `tests/contracts/mod.rs` · `every_supported_construct_is_importable_and_renderable` |

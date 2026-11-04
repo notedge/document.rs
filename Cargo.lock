@@ -678,6 +678,7 @@ dependencies = [
  "document-text",
  "plotter-diagram",
  "plotter-input-mermaid",
+ "serde_json",
 ]
 
 [[package]]
@@ -691,6 +692,7 @@ dependencies = [
  "document-presentation",
  "document-renderer-svg",
  "document-text",
+ "serde_json",
 ]
 
 [[package]]

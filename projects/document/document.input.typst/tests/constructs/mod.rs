@@ -67,24 +67,72 @@ fn lists_styles_and_raw_code_reach_the_rendered_svg() {
 }
 
 #[test]
-fn hashtag_link_is_reported_as_an_opaque_dynamic_construct() {
-    let source = "See #link(\"https://example.org\")[docs].\n";
-    let imported = import_source("virtual://typst-link.typ", source).expect("an opaque link must not fail the import");
-    let diagnostic = imported
-        .diagnostics
-        .iter()
-        .find(|diagnostic| diagnostic.code == "import.typst.dynamic_content")
-        .expect("the authored #link must be reported");
-    assert_eq!(diagnostic.severity, Severity::Error);
-    let span = diagnostic.span.expect("the refused link keeps its authored range");
-    let covered = &source[span.start as usize..span.end as usize];
+fn hashtag_link_becomes_an_external_link() {
+    let source = "See #link(\"https://example.org\")[docs] and #link(\"https://example.org/raw\").\n";
+    let imported = import_source("virtual://typst-link.typ", source).expect("link expressions must import");
     assert!(
-        covered.starts_with("#link(") && covered.contains("[docs]") && !covered.contains("See"),
-        "the span must cover the dynamic expression, not the surrounding prose: {covered:?}"
+        imported.diagnostics.iter().all(|diagnostic| diagnostic.severity != Severity::Error),
+        "{:#?}",
+        imported.diagnostics
     );
 
-    let rendered = render_svg("virtual://typst-link.typ", source).expect("render must succeed");
-    assert!(!rendered.svg.contains("https://example.org"), "the refused link must not silently reach the page as body text");
+    let rendered = render_svg("virtual://typst-link.typ", source).expect("link expressions must render");
+    assert!(rendered.svg.contains("docs"), "the link body must stay visible");
+    assert!(
+        rendered.svg.contains("<a href=\"https://example.org\">"),
+        "the destination must reach the svg anchor"
+    );
+    assert!(
+        rendered.svg.contains("https://example.org/raw"),
+        "a body-less link keeps the url as its display text"
+    );
+    assert!(!rendered.svg.contains("#link"), "the authored call must not leak into the page");
+}
+
+#[test]
+fn relative_link_target_follows_the_markdown_destination_convention() {
+    let source = "See #link(\"img/a.pdf\")[appendix].\n";
+    let imported =
+        import_source("virtual://typst-relative-link.typ", source).expect("a relative destination must import");
+    let link = imported
+        .graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            document_ir::Block::Paragraph { content } => content.iter().find_map(|inline| match inline {
+                document_ir::Inline::Link { target, display, .. } => Some((target, display)),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("the relative link must become an Inline::Link");
+
+    assert_eq!(link.0, &document_ir::RelationEndpoint::ExternalUri("img/a.pdf".into()));
+    assert!(link.1.iter().any(|inline| matches!(inline, document_ir::Inline::Text { text } if text == "appendix")));
+}
+
+#[test]
+fn invalid_link_arguments_stay_opaque_with_their_span() {
+    let source = "Before\n\n#link(target)[text]\n\n#link(\n  \"https://example.org\",\n)[text]\n\nAfter\n";
+    let imported = import_source("virtual://typst-invalid-link.typ", source).expect("invalid links must import as opaque");
+
+    assert_eq!(imported.report.opaque.len(), 2, "{:#?}", imported.report);
+    let spans: Vec<&str> = imported
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "import.typst.dynamic_content")
+        .map(|diagnostic| {
+            let span = diagnostic.span.expect("an invalid link keeps its authored range");
+            &source[span.start as usize..span.end as usize]
+        })
+        .collect();
+    assert_eq!(spans, ["#link(target)[text]", "#link(\n  \"https://example.org\",\n)"], "{spans:?}");
+
+    let rendered = render_svg("virtual://typst-invalid-link.typ", source).expect("opaque links must not stop the page");
+    assert!(rendered.svg.contains("Before") && rendered.svg.contains("After"), "surrounding text must survive");
+    for leaked in ["target", "example.org"] {
+        assert!(!rendered.svg.contains(leaked), "an invalid link must not reach the page as body text: {leaked}");
+    }
 }
 
 #[test]
