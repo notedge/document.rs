@@ -32,7 +32,7 @@ plotter-motion = { workspace = true }
 plotter-input-mermaid = { workspace = true }
 plotter-input-dot = { workspace = true }
 plotter-input-plantuml = { workspace = true }
-plotter-input-tikz = { path = "../plotter.input.tikz" }
+plotter-input-tikz = { workspace = true }
 
 [dev-dependencies]
 plotter-data = { workspace = true }
