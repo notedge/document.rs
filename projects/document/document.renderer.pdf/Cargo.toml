@@ -12,6 +12,7 @@ acorn-codec = { workspace = true }
 plotter-scene = { workspace = true }
 plotter-types = { workspace = true }
 document-compose = { workspace = true, features = ["serde"] }
+document-fonts = { workspace = true }
 document-presentation = { workspace = true }
 document-renderer = { workspace = true }
 

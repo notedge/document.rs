@@ -2,7 +2,7 @@
 
 use document_compose::math::FontStyle;
 use document_presentation::display::{DisplayItem, DisplayPage, DisplayPresentation, DisplayTextRun};
-use document_renderer_pdf::render_pdf;
+use document_renderer_pdf::{PdfFontPolicy, render_pdf, render_pdf_with_font_policy};
 
 fn text(family: &str, style: FontStyle, value: &str) -> DisplayItem {
     DisplayItem::TextRun(DisplayTextRun {
@@ -22,8 +22,14 @@ fn render_bytes(items: Vec<DisplayItem>) -> Vec<u8> {
     render_pdf(&DisplayPresentation { pages: vec![DisplayPage { width: 595.0, height: 842.0, items }] }).expect("pdf render")
 }
 
-fn render(items: Vec<DisplayItem>) -> String {
-    String::from_utf8_lossy(&render_bytes(items)).into_owned()
+/// Render with the base-14-only policy, where style selection is observable.
+fn render_base14(items: Vec<DisplayItem>) -> String {
+    render_pdf_with_font_policy(
+        &DisplayPresentation { pages: vec![DisplayPage { width: 595.0, height: 842.0, items }] },
+        &PdfFontPolicy::Base14Only,
+    )
+    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    .expect("pdf render")
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -91,7 +97,7 @@ fn resolved(text: &str, index: usize) -> String {
 
 #[test]
 fn bold_and_italic_runs_use_distinct_base14_fonts() {
-    let text = render(vec![
+    let text = render_base14(vec![
         text("serif", FontStyle::Normal, "Regular"),
         text("serif", FontStyle::Bold, "Bold"),
         text("serif", FontStyle::Italic, "Italic"),
@@ -114,7 +120,7 @@ fn bold_and_italic_runs_use_distinct_base14_fonts() {
 
 #[test]
 fn family_and_style_resolve_to_the_base14_table() {
-    let text = render(vec![
+    let text = render_base14(vec![
         text("sans-serif", FontStyle::Bold, "Sans bold"),
         text("monospace", FontStyle::Italic, "Mono italic"),
         text("serif", FontStyle::Normal, "Serif"),

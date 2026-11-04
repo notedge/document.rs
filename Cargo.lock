@@ -772,6 +772,7 @@ version = "0.1.0"
 dependencies = [
  "acorn-codec",
  "document-compose",
+ "document-fonts",
  "document-layout",
  "document-presentation",
  "document-renderer",

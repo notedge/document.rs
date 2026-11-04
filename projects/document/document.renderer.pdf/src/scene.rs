@@ -30,7 +30,7 @@ use plotter_types::{Color, Point, Rect, Transform};
 use document_compose::Diagnostic;
 
 use crate::render::{
-    EmbeddedText, ImageResources, OpacityResources, base_font_for, needs_embedding, num, paint_text, scene_font_style,
+    EmbeddedText, ImageResources, OpacityResources, base_font_for, num, paint_text, scene_font_style,
 };
 
 /// Width of one character as a fraction of the font size.
@@ -459,13 +459,14 @@ fn write_text<'d>(out: &mut String, position: Point, text: &str, style: &TextSty
         return;
     }
     let embedded = painter.embedded;
-    let anchor = if embedded.is_some() && needs_embedding(text) {
-        embedded.map(|embedded| embedded.first_index)
-    }
-    else {
-        let family = style.font_family.as_deref().unwrap_or("");
-        let base = base_font_for(family, scene_font_style(style.font_weight));
-        painter.fonts.iter().position(|(font, _)| *font == base).map(|index| index + 1)
+    let family = style.font_family.as_deref().unwrap_or("");
+    let embedded_run = embedded.filter(|chain| chain.embeds(text));
+    let anchor = match embedded_run {
+        Some(chain) => Some(chain.first_index),
+        None => {
+            let base = base_font_for(family, scene_font_style(style.font_weight));
+            painter.fonts.iter().position(|(font, _)| *font == base).map(|index| index + 1)
+        }
     };
     let Some(resource_index) = anchor
     else {
@@ -480,7 +481,19 @@ fn write_text<'d>(out: &mut String, position: Point, text: &str, style: &TextSty
         TextAnchor::Middle => position.x - width * 0.5,
         TextAnchor::End => position.x - width,
     };
-    paint_text(out, x, position.y, style.font_size, resource_index, text, embedded, true, painter.diagnostics.as_deref_mut());
+    paint_text(
+        out,
+        x,
+        position.y,
+        style.font_size,
+        resource_index,
+        text,
+        embedded_run,
+        family,
+        scene_font_style(style.font_weight),
+        true,
+        painter.diagnostics.as_deref_mut(),
+    );
 }
 
 /// Paint one resolved image, or its reserved dashed slot when it did not resolve.

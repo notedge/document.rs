@@ -51,23 +51,31 @@ something wrong: elliptical arcs, gradients and patterns, CSS classes and
 markers, nested `<svg>`, unknown elements, malformed XML, and a path without
 usable geometry.
 
-The writer needs no third-party crate. Text the WinAnsi encoding reaches uses
-the base-14 standard fonts, so Latin documents embed no font program. Anything
-outside WinAnsi is painted with subsets of `glyf` TrueType fonts, embedded as
-Identity-H `CIDFontType2` programs with a `ToUnicode` map, so the glyphs reach
-the page and extracted text stays readable, including code points above the
-Basic Multilingual Plane.
+The writer needs no third-party crate. By default every text run is painted
+with a subset of a `document_fonts` body face, embedded as an Identity-H
+`CIDFontType2` program with a `FontFile2` stream and a `ToUnicode` map. No
+base-14 name reaches the file, so a reader or print pipeline has nothing to
+substitute and the page cannot reflow: `Times-Roman` and `Courier` are gone from
+bundled output entirely, code blocks included.
 
 Characters come from a fallback chain rather than one face: a Han body font
 rarely carries emoji, and an emoji face rarely carries Han characters. Each
 program covers the characters no earlier program covered, so a run mixing both
 paints from two subsets while keeping one text matrix, and the font is switched
-between glyph groups. `PdfFontPolicy` selects the chain: `Discover` probes
-system TrueType fonts (symbol and Latin faces, then CJK faces, then monochrome
-emoji; absent or unusable candidates are skipped), `File` embeds one file, and
-`Files` embeds the authored list in order. With an explicit list every entry
-must be readable, and a character no program covers is an
-`vutex.render.pdf.glyph_missing` error naming the code points rather than a
-dropped glyph or a `?`. `Base14Only` intentionally keeps the `?` degradation.
+between glyph groups. A monospaced run takes the fixed-advance face first and
+falls back to the prose face for Han characters, because no monospaced Han face
+is bundled. A requested bold or italic style takes the faces of that style
+first, then the regular faces.
+
+`PdfFontPolicy` selects the chain. `Bundled` is the default and the only
+policy that guarantees a self-contained file. `Discover` probes system TrueType
+fonts (symbol and Latin faces, then CJK faces, then monochrome emoji; absent or
+unusable candidates are skipped), `File` embeds one file, and `Files` embeds the
+authored list in order. With an explicit list every entry must be readable, and
+a character no program covers is a `vutex.render.pdf.glyph_missing` error naming
+the code points rather than a dropped glyph or a `?`. `Base14Only` keeps the
+WinAnsi text on the standard faces and degrades anything else to `?`, which is
+what a caller asks for when it wants a file that references no font program.
+
 `render_pdf_with_resources` accepts both the font policy and the caller's
 `PdfResources` context.

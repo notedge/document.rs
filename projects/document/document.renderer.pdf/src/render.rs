@@ -1,10 +1,14 @@
 //! PDF output: a minimal, dependency-free PDF 1.7 writer.
 //!
 //! The writer paints the same display primitives as the SVG backend.
-//! WinAnsi-representable text uses the base-14 standard fonts, so Latin
-//! documents embed no font program. Text the WinAnsi encoding cannot reach is
-//! painted with a subset of a discovered system TrueType font, embedded as an
-//! Identity-H `CIDFontType2` program, so every character reaches the page.
+//! Text is normally painted from subsets of the bundled body faces in
+//! `document_fonts`, embedded as Identity-H `CIDFontType2` programs, so no
+//! reader or print pipeline can substitute a system face and reflow the page.
+//! Monospaced runs embed the bundled fixed-advance face rather than base-14
+//! `Courier`, so a code block keeps its grid in a self-contained file too.
+//! [`PdfFontPolicy::Discover`] and the file policies keep the older behaviour:
+//! WinAnsi text uses a base-14 face and only the characters the encoding cannot
+//! reach pull a system TrueType subset in.
 //! Coordinates arrive with the origin at the page top-left corner and are
 //! flipped to PDF's bottom-left origin by subtracting them from the page height.
 //!
@@ -26,6 +30,7 @@ use std::{
 };
 
 use document_compose::{Diagnostic, Severity, math::FontStyle};
+use document_fonts::{BodyFaceStyle, BodyFamily};
 use document_presentation::display::{
     DisplayGraphic, DisplayImage, DisplayItem, DisplayPage, DisplayPath, DisplayPresentation, DisplayRect, DisplayRule,
     DisplayTextRun,
@@ -34,7 +39,7 @@ use document_renderer::is_safe_href;
 use plotter_scene::DisplayScene;
 
 use crate::{
-    font::{FontChain, Subset, SystemFont},
+    font::{ChainKey, FontChain, Subset, SystemFont, bundled_faces},
     resources::PdfResources,
 };
 
@@ -84,22 +89,27 @@ pub struct PdfRenderOutcome {
 
 /// PDF renderer. Consumes only the display presentation IR.
 ///
-/// Fonts for text outside WinAnsi are discovered on the system; use
-/// [`render_pdf_with_font_policy`] to pin or disable that lookup.
+/// Body text embeds the bundled `document_fonts` faces by default; use
+/// [`render_pdf_with_font_policy`] to pin a system font, a font file, or the
+/// base-14-only fallback instead.
 pub fn render_pdf(presentation: &DisplayPresentation) -> Result<Vec<u8>, Diagnostic> {
-    render_pdf_with_font_policy(presentation, &PdfFontPolicy::Discover)
+    render_pdf_with_font_policy(presentation, &PdfFontPolicy::Bundled)
 }
 
-/// Where glyphs for text outside WinAnsi come from.
+/// Where glyphs for PDF text come from.
 ///
+/// `Bundled` embeds the body faces shipped in `document_fonts` for every
+/// non-monospaced run, so the PDF never depends on a reader's installed fonts.
 /// `Discover` and both file variants build a fallback chain: the first font
 /// supplies the characters it covers and later fonts fill in the rest. For
 /// `Discover` the candidates are system faces with `glyf` outlines. For
 /// `File` and `Files` they are exactly the authored paths, in order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum PdfFontPolicy {
-    /// Discover system TrueType fonts when a document needs them.
+    /// Embed subsets of the bundled `document_fonts` body faces.
     #[default]
+    Bundled,
+    /// Discover system TrueType fonts for characters WinAnsi cannot encode.
     Discover,
     /// Never embed a font; characters outside WinAnsi degrade to `?`.
     Base14Only,
@@ -133,7 +143,7 @@ pub fn render_pdf_with_resources(
 
 /// Like [`render_pdf`] but returns the warnings the pipeline collected.
 pub fn render_pdf_with_diagnostics(presentation: &DisplayPresentation) -> Result<PdfRenderOutcome, Diagnostic> {
-    render_pdf_with_font_policy_and_diagnostics(presentation, &PdfFontPolicy::Discover)
+    render_pdf_with_font_policy_and_diagnostics(presentation, &PdfFontPolicy::Bundled)
 }
 
 /// Like [`render_pdf_with_font_policy`] but returns the warnings the pipeline collected.
@@ -191,29 +201,73 @@ pub(crate) fn scene_font_style(weight: Option<u16>) -> FontStyle {
     }
 }
 
-/// Characters painted with the embedded font, in code point order.
-fn embedded_charset(presentation: &DisplayPresentation) -> BTreeSet<char> {
-    let mut charset = BTreeSet::new();
+/// Face style a body run asks for.
+///
+/// Only upright, bold, and italic have bundled faces. Math-only and decorative
+/// styles never reach the page as text (math paints as outlines), and a
+/// `Monospace` style only names the family, which is handled separately.
+pub(crate) fn body_style(style: FontStyle) -> BodyFaceStyle {
+    match style {
+        FontStyle::Bold => BodyFaceStyle::Bold,
+        FontStyle::Italic => BodyFaceStyle::Italic,
+        _ => BodyFaceStyle::Regular,
+    }
+}
+
+/// Family and style a text run asks the chain for.
+///
+/// Only monospaced text is treated as code. Every other declared family paints
+/// with the prose face, because the bundled set carries one reading face per
+/// script rather than one per declared family name.
+pub(crate) fn chain_key(family: &str, style: FontStyle) -> ChainKey {
+    ChainKey {
+        family: if family.to_ascii_lowercase().contains("mono") {
+            BodyFamily::Mono
+        }
+        else {
+            BodyFamily::Serif
+        },
+        style: body_style(style),
+    }
+}
+
+/// Whether one text run paints through the embedded font chain.
+///
+/// `body` is set by [`PdfFontPolicy::Bundled`], where every run embeds, because
+/// a printed page must not depend on the reader shipping any face. The other
+/// policies only embed where WinAnsi cannot reach the text.
+fn embeds_run(body: bool, text: &str) -> bool {
+    body || needs_embedding(text)
+}
+
+/// Characters painted with the embedded font, per requested family and style.
+fn embedded_charsets(presentation: &DisplayPresentation, body: bool) -> BTreeMap<ChainKey, BTreeSet<char>> {
+    let mut charsets: BTreeMap<ChainKey, BTreeSet<char>> = BTreeMap::new();
+    let mut add = |family: &str, style: FontStyle, text: &str| {
+        if !embeds_run(body, text) {
+            return;
+        }
+        charsets.entry(chain_key(family, style)).or_default().extend(text.chars());
+    };
     for page in &presentation.pages {
         for item in &page.items {
             match item {
-                DisplayItem::TextRun(run) => {
-                    if needs_embedding(&run.text) {
-                        charset.extend(run.text.chars());
-                    }
-                }
+                DisplayItem::TextRun(run) => add(&run.font_family, run.style, &run.text),
                 DisplayItem::Graphic(graphic) => {
-                    crate::scene::visit_texts(&graphic.scene, &mut |_, text| {
-                        if needs_embedding(text) {
-                            charset.extend(text.chars());
-                        }
+                    crate::scene::visit_texts(&graphic.scene, &mut |style, text| {
+                        add(style.font_family.as_deref().unwrap_or(""), scene_font_style(style.font_weight), text);
                     });
                 }
                 _ => {}
             }
         }
     }
-    charset
+    charsets
+}
+
+/// Every character an embedded chain must cover, in code point order.
+fn flat_charset(charsets: &BTreeMap<ChainKey, BTreeSet<char>>) -> BTreeSet<char> {
+    charsets.values().flat_map(|chars| chars.iter().copied()).collect()
 }
 
 /// Load and subset the fonts a document needs, when its policy allows it.
@@ -230,24 +284,30 @@ fn load_chain(
     policy: &PdfFontPolicy,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<FontChain>, Diagnostic> {
-    let charset = embedded_charset(presentation);
+    let body = matches!(policy, PdfFontPolicy::Bundled);
+    let charsets = embedded_charsets(presentation, body);
+    let charset = flat_charset(&charsets);
     if charset.is_empty() {
         return Ok(None);
     }
-    let fonts = match policy {
+    let faces = match policy {
         PdfFontPolicy::Base14Only => {
             append_warning(
                 Some(diagnostics),
                 "vutex.render.pdf.font_unavailable",
                 format!(
-                    "PdfFontPolicy::Base14Only degrades {} characters to '?' because the WinAnsi encoding cannot represent them; switch to Discover or provide explicit font files to embed glyphs",
+                    "PdfFontPolicy::Base14Only degrades {} characters to '?' because the WinAnsi encoding cannot represent them; switch to Bundled or provide explicit font files to embed glyphs",
                     charset.len()
                 ),
             );
             return Ok(None);
         }
-        PdfFontPolicy::Discover => discover_fonts_with_warnings(&charset, diagnostics),
-        PdfFontPolicy::File(path) => vec![load_font_file(path)?],
+        PdfFontPolicy::Bundled => bundled_faces(),
+        PdfFontPolicy::Discover => discover_fonts_with_warnings(&charset, diagnostics)
+            .into_iter()
+            .map(|font| (font, BodyFamily::Serif, BodyFaceStyle::Regular))
+            .collect(),
+        PdfFontPolicy::File(path) => vec![(load_font_file(path)?, BodyFamily::Serif, BodyFaceStyle::Regular)],
         PdfFontPolicy::Files(paths) => {
             if paths.is_empty() {
                 return Err(Diagnostic {
@@ -257,19 +317,22 @@ fn load_chain(
                     span: None,
                 });
             }
-            paths.iter().map(|path| load_font_file(path)).collect::<Result<Vec<_>, _>>()?
+            paths
+                .iter()
+                .map(|path| load_font_file(path).map(|font| (font, BodyFamily::Serif, BodyFaceStyle::Regular)))
+                .collect::<Result<Vec<_>, _>>()?
         }
     };
-    if fonts.is_empty() {
+    if faces.is_empty() {
         return Err(Diagnostic {
             code: "vutex.render.pdf.font_unavailable".into(),
             severity: Severity::Error,
-            message: "no system glyf TrueType font was found for the document charset".into(),
+            message: "no glyf TrueType font was found for the document charset".into(),
             span: None,
         });
     }
-    let chain = FontChain::build(&fonts, &charset);
-    let missing = chain.missing(&charset);
+    let chain = FontChain::build(&faces, &charsets);
+    let missing = chain.missing(&charsets);
     if !missing.is_empty() {
         return Err(Diagnostic {
             code: "vutex.render.pdf.glyph_missing".into(),
@@ -402,8 +465,9 @@ pub(crate) fn base_font_for(family: &str, style: FontStyle) -> &'static str {
 /// Distinct base-14 fonts referenced by text runs, in canonical order.
 ///
 /// Runs painted with the embedded font need no base-14 entry, but they do when
-/// the policy disabled embedding or no system font was found.
-fn used_fonts(presentation: &DisplayPresentation, embed_available: bool) -> Vec<&'static str> {
+/// the policy disabled embedding, when no font was found, or when the run keeps
+/// a monospaced base face.
+fn used_fonts(presentation: &DisplayPresentation, embed_available: bool, body: bool) -> Vec<&'static str> {
     let mut used: Vec<&'static str> = Vec::new();
     fn add(used: &mut Vec<&'static str>, base: &'static str) {
         if !used.contains(&base) {
@@ -414,17 +478,17 @@ fn used_fonts(presentation: &DisplayPresentation, embed_available: bool) -> Vec<
         for item in &page.items {
             match item {
                 DisplayItem::TextRun(run) => {
-                    if embed_available && needs_embedding(&run.text) {
+                    if embed_available && embeds_run(body, &run.text) {
                         continue;
                     }
                     add(&mut used, base_font_for(&run.font_family, run.style));
                 }
                 DisplayItem::Graphic(graphic) => {
                     crate::scene::visit_texts(&graphic.scene, &mut |style, text| {
-                        if embed_available && needs_embedding(text) {
+                        let family = style.font_family.as_deref().unwrap_or("");
+                        if embed_available && embeds_run(body, text) {
                             return;
                         }
-                        let family = style.font_family.as_deref().unwrap_or("");
                         add(&mut used, base_font_for(family, scene_font_style(style.font_weight)));
                     });
                 }
@@ -478,12 +542,25 @@ pub(crate) struct EmbeddedText<'a> {
     /// Subset `i` is registered as `/F{first_index + i}`, so a character's
     /// subset index turns straight into the resource a content stream selects.
     pub(crate) first_index: usize,
+    /// `true` when the policy embeds body text even where WinAnsi would do.
+    pub(crate) body: bool,
 }
 
 impl EmbeddedText<'_> {
+    /// Whether one run paints through this chain; see [`embeds_run`].
+    pub(crate) fn embeds(&self, text: &str) -> bool {
+        embeds_run(self.body, text)
+    }
+
     /// `/F` resource index and CID that paint one character.
-    fn glyph(&self, ch: char) -> Option<(usize, u16)> {
-        self.chain.glyph(ch).map(|(subset, cid)| (self.first_index + subset, cid))
+    pub(crate) fn glyph(&self, ch: char, family: &str, style: FontStyle) -> Option<(usize, u16)> {
+        let key = if self.body {
+            chain_key(family, style)
+        }
+        else {
+            ChainKey { family: BodyFamily::Serif, style: BodyFaceStyle::Regular }
+        };
+        self.chain.glyph(ch, key).map(|(subset, cid)| (self.first_index + subset, cid))
     }
 }
 
@@ -547,7 +624,8 @@ fn build_objects(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Vec<PdfObject>, Diagnostic> {
     let chain = load_chain(presentation, policy, diagnostics)?;
-    let fonts = used_fonts(presentation, chain.is_some());
+    let body = matches!(policy, PdfFontPolicy::Bundled);
+    let fonts = used_fonts(presentation, chain.is_some(), body);
     let page_count = presentation.pages.len();
     let page_links: Vec<Vec<LinkAnnotation>> = presentation.pages.iter().map(page_links).collect();
 
@@ -576,9 +654,9 @@ fn build_objects(
         for (index, subset) in chain.subsets().iter().enumerate() {
             let first = document.next_number();
             page_resources.insert("Font", &format!("F{}", embedded_first + index), first);
-            push_embedded_font_objects(&mut document, subset, first, &embedded_name(index));
+            push_embedded_font_objects(&mut document, subset, first, &embedded_name(index, subset));
         }
-        embedded = Some(EmbeddedText { chain, first_index: embedded_first });
+        embedded = Some(EmbeddedText { chain, first_index: embedded_first, body });
     }
 
     let mut opacities = OpacityResources::default();
@@ -775,18 +853,20 @@ fn push_embedded_font_objects(document: &mut Document, subset: &Subset, first: u
     document.push(PdfObject::stream(String::new(), to_unicode_cmap(subset)));
 }
 
-/// Base font name of one embedded subset.
+/// `/BaseFont` name of one embedded subset.
 ///
 /// The six-letter prefix marks the program as a subset, as the PDF spec asks,
-/// and its position in the fallback chain keeps every program distinct.
-fn embedded_name(index: usize) -> String {
+/// and its position in the fallback chain keeps every program distinct. The
+/// remaining part is the source face's PostScript name, so a font list in a
+/// reader or a print pipeline names the real family instead of a placeholder.
+fn embedded_name(index: usize, subset: &Subset) -> String {
     let mut tag = *b"AAAAAA";
     let mut value = index;
     for slot in tag.iter_mut().rev() {
         *slot = b'A' + (value % 26) as u8;
         value /= 26;
     }
-    format!("{}+VutexSystemFont", String::from_utf8(tag.to_vec()).expect("subset tags are ascii"))
+    format!("{}+{}", String::from_utf8(tag.to_vec()).expect("subset tags are ascii"), subset.name)
 }
 
 /// Link annotations for every safe destination on one page, in paint order.
@@ -989,18 +1069,19 @@ fn write_text(
     if !all_finite(&[run.x, run.y, run.size]) {
         return;
     }
-    let resource_index = if embedded.is_some() && needs_embedding(&run.text) {
-        embedded.map(|embedded| embedded.first_index)
-    }
-    else {
-        let base = base_font_for(&run.font_family, run.style);
-        fonts.iter().position(|(font, _)| *font == base).map(|index| index + 1)
+    let embedded_run = embedded.filter(|chain| chain.embeds(&run.text));
+    let resource_index = match embedded_run {
+        Some(chain) => Some(chain.first_index),
+        None => {
+            let base = base_font_for(&run.font_family, run.style);
+            fonts.iter().position(|(font, _)| *font == base).map(|index| index + 1)
+        }
     };
     let Some(resource_index) = resource_index
     else {
         return;
     };
-    paint_text(out, run.x, page_height - run.y, run.size, resource_index, &run.text, embedded, false, diagnostics);
+    paint_text(out, run.x, page_height - run.y, run.size, resource_index, &run.text, embedded_run, &run.font_family, run.style, false, diagnostics);
 }
 
 /// Emit one text object at a page-space position.
@@ -1021,19 +1102,19 @@ pub(crate) fn paint_text(
     resource_index: usize,
     text: &str,
     embedded: Option<EmbeddedText<'_>>,
+    family: &str,
+    style: FontStyle,
     flip: bool,
     mut diagnostics: Option<&mut Vec<Diagnostic>>,
 ) {
     let down = if flip { -1.0 } else { 1.0 };
-    if let Some(embedded) = embedded
-        && needs_embedding(text)
-    {
+    if let Some(embedded) = embedded {
         let _ = write!(out, "BT\n1 0 0 {down} {} {} Tm\n", num(x), num(y));
         let mut current: Option<usize> = None;
         let mut glyphs = String::new();
         let mut missing: Vec<char> = Vec::new();
         for ch in text.chars() {
-            let Some((font, cid)) = embedded.glyph(ch)
+            let Some((font, cid)) = embedded.glyph(ch, family, style)
             else {
                 missing.push(ch);
                 continue;

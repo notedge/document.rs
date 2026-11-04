@@ -1,10 +1,13 @@
-//! System TrueType font discovery and subsetting for PDF text outside WinAnsi.
+//! TrueType font selection and subsetting for embedded PDF text.
 //!
-//! WinAnsi-representable text keeps using the base-14 fonts, so common Latin
-//! documents stay small and portable. Anything the encoding cannot reach needs
-//! real glyphs, so this module finds a system font with TrueType outlines,
-//! subsets it to the characters one document actually uses, and hands the
-//! subset to the writer as an Identity-H `CIDFontType2` font program.
+//! Two sources feed the chain. [`PdfFontPolicy::Bundled`] parses the body faces
+//! of `document_fonts::BODY_FACES`, so every paragraph is embedded from the
+//! repository's own assets. The other policies fall back to system faces for
+//! characters WinAnsi cannot encode.
+//!
+//! Either way each face is subset to the characters one document uses, so the
+//! PDF carries only the glyphs it paints, and the subset reaches the writer as
+//! an Identity-H `CIDFontType2` program with a `ToUnicode` CMap.
 //!
 //! Only `glyf`-outline fonts are supported. Collections (`.ttc`) contribute
 //! their first face. CFF-flavoured fonts (`OTTO`) are skipped, because they
@@ -15,6 +18,34 @@ use std::{
     fs,
     path::Path,
 };
+
+use document_fonts::{BODY_FACES, BodyFaceStyle, BodyFamily};
+
+/// Family and style one text run asks the chain for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ChainKey {
+    /// Whether the run wants prose or a fixed-advance face.
+    pub(crate) family: BodyFamily,
+    /// Weight and slant the run asks for.
+    pub(crate) style: BodyFaceStyle,
+}
+
+/// Fallback order inside one family: the requested style, then regular.
+fn key_order(key: ChainKey) -> Vec<ChainKey> {
+    let mut order = vec![
+        key,
+        ChainKey { family: key.family, style: BodyFaceStyle::Regular },
+        ChainKey { family: BodyFamily::Serif, style: key.style },
+        ChainKey { family: BodyFamily::Serif, style: BodyFaceStyle::Regular },
+    ];
+    let mut unique: Vec<ChainKey> = Vec::new();
+    for candidate in order.drain(..) {
+        if !unique.contains(&candidate) {
+            unique.push(candidate);
+        }
+    }
+    unique
+}
 
 /// Absolute paths probed for a `glyf`-outline font, in preference order.
 ///
@@ -72,6 +103,8 @@ pub(crate) struct SystemFont {
     descent: i16,
     cap_height: i16,
     italic_angle: f64,
+    /// PostScript name from the `name` table, used as the embedded `/BaseFont`.
+    postscript_name: String,
 }
 
 impl SystemFont {
@@ -79,6 +112,11 @@ impl SystemFont {
     pub(crate) fn load(path: &Path) -> Option<Self> {
         let raw = fs::read(path).ok()?;
         Self::parse(raw)
+    }
+
+    /// Parse a font that is already in memory, such as a bundled body face.
+    pub(crate) fn from_bytes(raw: &[u8]) -> Option<Self> {
+        Self::parse(raw.to_vec())
     }
 
     fn parse(raw: Vec<u8>) -> Option<Self> {
@@ -111,6 +149,7 @@ impl SystemFont {
             [i16_at(&raw, head.0 + 36)?, i16_at(&raw, head.0 + 38)?, i16_at(&raw, head.0 + 40)?, i16_at(&raw, head.0 + 42)?];
         let cap_height = read_cap_height(&raw, &tables, ascender);
         let italic_angle = read_italic_angle(&raw, &tables);
+        let postscript_name = read_postscript_name(&raw, &tables).unwrap_or_else(|| "VutexSystemFont".to_string());
 
         Some(Self {
             raw,
@@ -126,6 +165,7 @@ impl SystemFont {
             descent: descender,
             cap_height,
             italic_angle,
+            postscript_name,
         })
     }
 
@@ -219,6 +259,7 @@ impl SystemFont {
         let scaled = |value: i16| scale_unit(value, self.units_per_em);
         Some(Subset {
             data: assemble_sfnt(tables),
+            name: self.postscript_name.clone(),
             cids,
             widths,
             bbox: [scaled(self.bbox[0]), scaled(self.bbox[1]), scaled(self.bbox[2]), scaled(self.bbox[3])],
@@ -290,6 +331,8 @@ impl SystemFont {
 pub(crate) struct Subset {
     /// Complete subset OpenType file written into a `/FontFile2` stream.
     pub(crate) data: Vec<u8>,
+    /// PostScript name of the source face, for the `/BaseFont` entry.
+    pub(crate) name: String,
     /// Character to CID (`Identity-H` treats the CID as the subset glyph id).
     pub(crate) cids: BTreeMap<char, u16>,
     /// Advance width per CID, in the 1000-unit glyph space.
@@ -306,43 +349,52 @@ pub(crate) struct Subset {
     pub(crate) italic_angle: f64,
 }
 
-/// Ordered font programs that together cover one document charset.
-///
-/// Each subset owns the characters no earlier subset covered, so a character
-/// resolves to exactly one `(subset index, CID)` pair. A text run mixing Han
-/// characters with an emoji therefore paints from two programs, and each
-/// program's `ToUnicode` map keeps the extracted text readable.
+/// Styles the chain can paint, each with its own character map.
 #[derive(Debug, Default)]
 pub(crate) struct FontChain {
     /// Subsets in fallback order, as embedded in the PDF.
     subsets: Vec<Subset>,
-    /// Character to `(subset index, CID)`.
-    glyphs: BTreeMap<char, (usize, u16)>,
+    /// Character map per requested family and style, in the order they were built.
+    styles: Vec<(ChainKey, BTreeMap<char, (usize, u16)>)>,
 }
 
 impl FontChain {
-    /// Subset every character `fonts` can cover, in fallback order.
+    /// Subset every character `faces` can cover, in fallback order.
     ///
-    /// Characters no font covers stay out of the chain, so [`Self::missing`]
+    /// `charsets` lists the family and style pairs one document paints and the
+    /// characters each pair uses. Faces of the requested family and style come
+    /// first, then regular faces of the same family, then the prose family, so a
+    /// bold code run or a Han character inside a code block still paints.
+    /// Characters no face covers stay out of the chain, so [`Self::missing`]
     /// reports them to the caller instead of painting an empty glyph.
-    pub(crate) fn build(fonts: &[SystemFont], charset: &BTreeSet<char>) -> Self {
+    pub(crate) fn build(
+        faces: &[(SystemFont, BodyFamily, BodyFaceStyle)],
+        charsets: &BTreeMap<ChainKey, BTreeSet<char>>,
+    ) -> Self {
         let mut chain = Self::default();
-        let mut remaining = charset.clone();
-        for font in fonts {
-            let covered: BTreeSet<char> = remaining.iter().copied().filter(|ch| font.glyph_id(*ch).is_some()).collect();
-            if covered.is_empty() {
-                continue;
+        for (key, charset) in charsets {
+            let mut glyphs = BTreeMap::new();
+            let mut remaining = charset.clone();
+            for candidate in key_order(*key) {
+                let matching = faces.iter().filter(|(_, family, style)| *family == candidate.family && *style == candidate.style);
+                for (font, _, _) in matching {
+                    let covered: BTreeSet<char> = remaining.iter().copied().filter(|ch| font.glyph_id(*ch).is_some()).collect();
+                    if covered.is_empty() {
+                        continue;
+                    }
+                    let Some(subset) = font.subset(&covered)
+                    else {
+                        continue;
+                    };
+                    let index = chain.subsets.len();
+                    for (&ch, &cid) in &subset.cids {
+                        glyphs.insert(ch, (index, cid));
+                        remaining.remove(&ch);
+                    }
+                    chain.subsets.push(subset);
+                }
             }
-            let Some(subset) = font.subset(&covered)
-            else {
-                continue;
-            };
-            let index = chain.subsets.len();
-            for (&ch, &cid) in &subset.cids {
-                chain.glyphs.insert(ch, (index, cid));
-                remaining.remove(&ch);
-            }
-            chain.subsets.push(subset);
+            chain.styles.push((*key, glyphs));
         }
         chain
     }
@@ -352,15 +404,40 @@ impl FontChain {
         &self.subsets
     }
 
-    /// Subset index and CID that paint one character.
-    pub(crate) fn glyph(&self, ch: char) -> Option<(usize, u16)> {
-        self.glyphs.get(&ch).copied()
+    /// Subset index and CID that paint one character for one family and style.
+    pub(crate) fn glyph(&self, ch: char, key: ChainKey) -> Option<(usize, u16)> {
+        for candidate in key_order(key) {
+            if let Some((index, cid)) = self.styles.iter().find(|(built, _)| *built == candidate).and_then(|(_, glyphs)| glyphs.get(&ch)) {
+                return Some((*index, *cid));
+            }
+        }
+        None
     }
 
-    /// Characters in `charset` no subset covers, in code point order.
-    pub(crate) fn missing(&self, charset: &BTreeSet<char>) -> Vec<char> {
-        charset.iter().copied().filter(|ch| !self.glyphs.contains_key(ch)).collect()
+    /// Characters in `charsets` no subset covers, in code point order.
+    pub(crate) fn missing(&self, charsets: &BTreeMap<ChainKey, BTreeSet<char>>) -> Vec<char> {
+        let mut missing = BTreeSet::new();
+        for (key, charset) in charsets {
+            for ch in charset {
+                if self.glyph(*ch, *key).is_none() {
+                    missing.insert(*ch);
+                }
+            }
+        }
+        missing.into_iter().collect()
     }
+}
+
+/// Parse the bundled body faces into the chain order [`BODY_FACES`] declares.
+///
+/// A bundled face that fails to parse is skipped, so a corrupt asset degrades
+/// to a missing-glyph error naming the character instead of silently painting a
+/// base-14 fallback.
+pub(crate) fn bundled_faces() -> Vec<(SystemFont, BodyFamily, BodyFaceStyle)> {
+    BODY_FACES
+        .iter()
+        .filter_map(|face| SystemFont::from_bytes(face.bytes).map(|font| (font, face.family, face.style)))
+        .collect()
 }
 
 /// Offset of the face this module reads inside `raw`, handling `.ttc` headers.
@@ -778,6 +855,45 @@ fn read_italic_angle(raw: &[u8], tables: &BTreeMap<Tag, (usize, usize)>) -> f64 
         }
     }
     0.0
+}
+
+/// PostScript name (name id 6) of a face, sanitized for a PDF name object.
+///
+/// Readers and print pipelines report `/BaseFont`, so carrying the real family
+/// name keeps a fonts list meaningful. When the `name` table is absent or
+/// carries no id 6, the caller substitutes a generic name.
+fn read_postscript_name(raw: &[u8], tables: &BTreeMap<Tag, (usize, usize)>) -> Option<String> {
+    let (offset, length) = *tables.get(b"name")?;
+    let table = raw.get(offset..offset + length)?;
+    let count = u16_at(table, 2)?;
+    let storage = usize::from(u16_at(table, 4)?);
+    for index in 0..usize::from(count) {
+        let record = 6 + index * 12;
+        let platform = u16_at(table, record)?;
+        let encoding = u16_at(table, record + 2)?;
+        let name_id = u16_at(table, record + 6)?;
+        let size = usize::from(u16_at(table, record + 8)?);
+        let at = usize::from(u16_at(table, record + 10)?);
+        if name_id != 6 {
+            continue;
+        }
+        let bytes = table.get(storage + at..storage + at + size)?;
+        let text = if platform == 3 {
+            let units: Vec<u16> = bytes.chunks_exact(2).map(|pair| u16::from_be_bytes([pair[0], pair[1]])).collect();
+            String::from_utf16(&units).ok()?
+        }
+        else if platform == 1 && encoding == 0 {
+            String::from_utf8(bytes.iter().copied().filter(|byte| !byte.is_ascii_control()).collect()).ok()?
+        }
+        else {
+            continue;
+        };
+        let cleaned: String = text.chars().filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '+')).collect();
+        if !cleaned.is_empty() {
+            return Some(cleaned);
+        }
+    }
+    None
 }
 
 /// Read a big-endian u16 at `at`, or `None` when the range is out of bounds.
