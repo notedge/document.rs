@@ -13,7 +13,7 @@
 
 #![deny(missing_debug_implementations)]
 #![warn(missing_docs, rustdoc::missing_crate_level_docs)]
-#![doc = include_str!("../readme.md")]
+#![doc = include_str!("readme.md")]
 
 use std::{
     error::Error,
@@ -47,7 +47,7 @@ pub const MATH_LANGUAGE: &str = "vutex.input.tex.math_language";
 pub const LEAKED_COMMAND: &str = "vutex.input.tex.leaked_command";
 
 /// Loss codes that summarize the whole import instead of one source construct.
-const SUMMARY_LOSS_CODES: [&str; 1] = ["import.tex.partial_coverage"];
+const SUMMARY_LOSS_CODES: [&str; 2] = ["import.tex.partial_coverage", "import.tex.empty_document"];
 
 /// A TeX source converted into the document model.
 #[derive(Debug, Clone, PartialEq)]
