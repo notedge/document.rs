@@ -635,6 +635,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "document-fonts"
+version = "0.1.0"
+dependencies = [
+ "document-text",
+]
+
+[[package]]
 name = "document-formats"
 version = "0.1.0"
 dependencies = [
@@ -713,6 +720,7 @@ name = "document-layout"
 version = "0.1.0"
 dependencies = [
  "document-compose",
+ "document-fonts",
  "document-formats",
  "document-ir",
  "document-renderer-svg",
