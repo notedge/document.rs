@@ -269,6 +269,9 @@ pub fn mermaid_to_spec(source: &str) -> Result<DiagramSpec, DiagramError> {
         MermaidDiagram::Flowchart(flowchart) => flowchart_spec(flowchart, source),
         MermaidDiagram::Class(class) => class_spec(class, source),
         MermaidDiagram::Sequence(sequence) => sequence_spec(sequence),
+        MermaidDiagram::State(_) | MermaidDiagram::EntityRelationship(_) => Err(DiagramError::unsupported(
+            "Mermaid diagram family `stateDiagram` / `erDiagram` is not lowered, the diagram falls back to its source",
+        )),
     }
 }
 
@@ -295,6 +298,9 @@ pub fn mermaid_to_scene(source: &str) -> Result<LoweredDiagram, DiagramError> {
             lower_graph(sequence_spec(sequence)?)
         }
         MermaidDiagram::Class(class) => lower_graph(class_spec(class, source)?),
+        MermaidDiagram::State(_) | MermaidDiagram::EntityRelationship(_) => Err(DiagramError::unsupported(
+            "Mermaid diagram family `stateDiagram` / `erDiagram` is not lowered, the diagram falls back to its source",
+        )),
     }
 }
 
