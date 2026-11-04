@@ -10,7 +10,11 @@
 //! fallback order lives here too: both call [`fallback_order`] instead of
 //! keeping private copies.
 
-use std::{collections::BTreeMap, fmt, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    sync::OnceLock,
+};
 
 use document_compose::math::FontStyle;
 
@@ -84,8 +88,10 @@ pub struct FaceMetrics {
     advances: Vec<u16>,
     /// Covered code points mapped to glyph ids, sorted by code point.
     glyphs: Vec<(u32, u16)>,
-    /// Legacy `kern` format 0 pairs, in font units.
+    /// Horizontal kern pairs, in font units, from `GPOS` or the legacy table.
     kern: BTreeMap<(u16, u16), i16>,
+    /// Whether the face declares a `kern` feature this reader cannot apply.
+    kerning_unavailable: bool,
 }
 
 /// Why a face could not supply advance widths.
@@ -135,8 +141,19 @@ impl FaceMetrics {
                 }
             }
         }
-        let kern = face.table_bytes(b"kern").map(parse_kern).unwrap_or_default();
-        Ok(Self { units_per_em, advances, glyphs, kern })
+        let legacy_kern = face.table_bytes(b"kern").map(parse_kern).unwrap_or_default();
+        // A `kern` feature in `GPOS` supersedes the legacy table. When the
+        // feature exists but cannot be read as horizontal `PairPos` format 1,
+        // the face runs advance-only instead of mixing sources.
+        let (kern, kerning_unavailable) = match face.table_bytes(b"GPOS") {
+            Some(data) => match read_gpos_kern(data) {
+                Ok(Some(pairs)) => (pairs, false),
+                Ok(None) => (legacy_kern, false),
+                Err(_) => (BTreeMap::new(), true),
+            },
+            None => (legacy_kern, false),
+        };
+        Ok(Self { units_per_em, advances, glyphs, kern, kerning_unavailable })
     }
 
     /// Font design units per em.
@@ -153,12 +170,17 @@ impl FaceMetrics {
 
     /// Kerning adjustment between two characters in em units.
     ///
-    /// Only the legacy `kern` table is read; `None` means the face has no
-    /// legacy pair for these characters, not that the pair is unkerned in
-    /// OpenType `GPOS`.
+    /// The adjustment comes from the `GPOS` `kern` feature when the face
+    /// declares one, otherwise from the legacy `kern` table. `None` means the
+    /// face has no pair for these characters.
     pub fn kerning_em(&self, left: char, right: char) -> Option<f64> {
         let pair = (self.glyph(left)?, self.glyph(right)?);
         self.kern.get(&pair).map(|value| f64::from(*value) / f64::from(self.units_per_em))
+    }
+
+    /// Whether the face declares a `kern` feature this reader cannot apply.
+    pub(crate) fn kerning_unavailable(&self) -> bool {
+        self.kerning_unavailable
     }
 
     /// Glyph id of one character.
@@ -174,6 +196,8 @@ pub struct BodyMetrics {
     faces: Vec<(BodyFaceKey, FaceMetrics)>,
     /// Labels of faces whose file could not supply metrics.
     unreadable: Vec<String>,
+    /// Labels of faces whose `kern` feature exists but could not be applied.
+    kerning_unavailable: Vec<String>,
 }
 
 impl BodyMetrics {
@@ -197,13 +221,19 @@ impl BodyMetrics {
     pub fn from_faces<'a>(faces: impl IntoIterator<Item = (BodyFaceKey, String, &'a [u8])>) -> Self {
         let mut parsed = Vec::new();
         let mut unreadable = Vec::new();
+        let mut kerning_unavailable = Vec::new();
         for (key, label, bytes) in faces {
             match FaceMetrics::parse(bytes) {
-                Ok(metrics) => parsed.push((key, metrics)),
+                Ok(metrics) => {
+                    if metrics.kerning_unavailable() {
+                        kerning_unavailable.push(label.clone());
+                    }
+                    parsed.push((key, metrics));
+                }
                 Err(_) => unreadable.push(label),
             }
         }
-        Self { faces: parsed, unreadable }
+        Self { faces: parsed, unreadable, kerning_unavailable }
     }
 
     /// Advance width of one character in em units, through the fallback order.
@@ -239,6 +269,14 @@ impl BodyMetrics {
     /// Labels of faces skipped because their file supplied no metrics.
     pub fn unreadable(&self) -> &[String] {
         &self.unreadable
+    }
+
+    /// Labels of faces whose `kern` feature could not be applied.
+    ///
+    /// These faces run advance-only: their text measures and paints without
+    /// kerning, and the caller reports the gap once per layout.
+    pub fn kerning_unavailable(&self) -> &[String] {
+        &self.kerning_unavailable
     }
 
     /// Index and metrics of the face that serves one character.
@@ -318,6 +356,287 @@ mod tests {
         assert_eq!(metrics.unreadable(), ["broken".to_string()]);
         assert_eq!(metrics.advance_em(BodyFaceKey { family: BodyFamily::Serif, style: BodyFaceStyle::Regular }, 'a'), None);
     }
+
+    fn serif_face(style: BodyFaceStyle) -> &'static FaceMetrics {
+        let metrics = BodyMetrics::bundled();
+        &metrics
+            .faces
+            .iter()
+            .find(|(key, _)| key.family == BodyFamily::Serif && key.style == style)
+            .expect("bundled serif face")
+            .1
+    }
+
+    #[test]
+    fn bundled_latin_faces_carry_gpos_kern_pairs() {
+        // Counts and sums come from fontTools reading the shipped `GPOS` tables.
+        for (style, count, sum) in [
+            (BodyFaceStyle::Regular, 113usize, -16087i64),
+            (BodyFaceStyle::Bold, 117, -15901),
+            (BodyFaceStyle::Italic, 112, -15323),
+        ] {
+            let face = serif_face(style);
+            assert_eq!(face.kern.len(), count, "{style:?} pair count");
+            assert_eq!(face.kern.values().map(|value| i64::from(*value)).sum::<i64>(), sum, "{style:?} pair sum");
+            assert!(!face.kerning_unavailable, "{style:?} declares a readable `kern` feature");
+        }
+        assert!(BodyMetrics::bundled().kerning_unavailable().is_empty());
+    }
+
+    #[test]
+    fn gpos_kern_matches_the_face_units() {
+        let metrics = BodyMetrics::bundled();
+        let regular = key_for_run("serif", FontStyle::Normal);
+        let bold = key_for_run("serif", FontStyle::Bold);
+        let italic = key_for_run("serif", FontStyle::Italic);
+        let em = 2048.0;
+        assert_eq!(metrics.kerning_em(regular, 'A', 'V'), Some(-264.0 / em));
+        assert_eq!(metrics.kerning_em(regular, ' ', 'T'), Some(-37.0 / em));
+        assert_eq!(metrics.kerning_em(regular, 'V', 'e'), Some(-227.0 / em));
+        assert_eq!(metrics.kerning_em(bold, 'V', 'e'), Some(-188.0 / em));
+        assert_eq!(metrics.kerning_em(italic, 'A', 'V'), Some(-102.0 / em));
+        assert_eq!(metrics.kerning_em(regular, 'A', 'A'), None);
+        // A pair split across two faces has no shared glyph pair.
+        assert_eq!(metrics.kerning_em(regular, 'A', '同'), None);
+    }
+
+    #[test]
+    fn class_based_pair_pos_is_reported_as_unavailable() {
+        // A minimal `GPOS` whose only `kern` lookup is a `PairPos` format 2
+        // subtable: the reader must reject the whole feature, not guess.
+        let mut data = vec![
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x1E, 0x00, 0x2C, // header
+            0x00, 0x01, // script count
+        ];
+        data.extend_from_slice(b"latn");
+        data.extend_from_slice(&[0x00, 0x08]); // script offset
+        data.extend_from_slice(&[0x00, 0x04, 0x00, 0x00]); // script: default langsys, no others
+        data.extend_from_slice(&[0x00, 0x00, 0xFF, 0xFF, 0x00, 0x01, 0x00, 0x00]); // langsys
+        data.extend_from_slice(&[0x00, 0x01]); // feature count
+        data.extend_from_slice(b"kern");
+        data.extend_from_slice(&[0x00, 0x08]); // feature offset
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x01, 0x00, 0x00]); // feature: lookup 0
+        data.extend_from_slice(&[0x00, 0x01, 0x00, 0x04]); // lookup list
+        data.extend_from_slice(&[0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08]); // lookup 0
+        data.extend_from_slice(&[0x00, 0x02]); // pair pos format 2
+        assert_eq!(read_gpos_kern(&data), Err(KernReadError::Format2));
+    }
+}
+
+/// Why a `GPOS` `kern` feature could not be turned into pairs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KernReadError {
+    /// The feature uses class-based `PairPos` format 2, which is out of scope.
+    Format2,
+    /// A table, offset, or count runs outside the bytes the face carries.
+    Malformed,
+}
+
+/// Read the horizontal `kern` feature of a `GPOS` table.
+///
+/// `Ok(None)` means the table has no `kern` feature, so the caller may fall
+/// back to the legacy `kern` table. `Err` means the feature exists but cannot
+/// be applied: the face must then run advance-only, without mixing the two
+/// sources and without guessing adjustments.
+fn read_gpos_kern(data: &[u8]) -> Result<Option<BTreeMap<(u16, u16), i16>>, KernReadError> {
+    let script_list = usize::from(u16_at(data, 4).ok_or(KernReadError::Malformed)?);
+    let feature_list = usize::from(u16_at(data, 6).ok_or(KernReadError::Malformed)?);
+    let lookup_list = usize::from(u16_at(data, 8).ok_or(KernReadError::Malformed)?);
+
+    // Every script may attach the same `kern` feature. The scripts are read as
+    // a union, because one face can map DFLT and latn to different lookups.
+    let mut feature_indices = BTreeSet::new();
+    let script_count = u16_at(data, script_list).ok_or(KernReadError::Malformed)?;
+    for index in 0..script_count {
+        let record = script_list + 2 + usize::from(index) * 6;
+        let script = script_list + usize::from(u16_at(data, record + 4).ok_or(KernReadError::Malformed)?);
+        let default = u16_at(data, script).ok_or(KernReadError::Malformed)?;
+        if default != 0 {
+            collect_langsys_features(data, script + usize::from(default), &mut feature_indices)?;
+        }
+        let langsys_count = u16_at(data, script + 2).ok_or(KernReadError::Malformed)?;
+        for langsys in 0..langsys_count {
+            let langsys_record = script + 4 + usize::from(langsys) * 6;
+            let offset = script + usize::from(u16_at(data, langsys_record + 4).ok_or(KernReadError::Malformed)?);
+            collect_langsys_features(data, offset, &mut feature_indices)?;
+        }
+    }
+
+    let feature_count = u16_at(data, feature_list).ok_or(KernReadError::Malformed)?;
+    let mut kern_lookups = BTreeSet::new();
+    for index in feature_indices {
+        if index >= feature_count {
+            return Err(KernReadError::Malformed);
+        }
+        let record = feature_list + 2 + usize::from(index) * 6;
+        let tag = data.get(record..record + 4).ok_or(KernReadError::Malformed)?;
+        if tag != b"kern" {
+            continue;
+        }
+        let feature = feature_list + usize::from(u16_at(data, record + 4).ok_or(KernReadError::Malformed)?);
+        let count = u16_at(data, feature + 2).ok_or(KernReadError::Malformed)?;
+        for lookup in 0..count {
+            kern_lookups.insert(u16_at(data, feature + 4 + usize::from(lookup) * 2).ok_or(KernReadError::Malformed)?);
+        }
+    }
+    if kern_lookups.is_empty() {
+        return Ok(None);
+    }
+
+    let lookup_count = u16_at(data, lookup_list).ok_or(KernReadError::Malformed)?;
+    let mut pairs = BTreeMap::new();
+    for index in kern_lookups {
+        if index >= lookup_count {
+            return Err(KernReadError::Malformed);
+        }
+        let lookup =
+            lookup_list + usize::from(u16_at(data, lookup_list + 2 + usize::from(index) * 2).ok_or(KernReadError::Malformed)?);
+        read_lookup_pairs(data, lookup, &mut pairs)?;
+    }
+    Ok(Some(pairs))
+}
+
+/// Collect the feature indices one `LangSys` table requests.
+fn collect_langsys_features(data: &[u8], offset: usize, out: &mut BTreeSet<u16>) -> Result<(), KernReadError> {
+    let required = u16_at(data, offset + 2).ok_or(KernReadError::Malformed)?;
+    if required != u16::MAX {
+        out.insert(required);
+    }
+    let count = u16_at(data, offset + 4).ok_or(KernReadError::Malformed)?;
+    for index in 0..count {
+        out.insert(u16_at(data, offset + 6 + usize::from(index) * 2).ok_or(KernReadError::Malformed)?);
+    }
+    Ok(())
+}
+
+/// Read the pair subtables of one lookup, following extension lookups.
+fn read_lookup_pairs(data: &[u8], offset: usize, pairs: &mut BTreeMap<(u16, u16), i16>) -> Result<(), KernReadError> {
+    let lookup_type = u16_at(data, offset).ok_or(KernReadError::Malformed)?;
+    let count = u16_at(data, offset + 4).ok_or(KernReadError::Malformed)?;
+    for index in 0..count {
+        let subtable = offset + usize::from(u16_at(data, offset + 6 + usize::from(index) * 2).ok_or(KernReadError::Malformed)?);
+        match lookup_type {
+            2 => read_pair_pos(data, subtable, pairs)?,
+            9 => {
+                if u16_at(data, subtable).ok_or(KernReadError::Malformed)? != 1 {
+                    return Err(KernReadError::Malformed);
+                }
+                let inner_type = u16_at(data, subtable + 2).ok_or(KernReadError::Malformed)?;
+                let inner = subtable
+                    + usize::try_from(u32_at(data, subtable + 4).ok_or(KernReadError::Malformed)?)
+                        .map_err(|_| KernReadError::Malformed)?;
+                if inner_type == 2 {
+                    read_pair_pos(data, inner, pairs)?;
+                }
+            }
+            // A `kern` feature that lists a non-pairing lookup contributes no
+            // horizontal pair adjustment.
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Read one horizontal `PairPos` subtable.
+fn read_pair_pos(data: &[u8], offset: usize, pairs: &mut BTreeMap<(u16, u16), i16>) -> Result<(), KernReadError> {
+    match u16_at(data, offset).ok_or(KernReadError::Malformed)? {
+        1 => {}
+        2 => return Err(KernReadError::Format2),
+        _ => return Err(KernReadError::Malformed),
+    }
+    let coverage_offset = usize::from(u16_at(data, offset + 2).ok_or(KernReadError::Malformed)?);
+    let value_format1 = u16_at(data, offset + 4).ok_or(KernReadError::Malformed)?;
+    let value_format2 = u16_at(data, offset + 6).ok_or(KernReadError::Malformed)?;
+    let pair_set_count = u16_at(data, offset + 8).ok_or(KernReadError::Malformed)?;
+    let coverage = coverage_glyphs(data, offset + coverage_offset).ok_or(KernReadError::Malformed)?;
+    if coverage.len() != usize::from(pair_set_count) {
+        return Err(KernReadError::Malformed);
+    }
+    let record_len = 2 + value_record_len(value_format1) + value_record_len(value_format2);
+    let x_advance1 = x_advance_offset(value_format1);
+    let x_advance2 = x_advance_offset(value_format2);
+    for (index, left) in coverage.into_iter().enumerate() {
+        if index >= usize::from(pair_set_count) {
+            break;
+        }
+        let pair_set = offset + usize::from(u16_at(data, offset + 10 + index * 2).ok_or(KernReadError::Malformed)?);
+        let count = u16_at(data, pair_set).ok_or(KernReadError::Malformed)?;
+        for index in 0..count {
+            let record = pair_set + 2 + usize::from(index) * record_len;
+            let right = u16_at(data, record).ok_or(KernReadError::Malformed)?;
+            let mut adjustment = 0i32;
+            if let Some(at) = x_advance1 {
+                adjustment += i32::from(i16_at(data, record + 2 + at).ok_or(KernReadError::Malformed)?);
+            }
+            if let Some(at) = x_advance2 {
+                adjustment +=
+                    i32::from(i16_at(data, record + 2 + value_record_len(value_format1) + at).ok_or(KernReadError::Malformed)?);
+            }
+            if adjustment != 0 {
+                pairs.insert((left, right), i16::try_from(adjustment).map_err(|_| KernReadError::Malformed)?);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Glyph ids one `Coverage` table lists, in coverage index order.
+fn coverage_glyphs(data: &[u8], offset: usize) -> Option<Vec<u16>> {
+    match u16_at(data, offset)? {
+        1 => {
+            let count = u16_at(data, offset + 2)?;
+            let mut glyphs = Vec::with_capacity(usize::from(count));
+            for index in 0..count {
+                glyphs.push(u16_at(data, offset + 4 + usize::from(index) * 2)?);
+            }
+            Some(glyphs)
+        }
+        2 => {
+            let count = u16_at(data, offset + 2)?;
+            let mut glyphs = Vec::new();
+            for index in 0..count {
+                let start = u16_at(data, offset + 4 + usize::from(index) * 6)?;
+                let end = u16_at(data, offset + 6 + usize::from(index) * 6)?;
+                if end < start {
+                    return None;
+                }
+                glyphs.extend(start..=end);
+            }
+            Some(glyphs)
+        }
+        _ => None,
+    }
+}
+
+/// Bytes one value record occupies, given its format flags.
+fn value_record_len(format: u16) -> usize {
+    usize::try_from((format & 0x00FF).count_ones()).unwrap_or(0) * 2
+}
+
+/// Offset of the horizontal advance field inside one value record.
+fn x_advance_offset(format: u16) -> Option<usize> {
+    if format & 0x0004 == 0 {
+        return None;
+    }
+    let mut offset = 0;
+    for bit in [0x0001u16, 0x0002] {
+        if format & bit != 0 {
+            offset += 2;
+        }
+    }
+    Some(offset)
+}
+
+fn u16_at(data: &[u8], at: usize) -> Option<u16> {
+    data.get(at..at.checked_add(2)?).map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
+}
+
+fn u32_at(data: &[u8], at: usize) -> Option<u32> {
+    data.get(at..at.checked_add(4)?).map(|bytes| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn i16_at(data: &[u8], at: usize) -> Option<i16> {
+    data.get(at..at.checked_add(2)?).map(|bytes| i16::from_be_bytes([bytes[0], bytes[1]]))
 }
 
 /// Read legacy `kern` format 0 pairs from a `kern` table.
