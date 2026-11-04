@@ -8,6 +8,7 @@ edition.workspace = true
 readme = "readme.md"
 
 [dependencies]
+acorn-codec = { workspace = true }
 plotter-scene = { workspace = true }
 plotter-types = { workspace = true }
 document-compose = { workspace = true, features = ["serde"] }
