@@ -549,7 +549,11 @@ fn lower_statement(
         }
         Statement::Attribute(attribute) => match attribute.target {
             AttributeTarget::Graph => {
-                graph_attributes(&attribute.attributes, Direction::TopDown, diagnostics)?;
+                // Direction and graph-level warnings are resolved in the first
+                // pass, so the second pass validates attributes without
+                // reporting the same approximation twice.
+                let mut resolved = Vec::new();
+                graph_attributes(&attribute.attributes, Direction::TopDown, &mut resolved)?;
             }
             AttributeTarget::Node => apply_node_defaults(&attribute.attributes, defaults, diagnostics)?,
             AttributeTarget::Edge => apply_edge_defaults(&attribute.attributes, defaults, diagnostics)?,
@@ -559,12 +563,6 @@ fn lower_statement(
             if !ALLOWED_GRAPH_KEYS.contains(&assignment.id.as_str()) {
                 return Err(unsupported_at(
                     format!("graph assignment `{}` is outside the DOT subset", assignment.id),
-                    span_of(assignment.span),
-                ));
-            }
-            if assignment.id == "label" {
-                diagnostics.push(approximated_at(
-                    "a graph-level label has no place in the scene surface and is not rendered",
                     span_of(assignment.span),
                 ));
             }
