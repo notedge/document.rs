@@ -26,7 +26,7 @@ pub(crate) struct FootnoteRefIds {
 }
 
 impl FootnoteRefIds {
-    fn next(&mut self, label: &str) -> String {
+    pub(crate) fn next(&mut self, label: &str) -> String {
         let ids = self.ids.entry(label.to_string()).or_default();
         let id = if ids.is_empty() { format!("fnref-{label}") } else { format!("fnref-{label}-{}", ids.len()) };
         ids.push(id.clone());
@@ -34,7 +34,7 @@ impl FootnoteRefIds {
     }
 
     /// Reference anchor ids authored for one footnote label, in document order.
-    fn ids(&self, label: &str) -> &[String] {
+    pub(crate) fn ids(&self, label: &str) -> &[String] {
         self.ids.get(label).map(Vec::as_slice).unwrap_or_default()
     }
 }
