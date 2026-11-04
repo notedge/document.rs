@@ -1,0 +1,157 @@
+{
+  "schema": "document.rs.plotter.input.contracts",
+  "contract": "/v0",
+  "provenance": {
+    "crates": ["plotter.input.dot", "plotter.input.mermaid", "plotter.input.plantuml", "plotter.input.tikz"],
+    "codes": "projects/plotter/plotter.types/catalog/rejections.json",
+    "gaps": "projects/plotter/upstream-gaps.md",
+    "audit": "the AST enums of oak-dot, oak-mermaid and oak-plantuml were compared field by field with the lowering branches of plotter.input.*"
+  },
+  "families": [
+    {
+      "language": "dot",
+      "entry": ["digraph", "graph"],
+      "supported": [
+        {"construct": "a single non-strict graph", "sample": "digraph pipeline {\n  A -> B\n}\n"},
+        {"construct": "graph id", "sample": "digraph named {\n  A -> B\n}\n", "note": "the id names the graph and carries no scene geometry, so it is dropped as a documented no-op"},
+        {"construct": "rankdir TB / BT / LR / RL", "sample": "digraph {\n  rankdir=LR\n  A -> B\n}\n"},
+        {"construct": "node statement with label / shape / style"},
+        {"construct": "edge statement and chained operands", "sample": "digraph {\n  A -> B -> C\n}\n"},
+        {"construct": "node [...] and edge [...] defaults, scoped to the subgraph they appear in"},
+        {"construct": "subgraph cluster_* with a label attribute", "sample": "digraph {\n  subgraph cluster_core {\n    label=\"Core\"\n    A -> B\n  }\n}\n"},
+        {"construct": "subgraph rank=same"},
+        {"construct": "compass ports n / e / s / w"},
+        {"construct": "shapes box / rect / rectangle / square / plaintext / diamond / circle"},
+        {"construct": "style=rounded on a node", "sample": "digraph {\n  A [style=rounded]\n}\n"}
+      ],
+      "approximated": [
+        {"construct": "shape ellipse / oval", "code": "davinci.diagram.approximated", "loss": "drawn as a round node"},
+        {"construct": "shape outside the subset", "code": "davinci.diagram.approximated", "loss": "drawn as a box"},
+        {"construct": "style filled / dashed / dotted / bold", "code": "davinci.diagram.approximated", "loss": "the fill comes from the theme and the line weight is not applied"},
+        {"construct": "compass ports ne / nw / se / sw / c", "code": "davinci.diagram.approximated", "loss": "folded to the nearest axis anchor"},
+        {"construct": "graph label", "code": "davinci.diagram.approximated", "loss": "a graph label has no scene carrier"}
+      ],
+      "refused": [
+        {"construct": "strict graph", "code": "davinci.diagram.unsupported"},
+        {"construct": "second graph", "code": "davinci.diagram.unsupported"},
+        {"construct": "record / mrecord shape", "code": "davinci.diagram.unsupported", "gap": "downstream has no field-port model"},
+        {"construct": "HTML-like label", "code": "davinci.diagram.unsupported"},
+        {"construct": "named port", "code": "davinci.diagram.unsupported"},
+        {"construct": "subgraph as an edge operand", "code": "davinci.diagram.unsupported", "gap": "downstream has no cluster endpoint"},
+        {"construct": "anonymous subgraph", "code": "davinci.diagram.unsupported", "gap": "downstream has no id-less cluster"},
+        {"construct": "nested subgraph", "code": "davinci.diagram.unsupported", "gap": "downstream has no nested cluster frame"},
+        {"construct": "subgraph that is neither cluster_* nor rank=same", "code": "davinci.diagram.unsupported"},
+        {"construct": "rank other than same", "code": "davinci.diagram.unsupported"},
+        {"construct": "directed operator in an undirected graph and the reverse", "code": "davinci.diagram.unsupported"},
+        {"construct": "graph assignment other than rankdir / label", "code": "davinci.diagram.unsupported"},
+        {"construct": "element attribute outside label / shape / style", "code": "davinci.diagram.unsupported"},
+        {"construct": "graph with no nodes and no edges", "code": "davinci.diagram.empty-diagram"}
+      ]
+    },
+    {
+      "language": "mermaid",
+      "entry": ["flowchart", "graph", "classDiagram", "sequenceDiagram"],
+      "supported": [
+        {"construct": "flowchart / graph with TD / TB / BT / LR / RL", "sample": "flowchart TD\n  A[Start] --> B[Stop]\n"},
+        {"construct": "node shapes Box / Round / Stadium / Subroutine / Cylinder / Circle / Rhombus"},
+        {"construct": "edge statements with solid / dotted / thick / invisible styles"},
+        {"construct": "subgraph with a title", "sample": "flowchart LR\n  subgraph group[Group]\n    A --> B\n  end\n"},
+        {"construct": "classDiagram class bodies with fields and methods", "sample": "classDiagram\n  class Hub {\n    +run()\n  }\n"},
+        {"construct": "classDiagram relations inheritance / composition / aggregation / association / dependency"},
+        {"construct": "sequenceDiagram participant / actor declarations"},
+        {"construct": "sequenceDiagram messages with solid / dotted / solid-arrow / dotted-arrow", "sample": "sequenceDiagram\n  participant A\n  participant B\n  A->>B: hello\n  B-->>A: world\n"}
+      ],
+      "approximated": [
+        {"construct": "dotted edge style", "code": "davinci.diagram.approximated", "loss": "drawn as a dashed line"},
+        {"construct": "nested subgraph", "code": "davinci.diagram.approximated", "loss": "inner clusters flatten into the outer frame"}
+      ],
+      "refused": [
+        {"construct": "stateDiagram / stateDiagram-v2", "code": "davinci.diagram.unsupported", "gap": "oak-mermaid builds no state nodes", "span": "family header line"},
+        {"construct": "erDiagram", "code": "davinci.diagram.unsupported", "gap": "oak-mermaid builds no entity nodes", "span": "family header line"},
+        {"construct": "gantt / pie / journey / gitGraph / mindmap / timeline / requirementDiagram / quadrantChart / xychart-beta / sankey-beta / block-beta / C4Context / zenuml", "code": "davinci.diagram.unsupported", "span": "family header line"},
+        {"construct": "second diagram header", "code": "davinci.diagram.unsupported"},
+        {"construct": "orientation outside TD / TB / BT / LR / RL", "code": "davinci.diagram.unsupported"},
+        {"construct": "parallelogram / trapezoid / hexagon / double circle / asymmetric node shape", "code": "davinci.diagram.unsupported"},
+        {"construct": "flowchart discarded statements style / classDef / class / linkStyle / click / direction / accTitle / accDescr", "code": "davinci.diagram.unsupported"},
+        {"construct": "class discarded statements direction / note / style / cssClass / linkStyle / namespace / click / acctitle / accTitle / accDescr / callback / link", "code": "davinci.diagram.unsupported"},
+        {"construct": "sequence discarded statements title / accTitle / accDescr / note / loop / alt / else / opt / par / critical / break / rect / end / activate / deactivate / autonumber / box / create / destroy / link / linkStyle", "code": "davinci.diagram.unsupported"},
+        {"construct": "sequence activation shorthand + / -", "code": "davinci.diagram.unsupported", "gap": "oak-mermaid keeps no activation spans"},
+        {"construct": "flowchart with no nodes and no edges", "code": "davinci.diagram.empty-diagram"},
+        {"construct": "source the parser refuses", "code": "davinci.diagram.unsupported"}
+      ]
+    },
+    {
+      "language": "plantuml",
+      "entry": ["@startuml"],
+      "supported": [
+        {"construct": "@startuml / @enduml pair with content between them"},
+        {"construct": "class / interface / abstract / enum with visibility members", "sample": "@startuml\nclass Order {\n  +id : String\n}\n@enduml\n"},
+        {"construct": "class relations association / inheritance / composition / aggregation / dependency / link"},
+        {"construct": "sequence participant / actor with solid / dotted / solid-arrow / dotted-arrow messages and activate / deactivate", "sample": "@startuml\nAlice -> Bob: hello\n@enduml\n"},
+        {"construct": "line comments and /' ... '/ block comments"}
+      ],
+      "approximated": [
+        {"construct": "multiplicity on a relation end", "code": "davinci.diagram.approximated", "loss": "folded into the relation label"}
+      ],
+      "refused": [
+        {"construct": "activity / state / component / deployment / usecase / object / timing / gantt / mindmap / wbs / salt / ditaa / nwdiag / rackdiag / packetdiag / archimate / gitgraph / chart", "code": "davinci.diagram.unsupported", "gap": "oak-plantuml only builds class and sequence diagrams", "span": "family header line"},
+        {"construct": "skinparam / note / alt / else / loop / group / par / opt / break / critical / ref / box / title / caption / header / footer / legend / scale / autonumber / newpage / hide / show / left / right / top / bottom / allow_mixing", "code": "davinci.diagram.unsupported"},
+        {"construct": "preprocessor directive", "code": "davinci.diagram.unsupported"},
+        {"construct": "foreign start marker", "code": "davinci.diagram.unsupported"},
+        {"construct": "missing or repeated markers", "code": "davinci.diagram.unsupported"},
+        {"construct": "content outside the markers", "code": "davinci.diagram.unsupported"},
+        {"construct": "class and sequence mixed in one source", "code": "davinci.diagram.unsupported"},
+        {"construct": "source the parser refuses", "code": "davinci.diagram.unsupported"}
+      ]
+    },
+    {
+      "language": "tikz",
+      "entry": ["tikzpicture"],
+      "supported": [
+        {"construct": "tikzpicture environment or its bare body", "sample": "\\begin{tikzpicture}\n\\draw (0,0) -- (2,1);\n\\end{tikzpicture}\n"},
+        {"construct": "\\draw / \\fill / \\filldraw with -- polylines"},
+        {"construct": "rectangle and circle primitives", "sample": "\\draw[red] (0,0) rectangle (1,1);\n"},
+        {"construct": "node[options]{text}"},
+        {"construct": "options dashed / thin / thick / very thick / line width / opacity / fill opacity / fill / color / draw / text"},
+        {"construct": "color names black / red / blue / green"},
+        {"construct": "scale and node placement above / below / left / right"},
+        {"construct": "units cm / mm / pt"}
+      ],
+      "approximated": [
+        {"construct": "dashed stroke", "code": "davinci.diagram.approximated", "loss": "the dash pattern is sampled into segments"}
+      ],
+      "refused": [
+        {"construct": "\\clip and every command outside the subset", "code": "davinci.diagram.unsupported"},
+        {"construct": "character outside the lexer subset", "code": "davinci.diagram.unsupported"},
+        {"construct": "unknown colour or option", "code": "davinci.diagram.unsupported"},
+        {"construct": "picture with no geometry", "code": "davinci.diagram.unsupported"}
+      ]
+    }
+  ],
+  "cases": {
+    "accept": [
+      {"id": "diagram-dot-cluster", "language": "dot", "source": "digraph groups {\n  subgraph cluster_core {\n    label=\"Core\";\n    A -> B;\n  }\n  B -> C;\n}\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+      {"id": "diagram-dot-named-graph", "language": "dot", "source": "digraph named {\n  A -> B;\n}\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+      {"id": "diagram-dot-rounded", "language": "dot", "source": "digraph {\n  A [style=rounded]\n}\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+      {"id": "diagram-mermaid-flowchart", "language": "mermaid", "source": "flowchart TD\n  A[Start] --> B{Ready?}\n  B -->|yes| C[Stop]\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+      {"id": "diagram-mermaid-class-method", "language": "mermaid", "source": "classDiagram\n  class Hub {\n    +run()\n  }\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+      {"id": "diagram-mermaid-sequence", "language": "mermaid", "source": "sequenceDiagram\n  participant A\n  participant B\n  A->>B: hello\n  B-->>A: world\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+      {"id": "diagram-plantuml-class", "language": "plantuml", "source": "@startuml\nclass Order {\n  +id : String\n}\n@enduml\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+      {"id": "diagram-plantuml-sequence", "language": "plantuml", "source": "@startuml\nAlice -> Bob: hello\n@enduml\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+      {"id": "diagram-tikz-polyline", "language": "tikz", "source": "\\begin{tikzpicture}\n\\draw (0,0) -- (2,1);\n\\end{tikzpicture}\n", "expect": {"lower": "scene", "deterministic": true}},
+      {"id": "diagram-tikz-rectangle", "language": "tikz", "source": "\\draw[red] (0,0) rectangle (1,1);\n", "expect": {"lower": "scene", "deterministic": true}}
+    ],
+    "reject": [
+      {"id": "diagram-mermaid-note-with-arrow-text", "language": "mermaid", "source": "sequenceDiagram\n  participant Alice\n  participant Bob\n  Note over Alice,Bob: click -> here\n  Alice->>Bob: Hello\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "Note over Alice,Bob: click -> here"},
+      {"id": "diagram-mermaid-state-family", "language": "mermaid", "source": "stateDiagram-v2\n  [*] --> Still\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "stateDiagram-v2"},
+      {"id": "diagram-mermaid-second-header", "language": "mermaid", "source": "graph LR\n    A --> B\ngraph LR\n    C --> D\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "graph LR"},
+      {"id": "diagram-mermaid-parallelogram", "language": "mermaid", "source": "flowchart TD\n  A[/Slant/]\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "A[/Slant/]"},
+      {"id": "diagram-dot-html-label", "language": "dot", "source": "digraph {\n  a [label=<b>bold</b>]\n}\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "<b>bold</b>"},
+      {"id": "diagram-dot-record-shape", "language": "dot", "source": "digraph {\n  a [shape=record]\n}\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "shape=record"},
+      {"id": "diagram-dot-color-attribute", "language": "dot", "source": "digraph {\n  a [fillcolor=\"#ff0000\"]\n}\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "fillcolor=\"#ff0000\""},
+      {"id": "diagram-plantuml-skinparam", "language": "plantuml", "source": "@startuml\nskinparam monochrome true\nA -> B\n@enduml\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "skinparam monochrome true"},
+      {"id": "diagram-plantuml-missing-header", "language": "plantuml", "source": "A -> B\n@enduml\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "A -> B"},
+      {"id": "diagram-tikz-clip", "language": "tikz", "source": "\\begin{tikzpicture}\n\\clip (0,0) rectangle (1,1);\n\\end{tikzpicture}\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "\\clip (0,0) rectangle (1,1);"}
+    ]
+  }
+}
