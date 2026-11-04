@@ -121,6 +121,26 @@ const DROPPED_ACTIVITY_STATEMENTS: &[&str] = &[
     "detach",
     "kill",
     "partition",
+    "alt",
+    "else",
+    "loop",
+    "group",
+    "par",
+    "opt",
+    "break",
+    "critical",
+    "ref",
+    "box",
+    "activate",
+    "deactivate",
+    "destroy",
+    "participant",
+    "actor",
+    "database",
+    "boundary",
+    "control",
+    "collections",
+    "queue",
     "left",
     "right",
     "top",
@@ -291,7 +311,7 @@ fn class_spec(diagram: &ClassDiagram, source: &str) -> Result<(DiagramSpec, Vec<
         }
         spec.nodes.push(DiagramNode {
             id: name.to_string(),
-            label: Some(class_label(class)),
+            label: Some(class_label(class, source)),
             shape: NodeShape::Box,
             ports: Vec::new(),
             cluster: None,
@@ -1063,27 +1083,90 @@ fn folded_label(left: Option<&String>, right: Option<&String>, label: Option<&St
     (!parts.is_empty()).then(|| parts.join(" "))
 }
 
-fn class_label(class: &ClassDeclaration) -> String {
-    let name = class
-        .display
-        .as_deref()
-        .map(str::trim)
-        .filter(|display| !display.is_empty())
-        .unwrap_or_else(|| class.name.trim());
+fn class_label(class: &ClassDeclaration, source: &str) -> String {
+    let authored = authored_declaration(class, source);
+    let declared = declared_identifier(&authored).unwrap_or_else(|| class.name.trim().to_string());
+    let display = class.display.as_deref().map(str::trim).filter(|display| !display.is_empty());
+    let name = display.unwrap_or(declared.as_str());
     let mut label = match class.keyword {
         ClassKeyword::Class => name.to_string(),
         ClassKeyword::Interface => format!("«interface» {name}"),
         ClassKeyword::Abstract => format!("«abstract» {name}"),
         ClassKeyword::Enum => format!("«enum» {name}"),
     };
-    for member in &class.members {
-        let text = member_text(member);
-        if !text.is_empty() {
-            label.push('\n');
-            label.push_str(&text);
-        }
+    for stereotype in authored_stereotypes(&authored) {
+        label.push('\n');
+        label.push('«');
+        label.push_str(&stereotype);
+        label.push('»');
+    }
+    let mut members: Vec<String> = class.members.iter().map(member_text).filter(|text| !text.is_empty()).collect();
+    if members.is_empty() {
+        members = authored_members(&authored);
+    }
+    for text in members {
+        label.push('\n');
+        label.push_str(&text);
     }
     label
+}
+
+/// The authored bytes of one class declaration.
+///
+/// `oak-plantuml` drops a generic parameter list, a user stereotype, and an
+/// `enum` body from the AST node, so the label is rebuilt from the declaration
+/// span rather than losing authored text that PlantUML draws inside the box.
+fn authored_declaration(class: &ClassDeclaration, source: &str) -> String {
+    let range: Range<usize> = class.span.clone().into();
+    source.get(range).unwrap_or_default().to_string()
+}
+
+/// The declared identifier, including a generic parameter list when present.
+fn declared_identifier(authored: &str) -> Option<String> {
+    let header = authored.lines().next()?.trim();
+    let rest = header.strip_prefix("abstract").map(str::trim_start).unwrap_or(header);
+    let (_, after_keyword) = rest.split_once(char::is_whitespace)?;
+    let token = after_keyword.trim_start().split_whitespace().next()?.trim_end_matches('{');
+    (!token.is_empty()).then(|| token.to_string())
+}
+
+/// Every `<<Name>>` token on the declaration header.
+fn authored_stereotypes(authored: &str) -> Vec<String> {
+    let header = authored.lines().next().unwrap_or_default();
+    let mut stereotypes = Vec::new();
+    let mut rest = header;
+    while let Some(open) = rest.find("<<") {
+        let after = &rest[open + 2..];
+        let Some(close) = after.find(">>")
+        else {
+            break;
+        };
+        let token = after[..close].trim();
+        if !token.is_empty() {
+            stereotypes.push(token.to_string());
+        }
+        rest = &after[close + 2..];
+    }
+    stereotypes
+}
+
+/// Author-declared body lines, used when the AST keeps no member entry.
+///
+/// `enum Color { RED GREEN }` reaches the AST with an empty member list, so the
+/// authored constants are read back; separator lines such as `--` are layout,
+/// not members, and are skipped.
+fn authored_members(authored: &str) -> Vec<String> {
+    let Some((_, body)) = authored.split_once('{')
+    else {
+        return Vec::new();
+    };
+    let body = body.rsplit_once('}').map(|(body, _)| body).unwrap_or(body);
+    body.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.chars().all(|character| matches!(character, '-' | '.' | '=' | '#')))
+        .map(str::to_string)
+        .collect()
 }
 
 /// Rebuild the authored member line, including the visibility marker.
