@@ -355,10 +355,11 @@ struct LinkDefinition {
 /// Promote a CommonMark setext heading before the underline is lowered as a
 /// thematic break.
 ///
-/// `oak-markdown` does not parse setext headings: `Title\n---` becomes a
-/// paragraph followed by a horizontal-rule node, exactly like a thematic break.
-/// The two differ only by adjacency, so the underline must sit on the very next
-/// line of the paragraph; a blank line in between keeps the thematic break.
+/// `oak-markdown` does not parse setext headings: `Title\n---` or `Title\n===`
+/// becomes a paragraph followed by a horizontal-rule node, exactly like a
+/// thematic break. The two differ only by adjacency, so the underline must sit
+/// on the very next line of the paragraph; a blank line in between keeps the
+/// thematic break. `=` underlines an h1 and `-` an h2, as in CommonMark §4.3.
 fn setext_heading(
     node: RedNode<MarkdownLanguage>,
     trailing: &[RedTree<MarkdownLanguage>],
@@ -385,9 +386,16 @@ fn setext_heading(
     }
     let marker = underline.text(source);
     let marker = marker.trim();
-    if marker.is_empty() || !marker.bytes().all(|byte| byte == b'-') {
+    let Some(marker_byte) = marker.bytes().next() else {
+        return None;
+    };
+    if marker_byte != b'-' && marker_byte != b'=' {
         return None;
     }
+    if !marker.bytes().all(|byte| byte == marker_byte) {
+        return None;
+    }
+    let level = if marker_byte == b'=' { 1 } else { 2 };
     let node_span = node.span();
     let gap = source.slice((node_span.end..underline.span().start).into());
     if !gap.is_empty() && gap != "\n" && gap != "\r\n" {
@@ -397,7 +405,44 @@ fn setext_heading(
     if title.is_empty() {
         return None;
     }
-    Some((offset, Block::Section { level: 2, title, children: Vec::new() }))
+    Some((offset, Block::Section { level, title, children: Vec::new() }))
+}
+
+/// Promote a setext h1 whose underline stayed inside the paragraph token.
+///
+/// `oak-markdown` only produces a separate `HorizontalRule` node for `---`.
+/// A `===` underline is lexed as ordinary paragraph text, so `Title\n===` would
+/// otherwise reach the IR as a paragraph containing the raw underline.
+fn paragraph_setext_heading(
+    node: RedNode<MarkdownLanguage>,
+    source: &SourceText,
+    context: &mut LinkContext,
+) -> Option<Block> {
+    if node.element_type() != MarkdownElementType::Paragraph {
+        return None;
+    }
+    let raw = node.text(source);
+    let raw = raw.trim_end_matches(['\r', '\n']);
+    let marker = raw.rsplit('\n').next()?.trim();
+    if marker.is_empty() || !marker.bytes().all(|byte| byte == b'=') {
+        return None;
+    }
+    let mut title = collect_inlines(node, source, context);
+    while matches!(title.last(), Some(Inline::Break { .. })) {
+        title.pop();
+    }
+    if let Some(Inline::Text { text }) = title.last_mut() {
+        if text.trim().bytes().all(|byte| byte == b'=') {
+            title.pop();
+        }
+    }
+    while matches!(title.last(), Some(Inline::Break { .. })) {
+        title.pop();
+    }
+    if title.is_empty() {
+        return None;
+    }
+    Some(Block::Section { level: 1, title, children: Vec::new() })
 }
 
 fn register_link_definition_node(node: RedNode<MarkdownLanguage>, source: &SourceText, context: &mut LinkContext) {
@@ -491,6 +536,12 @@ fn lower_block_node(
             children: Vec::new(),
         }),
         MarkdownElementType::Paragraph => {
+            if let Some(section) = paragraph_setext_heading(node, source, context) {
+                return BlockOutcome::Block(section);
+            }
+            if let Some(code) = indented_code_block(node, source) {
+                return BlockOutcome::Block(code);
+            }
             let text = node.text(source);
             if parse_link_definition(text.trim()).is_some() {
                 BlockOutcome::Skip
@@ -584,6 +635,10 @@ fn collect_inlines(node: RedNode<MarkdownLanguage>, source: &SourceText, context
     for child in node.children() {
         match child {
             RedTree::Node(child_node) => {
+                if matches!(child_node.element_type(), MarkdownElementType::Text | MarkdownElementType::HeadingText) {
+                    push_text_inline(&mut inlines, &decode_escaped_text(&child_node.text(source)));
+                    continue;
+                }
                 let link_like = matches!(child_node.element_type(), MarkdownElementType::Link | MarkdownElementType::Image);
                 let trailing = if link_like { trailing_link_whitespace(&child_node.text(source)) } else { String::new() };
                 if let Some(inline) = lower_inline_node(child_node, source, context) {
@@ -615,7 +670,11 @@ fn collect_inlines(node: RedNode<MarkdownLanguage>, source: &SourceText, context
                                 Some(Inline::RawHtml { html: text.into_owned() })
                             }
                         }
-                        _ => Some(Inline::Text { text: decode_escaped_text(text.as_ref()) }),
+                        _ => {
+                            let text = decode_escaped_text(text.as_ref());
+                            push_text_inline(&mut inlines, &text);
+                            None
+                        }
                     };
                     if let Some(inline) = inline {
                         push_inline(&mut inlines, inline);
@@ -629,10 +688,36 @@ fn collect_inlines(node: RedNode<MarkdownLanguage>, source: &SourceText, context
         if !text.trim().is_empty() {
             // A whole node that carries no element children still has to decode escapes,
             // otherwise `\[` stays a literal backslash on reopen.
-            inlines.push(Inline::Text { text: decode_escaped_text(text.as_ref()) });
+            let decoded = decode_escaped_text(text.as_ref());
+            push_text_inline(&mut inlines, &decoded);
         }
     }
+    // `oak-markdown` splits a numeric entity into `&` and `#65;`, so decoding
+    // has to happen on the merged text run instead of per token.
+    merge_adjacent_text(&mut inlines);
     inlines
+}
+
+/// Merge adjacent text runs and decode HTML entities in each resulting run.
+fn merge_adjacent_text(inlines: &mut Vec<Inline>) {
+    let mut merged: Vec<Inline> = Vec::with_capacity(inlines.len());
+    for inline in inlines.drain(..) {
+        if let Inline::Text { text } = inline {
+            if let Some(Inline::Text { text: previous }) = merged.last_mut() {
+                previous.push_str(&text);
+                continue;
+            }
+            merged.push(Inline::Text { text });
+        } else {
+            merged.push(inline);
+        }
+    }
+    for inline in &mut merged {
+        if let Inline::Text { text } = inline {
+            *text = decode_entities(text);
+        }
+    }
+    *inlines = merged;
 }
 
 fn lower_inline_node(node: RedNode<MarkdownLanguage>, source: &SourceText, context: &mut LinkContext) -> Option<Inline> {
@@ -709,9 +794,200 @@ fn push_soft_break(inlines: &mut Vec<Inline>) {
     inlines.push(Inline::Break { kind: BreakKind::Soft });
 }
 
+/// Push a text run, turning authored line endings into IR breaks.
+///
+/// `oak-markdown` keeps every raw line ending inside the text token, so without
+/// this split a hard break (`two trailing spaces` or a trailing `\`) never
+/// becomes `BreakKind::Hard` and the renderer emits the literal spaces instead
+/// of a line break (CommonMark §6.9).
+fn push_text_inline(inlines: &mut Vec<Inline>, raw: &str) {
+    if !raw.contains('\n') {
+        if !raw.is_empty() {
+            push_inline(inlines, Inline::Text { text: raw.to_string() });
+        }
+        return;
+    }
+    let mut cursor = 0usize;
+    for (index, _) in raw.match_indices('\n') {
+        let segment = &raw[cursor..index];
+        let segment = segment.strip_suffix('\r').unwrap_or(segment);
+        if segment.is_empty() {
+            // The lexer sometimes hands the line ending over as its own token,
+            // so the hard-break markup is still attached to the previous text.
+            let kind = resolve_break_kind(inlines);
+            inlines.push(Inline::Break { kind });
+        }
+        else {
+            let (text, hard) = split_hard_break(segment);
+            if !text.is_empty() {
+                push_inline(inlines, Inline::Text { text: text.to_string() });
+            }
+            inlines.push(Inline::Break { kind: if hard { BreakKind::Hard } else { BreakKind::Soft } });
+        }
+        cursor = index + 1;
+    }
+    let tail = &raw[cursor..];
+    if !tail.is_empty() {
+        push_inline(inlines, Inline::Text { text: tail.to_string() });
+    }
+}
+
+/// Decide the break kind for a line ending that arrived as its own token, and
+/// strip the hard-break markup off the text that precedes it.
+fn resolve_break_kind(inlines: &mut Vec<Inline>) -> BreakKind {
+    let Some(Inline::Text { text }) = inlines.last_mut()
+    else {
+        return BreakKind::Soft;
+    };
+    let (trimmed, hard) = split_hard_break(text);
+    let trimmed = trimmed.to_string();
+    let empty = trimmed.is_empty();
+    *text = trimmed;
+    if empty {
+        inlines.pop();
+    }
+    if hard { BreakKind::Hard } else { BreakKind::Soft }
+}
+
+/// Decode the HTML entities that CommonMark renders as characters.
+///
+/// `oak-markdown` leaves entities untouched, so a numeric reference such as
+/// `&#65;` would reach the IR as literal markup and the HTML renderer would
+/// print it a second time (CommonMark §6.2). Named entities outside the XML set
+/// are still literal; the coverage matrix tracks that as a fidelity gap.
+fn decode_entities(text: &str) -> String {
+    if !text.contains('&') {
+        return text.to_string();
+    }
+    let mut decoded = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(index) = rest.find('&') {
+        decoded.push_str(&rest[..index]);
+        let tail = &rest[index..];
+        match decode_one_entity(tail) {
+            Some((character, consumed)) => {
+                decoded.push(character);
+                rest = &tail[consumed..];
+            }
+            None => {
+                decoded.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    decoded.push_str(rest);
+    decoded
+}
+
+/// Decode one entity at the start of `tail` (`&...;`) into a character and the
+/// number of consumed bytes.
+fn decode_one_entity(tail: &str) -> Option<(char, usize)> {
+    let close = tail.find(';')?;
+    if close > 32 {
+        return None;
+    }
+    let body = &tail[1..close];
+    let consumed = close + 1;
+    if let Some(body) = body.strip_prefix('#') {
+        let value = if let Some(hex) = body.strip_prefix('x').or_else(|| body.strip_prefix('X')) {
+            u32::from_str_radix(hex, 16).ok()?
+        } else {
+            body.parse::<u32>().ok()?
+        };
+        return char::from_u32(value).map(|character| (character, consumed));
+    }
+    let character = match body {
+        "amp" => '&',
+        "lt" => '<',
+        "gt" => '>',
+        "quot" => '"',
+        "apos" => '\'',
+        "nbsp" => '\u{a0}',
+        _ => return None,
+    };
+    Some((character, consumed))
+}
+
+/// Split a single authored line into its text and whether it ends in a hard
+/// break. Trailing spaces are markup, not content, in either case.
+fn split_hard_break(segment: &str) -> (&str, bool) {
+    let trailing_backslashes = segment.chars().rev().take_while(|character| *character == '\\').count();
+    if trailing_backslashes % 2 == 1 {
+        return (&segment[..segment.len() - 1], true);
+    }
+    let trimmed = segment.trim_end_matches(' ');
+    let trailing_spaces = segment.len() - trimmed.len();
+    (trimmed, trailing_spaces >= 2)
+}
+
+/// Lower a four-space or tab indented paragraph into a CommonMark indented
+/// code block.
+///
+/// `oak-markdown` has no indented-code node, so the lexer hands the paragraph
+/// over with its indentation already stripped and the lowering would emit a
+/// normal paragraph. Reading the raw span keeps the code semantics instead of
+/// silently flattening the block into prose (CommonMark §4.4).
+fn indented_code_block(node: RedNode<MarkdownLanguage>, source: &SourceText) -> Option<Block> {
+    let span = node.span();
+    let full = source.text();
+    let line_start = full[..span.start].rfind('\n').map(|index| index + 1).unwrap_or(0);
+    let indent = leading_columns(&full[line_start..span.start]);
+    if indent < 4 {
+        return None;
+    }
+    let raw = &full[line_start..span.end];
+    let mut body = String::new();
+    for line in raw.split('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let stripped = strip_indent(line, 4);
+        body.push_str(stripped);
+        body.push('\n');
+    }
+    let body = body.trim_end_matches('\n').to_string();
+    if body.trim().is_empty() {
+        return None;
+    }
+    Some(Block::Code { language: None, content: body })
+}
+
+/// Count leading indentation columns, expanding a tab to four columns.
+fn leading_columns(line: &str) -> usize {
+    let mut columns = 0usize;
+    for character in line.chars() {
+        match character {
+            ' ' => columns += 1,
+            '\t' => columns += 4,
+            _ => break,
+        }
+    }
+    columns
+}
+
+/// Remove up to `columns` leading indentation columns from one line.
+fn strip_indent(line: &str, columns: usize) -> &str {
+    let mut removed = 0usize;
+    let mut index = 0usize;
+    for (offset, character) in line.char_indices() {
+        match character {
+            ' ' => removed += 1,
+            '\t' => removed += 4,
+            _ => break,
+        }
+        index = offset + character.len_utf8();
+        if removed >= columns {
+            break;
+        }
+    }
+    &line[index..]
+}
+
 /// A paragraph's final line break terminates the block in the source; it is
 /// not authored content and must not survive into the inline stream.
 fn trim_trailing_line_break(inlines: &mut Vec<Inline>) {
+    if let Some(Inline::Break { kind: BreakKind::Soft }) = inlines.last() {
+        inlines.pop();
+        return;
+    }
     let Some(Inline::Text { text }) = inlines.last_mut()
     else {
         return;
@@ -815,7 +1091,9 @@ fn split_markdown_link(raw: &str) -> Option<(String, String, Option<String>)> {
     let destination = &raw[start + 2..];
     let close = link_destination_close(destination)?;
     let (url, title) = split_destination_and_title(destination[..close].trim());
-    if text.is_empty() || url.is_empty() {
+    // An empty alt text is valid CommonMark (`![](i.png)`), so only the
+    // destination decides whether the token is a link or an image.
+    if url.is_empty() {
         return None;
     }
     Some((text, url, title))
