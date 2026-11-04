@@ -6,6 +6,10 @@ use std::sync::Once;
 
 use document_text::math::{MathFontFamily, install_math_font};
 
+mod metrics;
+
+pub use metrics::{BodyFaceKey, BodyMetrics, FaceMetrics, MetricsError, body_style, fallback_order, key_for_run};
+
 /// Latin Modern Math (Computer Modern OpenType successor), GUST Font License.
 ///
 /// The license text ships next to the binary in

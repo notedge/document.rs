@@ -681,6 +681,8 @@ dependencies = [
 name = "document-fonts"
 version = "0.1.0"
 dependencies = [
+ "acorn-ttf",
+ "document-compose",
  "document-text",
 ]
 
