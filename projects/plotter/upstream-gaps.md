@@ -22,7 +22,7 @@
 | 输入 | 构造 | 现状 | 缺什么节点模型 | 需要什么语义 |
 |---|---|---|---|---|
 | `oak-mermaid` | `stateDiagram` / `stateDiagram-v2` | 拒绝于族头 | 状态节点、复合状态与并发区域、`[*]` 起止伪状态 | 状态集合、迁移源与目标、迁移标签、进入与退出动作、区域层级 |
-| `oak-mermaid` | `erDiagram` | 拒绝于族头 | 实体、属性（类型与主键/外键标记）、关系基数 | 实体属性表、两端基数、识别与非识别关系、关系标签 |
+| `oak-mermaid` | `erDiagram` | 拒绝于族头 | 实体、属性（类型与主键/外键标记）、关系基数（`||`、`o{` 等 Crow's Foot 记号） | 实体属性表、两端基数、识别与非识别关系、关系标签 |
 | `oak-mermaid` | `classDiagram` 的 `<<interface>>` 与 `<<abstract>>` 原型 | 降成普通类 | `oak-uml::Class` 无原型字段，`ClassDiagram::from` 把接口的成员搬进类后丢弃身份 | 保留原型标记，类名与原型分开存放 |
 | `oak-mermaid` | `classDiagram` 关系两端的多重性（`A "1" --> "many" B`） | 上游未建模 | `oak-uml::Relation` 无多重性字段 | 两端各一个可选的多重性文本 |
 | `oak-mermaid` | `sequenceDiagram` 的 `activate` / `deactivate` 与 `+` / `-` 简写 | 拒绝于语句行 | `SequenceDiagram` 无激活区间，PlantUML 的同名字段可参照 | 激活所属 participant、起始与结束消息序号 |
@@ -36,7 +36,7 @@
 
 | 输入 | 构造 | 现状 | 缺什么模型 | 需要什么语义 |
 |---|---|---|---|---|
-| `oak-dot` | `record` / `mrecord` 节点 | 拒绝于属性 | 字段端口与端口级锚点 | 端口顺序与相对位置、边按端口锚定、端口分隔符与对齐 |
+| `oak-dot` | `record` / `mrecord` 节点 | 拒绝于属性 | 字段端口（field port）与端口级锚点 | 端口顺序与相对位置、边按端口锚定、端口分隔符与对齐 |
 | `oak-dot` | 匿名子图、嵌套子图、子图作边操作数 | 拒绝于语句 | 无 id 的簇、簇的嵌套层级、簇整体作为边端点 | 簇 id 自动生成规则、嵌套簇包围框、簇端点展开为成员端点 |
 
 `record` 长期拒绝的理由：下游只有节点级锚点，没有端口模型，强行降级会把端口压平成普通方框，属于近似而非降级。
@@ -48,7 +48,7 @@
 | TikZ 的 PGFPlots `\begin{axis}` | 不接 | 坐标轴、刻度、图例与数据映射属于 `plotter.chart`，接进来会形成两套图表模型 |
 | TikZ 的宿主注入（宏展开、外部图片、`\input`） | 不接 | 属宿主与排版层的职责，不是输入适配器的降级范围 |
 | `oak-mermaid` 的 `gantt` / `pie` / `journey` 等 | 不接 | 时间轴与占比是 `plotter.chart` 的领域，不走图元降级 |
-| `oak-plantuml` 的 `note` / `loop` / `alt` / `else` 等 | 不接 | 需要场景层的浮层注释与组合框语义，`DiagramSpec` 无对应模型 |
+| `oak-plantuml` 的 `note` / `loop` / `alt` / `else` 等注释与组合片段 | 不接 | 需要场景层的浮层注释与组合框语义，`DiagramSpec` 无对应模型 |
 
 ## 五、真实语料的归属
 
