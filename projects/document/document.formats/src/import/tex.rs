@@ -747,6 +747,23 @@ impl<'a> TexLowerer<'a> {
                 }
                 InlineOutcome::Inlines(inlines)
             }
+            "href" => {
+                let target = self.nth_required_argument(command, 0).unwrap_or_default().trim().to_string();
+                let display = self
+                    .nth_required_argument(command, 1)
+                    .map(|fragment| self.lower_inline_fragment(fragment))
+                    .unwrap_or_default();
+                if target.is_empty() {
+                    self.loss(
+                        "import.tex.empty_link_target",
+                        "link command has no readable destination",
+                        SemanticStatus::Partial,
+                    );
+                    return if display.is_empty() { InlineOutcome::Dropped } else { InlineOutcome::Inlines(display) };
+                }
+                let display = if display.is_empty() { vec![Inline::Text { text: target.clone() }] } else { display };
+                InlineOutcome::Inline(Inline::Link { target: RelationEndpoint::ExternalUri(target), display, title: None })
+            }
             "includegraphics" => {
                 let source = self.required_argument(command).unwrap_or_default().trim().to_string();
                 if source.is_empty() {
@@ -915,6 +932,18 @@ impl<'a> TexLowerer<'a> {
             TexArgument::Required(root) => Some(self.argument_fragment(root)),
             TexArgument::Optional(_) => None,
         })
+    }
+
+    /// The `index`-th required argument, skipping optional arguments.
+    fn nth_required_argument(&self, command: &TexCommand, index: usize) -> Option<&'a str> {
+        command
+            .arguments
+            .iter()
+            .filter_map(|argument| match argument {
+                TexArgument::Required(root) => Some(self.argument_fragment(root)),
+                TexArgument::Optional(_) => None,
+            })
+            .nth(index)
     }
 
     /// Flattened plain text of the first required argument.

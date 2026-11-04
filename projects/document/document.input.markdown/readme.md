@@ -34,3 +34,17 @@ as a documented lossy document instead of a failure.
 | 4 `Unsupported` loss 或 opaque 块在导入阶段返回 `Err` | `src/lib.rs` · `unsupported_loss_fails_closed`、`unsupported_opaque_block_fails_closed` |
 | 5 表格、引用、嵌套列表、任务列表进图并进 SVG，带对齐标记只告警 | `tests/markdown_pipeline/mod.rs` · `table_quote_nested_list_and_task_list_reach_the_rendered_svg`、`aligned_table_only_warns_and_still_renders` |
 | 6 front matter 返回 `Err` 且 `span` 覆盖 `---` 到 `---` | `tests/fail_closed/mod.rs` · `front_matter_fails_closed_with_span` |
+
+## 构造覆盖
+
+合同验收之外，下列构造的闭环由用例固定。
+
+| 构造 | 用例 |
+|---|---|
+| 有序列表 | `tests/markdown_pipeline/mod.rs` · `ordered_lists_reach_the_rendered_svg` |
+| 链接与图片 | `tests/markdown_pipeline/mod.rs` · `links_and_images_reach_the_rendered_svg` |
+| 代码围栏与行内代码 | `tests/markdown_pipeline/mod.rs` · `fenced_code_and_inline_code_reach_the_rendered_svg` |
+| 转义标记保留字面文本 | `tests/markdown_pipeline/mod.rs` · `escaped_markup_reaches_the_rendered_svg_as_literal_text` |
+| 多级引用 | `tests/markdown_pipeline/mod.rs` · `nested_quotes_reach_the_rendered_svg` |
+| HTML 块登记而不进页面 | `tests/markdown_pipeline/mod.rs` · `html_blocks_are_reported_instead_of_reaching_the_rendered_svg` |
+| autolink 与行内原始 HTML、脚注正文与引用 | `tests/markdown_pipeline/mod.rs` · `autolinks_and_raw_html_do_not_disappear_without_a_report`、`footnote_bodies_and_references_do_not_disappear_without_a_report` |

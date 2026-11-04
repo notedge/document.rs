@@ -41,3 +41,15 @@ source imports as a documented lossy document instead of a failure.
 验收 6 的边界：SVG 渲染器只拒绝画布尺寸非正的图形，而 TeX 入口不接收宿主
 注册的 scene，所以该拒绝在 `render_svg` 的正常路径上不可达。用例固定的是
 适配层唯一的契约——渲染器 `Diagnostic` 不被改名地转成 `TexInputError`。
+
+## 构造覆盖
+
+合同验收之外，下列构造的实际处置由用例固定。
+
+| 构造 | 用例 |
+|---|---|
+| 嵌套 `itemize`：内层列表作为外层条目的 `children` 保留，两级文本都进 SVG | `tests/constructs/mod.rs` · `nested_lists_keep_the_inner_level_as_a_child` |
+| `\section*`：不编号，`import.tex.starred_command` 进 `lossy` 与 `Warning` | `tests/constructs/mod.rs` · `starred_section_stays_unnumbered_and_is_reported` |
+| `\href{url}{text}`：映射为 `Inline::Link` 外部 URI，SVG 输出 `<a href>`，命令不漏进正文 | `tests/constructs/mod.rs` · `href_becomes_an_external_link` |
+| `\cite{a,b}` 与 `\cite[p.~3]{c}`：每个 key 各出一条 `[@key]` 标记，可选说明无 IR 载体 | `tests/constructs/mod.rs` · `citations_keep_every_key_and_ignore_the_optional_note` |
+| 脚注正文挂在引用 `Inline::Note` 上，不摊平进段落文本，`import.tex.footnote_body` 仍登记 | `tests/constructs/mod.rs` · `footnote_body_is_carried_on_the_reference_not_the_flow` |

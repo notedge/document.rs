@@ -1,0 +1,158 @@
+{
+  "schema": "document.rs.document.input.contracts",
+  "contract": "/v0",
+  "provenance": {
+    "crates": ["document.input.markdown", "document.input.tex", "document.input.typst"],
+    "contracts": [
+      "规划设计/vutex/20-Markdown输入适配合同.md",
+      "规划设计/vutex/21-TeX输入适配合同.md",
+      "规划设计/vutex/19-Typst输入适配合同.md"
+    ],
+    "codes": "the loss codes recorded by document.formats import lowering plus the adapter constants",
+    "downstream": "the same profile / supported / approximated / refused shape as projects/plotter/input-contracts.json",
+    "audit": "each acceptance item of 19 / 20 / 21 was mapped to a named test in the adapter readme, and the construct tables were checked against the lowering branches"
+  },
+  "families": [
+    {
+      "language": "markdown",
+      "entry": ["import_source", "import_file", "render_svg"],
+      "supported": [
+        {"construct": "headings and paragraphs", "sample": "# Title\n\nBody.\n"},
+        {"construct": "ordered / unordered / nested / task lists", "sample": "- one\n- two\n"},
+        {"construct": "quotes including nested quotes", "sample": "> outer\n> > inner\n"},
+        {"construct": "fenced code and inline code", "sample": "```rust\nlet x = 1;\n```\n\nUse `x`.\n"},
+        {"construct": "tables", "sample": "| a | b |\n|---|---|\n| 1 | 2 |\n"},
+        {"construct": "links and images", "sample": "[docs](https://example.org)\n\n![alt](pic.png)\n"},
+        {"construct": "bold / italic / strikethrough", "sample": "**bold** _italic_ ~~gone~~\n"},
+        {"construct": "inline and display math", "sample": "$x^2$\n\n$$\nx^2\n$$\n"},
+        {"construct": "Mermaid / DOT / PlantUML diagram fences lowered by the host", "sample": "```mermaid\nflowchart TD\n  A --> B\n```\n"},
+        {"construct": "raw HTML block preserved verbatim", "code": "vutex.input.markdown.preserved_raw_html", "span": "exact"}
+      ],
+      "approximated": [
+        {"construct": "definition list", "code": "import.markdown.definition_list", "loss": "the description item loses its term/description relation", "span": "exact"},
+        {"construct": "table alignment row", "code": "import.markdown.table_alignment", "loss": "alignment markers are not carried by IR table cells", "span": "exact"},
+        {"construct": "invalid link definition", "code": "import.markdown.invalid_link_definition", "loss": "the definition is kept as text", "span": "exact"},
+        {"construct": "unresolved reference link", "code": "import.markdown.unresolved_reference_link", "loss": "the label is kept as text", "span": "none"},
+        {"construct": "raw inline HTML", "code": "import.markdown.raw_html_unrendered", "loss": "the tag stays literal text", "span": "exact"},
+        {"construct": "footnote body", "code": "import.markdown.footnote_body_unplaced", "loss": "the body stays a Partial opaque block instead of a footnote collection", "span": "exact"},
+        {"construct": "footnote reference marker", "code": "import.markdown.footnote_reference_marker", "loss": "the marker is kept as text", "span": "exact"},
+        {"construct": "empty document", "code": "import.markdown.empty_document", "loss": "the import still returns an empty graph", "span": "none"}
+      ],
+      "refused": [
+        {"construct": "block the lowering marks Unsupported", "code": "import.markdown.unsupported_block", "span": "exact"},
+        {"construct": "Unsupported opaque block", "code": "vutex.input.markdown.opaque_block", "span": "exact"},
+        {"construct": "YAML front matter", "code": "vutex.input.markdown.opaque_block", "span": "exact", "note": "span covers the first --- to the closing ---"},
+        {"construct": "source above 8 MiB", "code": "vutex.input.markdown.source_too_large", "span": "none"},
+        {"construct": "source the parser refuses", "code": "vutex.input.markdown.parse_failed", "span": "none"},
+        {"construct": "unreadable file", "code": "vutex.input.markdown.file_read_failed", "span": "none"},
+        {"construct": "graph that fails validate", "code": "vutex.input.markdown.invalid_graph", "span": "none"}
+      ]
+    },
+    {
+      "language": "tex",
+      "entry": ["import_source", "import_file", "validate_graph", "render_svg"],
+      "supported": [
+        {"construct": "metadata \\title and \\author", "sample": "\\title{Title}\n\\author{Author}\n"},
+        {"construct": "numbered sections and subsections", "sample": "\\section{One}\n"},
+        {"construct": "paragraphs and inline styles", "sample": "\\textbf{bold} and \\emph{italic}.\n"},
+        {"construct": "itemize / enumerate / description lists", "sample": "\\begin{itemize}\n\\item one\n\\end{itemize}\n"},
+        {"construct": "nested list stays a child of the outer item", "sample": "\\begin{itemize}\n\\item outer\n\\begin{itemize}\n\\item inner\n\\end{itemize}\n\\end{itemize}\n"},
+        {"construct": "simple tabular table", "sample": "\\begin{tabular}{ll}\nA & B \\\\\n\\end{tabular}\n"},
+        {"construct": "inline math and display math source", "sample": "$x^2$\n\n\\begin{equation}\nE = mc^2\n\\end{equation}\n"},
+        {"construct": "verbatim code", "sample": "\\begin{verbatim}\nraw\n\\end{verbatim}\n"},
+        {"construct": "label anchor and \\ref / \\eqref", "sample": "\\label{sec:one}\nSee \\ref{sec:one}.\n"},
+        {"construct": "footnote carried on the reference inline", "sample": "Body\\footnote{note} text.\n"},
+        {"construct": "citation with one or more keys", "sample": "\\cite{a,b}\n"},
+        {"construct": "\\href external link", "sample": "\\href{https://example.org}{docs}\n"}
+      ],
+      "approximated": [
+        {"construct": "\\section* unnumbered", "code": "import.tex.starred_command", "loss": "the section kind has no numbering state", "span": "none"},
+        {"construct": "numbered math environment", "code": "import.tex.math_numbering", "loss": "Block::Math has no number or anchor field", "span": "exact"},
+        {"construct": "citation marker", "code": "import.tex.citation_marker", "loss": "rendered as the authored [@key] marker", "span": "exact"},
+        {"construct": "footnote body", "code": "import.tex.footnote_body", "loss": "carried on Inline::Note because IR has no footnote collection", "span": "none"},
+        {"construct": "math style command in text mode", "code": "import.tex.math_style_in_text", "loss": "the argument survives without the style", "span": "exact"},
+        {"construct": "text-mode spacing command", "code": "import.tex.space_marker", "loss": "kept as a tex-space attribute marker", "span": "none"},
+        {"construct": "description item label", "code": "import.tex.description_label", "loss": "custom marker is not represented in the item content", "span": "none"},
+        {"construct": "table cell spans", "code": "import.tex.table_spans", "loss": "multicolumn / multirow spans are flattened", "span": "none"},
+        {"construct": "\\date metadata", "code": "import.tex.metadata_date", "loss": "DocumentMetadata has no date field", "span": "none"},
+        {"construct": "\\maketitle", "code": "import.tex.maketitle_dropped", "loss": "title and author stay document metadata", "span": "none"},
+        {"construct": "empty title", "code": "import.tex.empty_title", "span": "none"},
+        {"construct": "empty author", "code": "import.tex.empty_author", "span": "none"},
+        {"construct": "empty citation", "code": "import.tex.empty_citation", "span": "none"},
+        {"construct": "link without a destination", "code": "import.tex.empty_link_target", "span": "none"},
+        {"construct": "image without a target", "code": "import.tex.empty_image_source", "span": "none"},
+        {"construct": "label without a name", "code": "import.tex.label_anchor", "span": "exact"},
+        {"construct": "vanished sizing command", "code": "import.tex.limits_marker", "span": "none"},
+        {"construct": "unclosed delimiter group", "code": "import.tex.unclosed_delimiters", "span": "exact"},
+        {"construct": "unclosed math delimiter", "code": "import.tex.unclosed_math", "span": "exact"},
+        {"construct": "starred section without a title", "code": "import.tex.section_without_title", "span": "none"},
+        {"construct": "mismatched \\end name", "code": "import.tex.mismatched_end", "span": "exact"},
+        {"construct": "malformed list header or missing end", "code": "import.tex.malformed_list", "span": "exact"},
+        {"construct": "list without a body or item marker", "code": "import.tex.empty_list", "span": "exact"},
+        {"construct": "malformed table header or missing end", "code": "import.tex.malformed_table", "span": "exact"},
+        {"construct": "table without rows", "code": "import.tex.empty_table", "span": "exact"},
+        {"construct": "nested fragment the parser refuses", "code": "import.tex.fragment_parse_failed", "span": "none"},
+        {"construct": "block structure inside an inline fragment", "code": "import.tex.block_in_inline_context", "span": "none"},
+        {"construct": "empty document", "code": "import.tex.empty_document", "span": "none"},
+        {"construct": "whole-import coverage summary", "code": "import.tex.partial_coverage", "span": "none"}
+      ],
+      "refused": [
+        {"construct": "unknown environment", "code": "import.tex.unknown_environment", "span": "exact"},
+        {"construct": "macro definition", "code": "import.tex.macro_definition", "span": "exact"},
+        {"construct": "unmapped inline command", "code": "import.tex.unsupported_command", "span": "exact"},
+        {"construct": "unclosed \\verb", "code": "import.tex.verb_unterminated", "span": "exact"},
+        {"construct": "environment opened and never closed", "code": "import.tex.unclosed_environment", "span": "exact"},
+        {"construct": "reference target without a semantic identity", "code": "import.tex.unresolved_reference", "span": "exact"},
+        {"construct": "foreign math language", "code": "vutex.input.tex.math_language", "span": "none"},
+        {"construct": "source above 8 MiB", "code": "vutex.input.tex.source_too_large", "span": "none"},
+        {"construct": "source the parser refuses", "code": "vutex.input.tex.parse_failed", "span": "none"},
+        {"construct": "unreadable file", "code": "vutex.input.tex.io_failed", "span": "none"},
+        {"construct": "graph that fails validate", "code": "vutex.input.tex.invalid_graph", "span": "none"},
+        {"construct": "renderer diagnostic during render_svg", "code": "the renderer code, passed through unchanged", "span": "unchanged"}
+      ]
+    },
+    {
+      "language": "typst",
+      "entry": ["import_source", "import_path", "render_svg"],
+      "supported": [
+        {"construct": "headings and paragraphs", "sample": "= Title\n\nBody.\n"},
+        {"construct": "unordered and ordered lists", "sample": "- one\n- two\n"},
+        {"construct": "links", "sample": "See #link(\"https://example.org\")[docs].\n"},
+        {"construct": "strong and emphasis spans", "sample": "*bold* and _italic_\n"},
+        {"construct": "inline and fenced raw code", "sample": "`x` and ```rust\nfn main() {}\n```\n"},
+        {"construct": "inline and display math source preserved", "sample": "$a^2$\n\n$ x + y $\n"}
+      ],
+      "approximated": [
+        {"construct": "list markup with no item line", "code": "import.typst.empty_list", "span": "exact"},
+        {"construct": "block structure inside an inline fragment", "code": "import.typst.block_in_inline_context", "span": "none"},
+        {"construct": "inline fragment the parser refuses", "code": "import.typst.fragment_parse_failed", "span": "none"},
+        {"construct": "text item out of source order", "code": "import.typst.text_span_mismatch", "span": "none"},
+        {"construct": "empty document", "code": "import.typst.empty_document", "span": "none"},
+        {"construct": "whole-import coverage summary", "code": "import.typst.partial_coverage", "span": "none"}
+      ],
+      "refused": [
+        {"construct": "#let / #show / #import / #set / #page / #place / #float / #table / #image / #figure / custom function / script", "code": "import.typst.dynamic_content", "span": "exact"},
+        {"construct": "dynamic group whose brackets never balance", "code": "vutex.input.typst.unterminated_dynamic_group", "span": "exact"},
+        {"construct": "source above 8 MiB", "code": "vutex.input.typst.source_too_large", "span": "none"},
+        {"construct": "source the parser refuses", "code": "vutex.input.typst.import_failed", "span": "none"}
+      ]
+    }
+  ],
+  "specs": [
+    {"id": "input-markdown-minimal", "language": "markdown", "classification": "accept", "source": "# Title\n\nBody.\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-markdown-table", "language": "markdown", "classification": "accept", "source": "| a | b |\n|---|---|\n| 1 | 2 |\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-markdown-constructs", "language": "markdown", "classification": "accept", "source": "1. one\n2. two\n\n[docs](https://example.org)\n\n![alt](pic.png)\n\n`x`\n\n```rust\nlet y = 1;\n```\n\n> outer\n> > inner\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-tex-minimal", "language": "tex", "classification": "accept", "source": "\\begin{document}\n\\section{Title}\nBody.\n\\end{document}\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-tex-structures", "language": "tex", "classification": "accept", "source": "\\begin{document}\n\\begin{tabular}{ll}\nAlpha & Beta \\\\\n\\end{tabular}\n\\begin{equation}\nE = mc^2\n\\label{eq:energy}\n\\end{equation}\nBody\\footnote{Footnote body} text. Citation \\cite{smith2020}. See \\ref{eq:energy}.\n\\end{document}\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-tex-href", "language": "tex", "classification": "accept", "source": "See \\href{https://example.org/docs}{Docs}.\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-typst-minimal", "language": "typst", "classification": "accept", "source": "= Title\n\nBody.\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-typst-math", "language": "typst", "classification": "accept", "source": "Inline $a^2$ stays.\n\n$ x + y $\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-typst-dynamic", "language": "typst", "classification": "accept", "source": "Before\n\n#figure(\n  rect(width: 2cm),\n  caption: [A box],\n)\n\nAfter\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}}
+  ],
+  "rejections": [
+    {"id": "input-markdown-front-matter", "language": "markdown", "source": "---\ntitle: ignored\n---\n\nBody\n", "code": "vutex.input.markdown.opaque_block", "severity": "error", "spanText": "---\ntitle: ignored\n---"},
+    {"id": "input-markdown-parser-refusal", "language": "markdown", "source": "[unclosed](\n", "code": "vutex.input.markdown.parse_failed", "severity": "error", "spanText": null},
+    {"id": "input-tex-unterminated-group", "language": "tex", "source": "\\begin{document}\n\\section{unterminated\n\\end{document}\n", "code": "vutex.input.tex.parse_failed", "severity": "error", "spanText": null},
+    {"id": "input-typst-unclosed-group", "language": "typst", "source": "Before\n\n#set page(width: 10cm\n\nAfter\n", "code": "vutex.input.typst.unterminated_dynamic_group", "severity": "error", "spanText": null}
+  ]
+}

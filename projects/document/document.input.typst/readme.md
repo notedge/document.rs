@@ -33,3 +33,12 @@ a documented lossy document instead of a failure.
 | 4 与 Markdown 语义子集的 block 结构可比 | `tests/render_smoke/mod.rs` · `typst_and_markdown_agree_on_the_shared_semantic_subset` |
 | 5 平衡多行组一条诊断且前后正文存活，未闭合组拒绝 | `tests/render_smoke/mod.rs` · `balanced_multiline_group_stays_one_opaque_construct`、`unclosed_group_is_rejected` |
 | 6 注释与行内 markup 不留下冒充正文的 text 节点，转义保留字面字符且不移动后续 span | `tests/text_nodes/mod.rs` · `comments_and_inline_markup_do_not_masquerade_as_body_text`、`escapes_keep_literal_text_and_do_not_shift_following_spans` |
+
+## 构造覆盖
+
+合同验收之外，下列构造的实际处置由用例固定。
+
+| 构造 | 用例 |
+|---|---|
+| `#let` / `#show` / `#import` / `#table` / `#image` 各为一个 `Block::Opaque`，`unsupported` 记 `import.typst.dynamic_content`，诊断 `span` 覆盖各自构造 | `tests/constructs/mod.rs` · `dynamic_constructs_keep_their_kind_and_span` |
+| 行内数学与行间数学分别计入 `report.preserved` | `tests/constructs/mod.rs` · `inline_and_display_math_are_counted_apart` |
