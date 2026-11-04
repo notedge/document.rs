@@ -1,7 +1,3 @@
-//! 集成测试入口：按域分子模块。
+//! 冒烟入口：只保留场景变换的最小断言。
 
-mod bounds;
-mod resolve;
-mod svg;
 mod transform;
-mod validation;

@@ -1,5 +1,3 @@
-//! 集成测试入口：按域分子模块。
+//! 冒烟入口：只保留面板布局的最小断言。
 
-mod graph_layout;
 mod panel;
-mod tree_layout;

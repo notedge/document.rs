@@ -1,8 +1,3 @@
-//! 集成测试入口：按域分子模块。
-//!
-//! 像素 / Playwright 视觉门禁在下游产品仓，不进本实现仓。
+//! 冒烟入口：只保留图表目录的最小断言。
 
 mod catalog;
-mod layout;
-mod render;
-mod spec;

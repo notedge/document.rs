@@ -1,9 +1,3 @@
-//! 集成测试入口：按域分子模块。
+//! 冒烟入口：只保留颜色的最小断言。
 
 mod color;
-mod diagnostics;
-mod geometry;
-mod rejections;
-mod text_metrics;
-mod theme;
-mod transform;

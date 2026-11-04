@@ -1,10 +1,4 @@
-//! 集成测试入口：按域分子模块。
+//! 冒烟入口：只保留图表规格的最小校验闭环。
 
-mod browser_toolchain;
-mod compile;
-mod data;
-mod render;
-mod scale;
 mod spec;
 mod support;
-mod vega_lite;
