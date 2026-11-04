@@ -2,6 +2,7 @@
 name = "plotter-input-dot"
 version.workspace = true
 authors.workspace = true
+readme = "readme.md"
 description = "Graphviz DOT frontend: Oak AST to plotter DiagramSpec / scene"
 license.workspace = true
 edition.workspace = true

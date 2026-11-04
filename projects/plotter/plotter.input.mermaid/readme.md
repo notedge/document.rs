@@ -1,6 +1,6 @@
 # plotter-input-mermaid
 
-Mermaid 前端：Oak AST → [`DiagramSpec`](../plotter.diagram) / scene。
+Mermaid 前端：Oak AST → [`DiagramSpec`](../plotter.diagram/readme.md) / scene。
 
 flowchart / class / sequence / state / ER 子集降到 diagram 管道；不组装 SVG。解析错误、未支持的 sequence 语句（含
 `->>+` 激活简写），以及 state / ER 里上游会丢弃的语句都以源字节范围拒绝，布局诊断受 Oak AST 范围限制时可能没有 token 级主标签。
