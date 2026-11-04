@@ -15,22 +15,27 @@ pub struct RenderedDiagram {
     pub svg: String,
 }
 
-/// Unique `id` values for footnote reference anchors.
+/// Unique `id` values for footnote reference anchors, in document order.
 ///
 /// The first reference to a label gets `fnref-<label>` so the endnote
 /// backlink resolves. Repeated references get `fnref-<label>-<n>` so ids stay
-/// unique inside one document.
+/// unique inside one document, and every reference keeps its own backlink.
 #[derive(Default)]
 pub(crate) struct FootnoteRefIds {
-    counts: HashMap<String, usize>,
+    ids: HashMap<String, Vec<String>>,
 }
 
 impl FootnoteRefIds {
     fn next(&mut self, label: &str) -> String {
-        let count = self.counts.entry(label.to_string()).or_insert(0);
-        let id = if *count == 0 { format!("fnref-{label}") } else { format!("fnref-{label}-{count}") };
-        *count += 1;
+        let ids = self.ids.entry(label.to_string()).or_default();
+        let id = if ids.is_empty() { format!("fnref-{label}") } else { format!("fnref-{label}-{}", ids.len()) };
+        ids.push(id.clone());
         id
+    }
+
+    /// Reference anchor ids authored for one footnote label, in document order.
+    fn ids(&self, label: &str) -> &[String] {
+        self.ids.get(label).map(Vec::as_slice).unwrap_or_default()
     }
 }
 
@@ -81,7 +86,7 @@ pub fn export_html_with_diagrams(
         write_node(&mut out, graph, node.id, &node.block, diagrams, &mut footnote_refs)?;
     }
     if !footnotes.is_empty() {
-        write_footnote_section(&mut out, &footnotes);
+        write_footnote_section(&mut out, &footnotes, &footnote_refs);
     }
     out.push_str("</article>");
     Ok(out)
@@ -91,7 +96,7 @@ pub fn export_html_with_diagrams(
 /// one endnotes section so the reference links resolve. Every entry keeps the
 /// authored GFM payload in `data-footnote-source-hex` so the HTML importer can
 /// restore the exact definition instead of re-serializing it from display text.
-fn write_footnote_section(out: &mut String, definitions: &[&str]) {
+fn write_footnote_section(out: &mut String, definitions: &[&str], footnote_refs: &FootnoteRefIds) {
     out.push_str(r#"<section class="footnotes" role="doc-endnotes"><ol>"#);
     for payload in definitions {
         let Some((label, body)) = split_footnote_definition(payload)
@@ -104,10 +109,15 @@ fn write_footnote_section(out: &mut String, definitions: &[&str]) {
         escape_attribute(out, &encode_hex(payload));
         out.push_str(r#""><p>"#);
         escape_text(out, &body);
-        out.push_str(r##"</p><a href="#fnref-"##);
-        escape_attribute(out, &label);
-        out.push_str(r#"">↩</a>"#);
-        // The backlink lives outside the paragraph so the imported body stays
+        out.push_str("</p>");
+        // One backlink per reference keeps every citation site reachable,
+        // including repeated references to the same footnote.
+        for reference_id in footnote_refs.ids(&label) {
+            out.push_str(r##"<a class="footnote-backref" href="#"##);
+            escape_attribute(out, reference_id);
+            out.push_str("\">↩</a>");
+        }
+        // The backlinks live outside the paragraph so the imported body stays
         // byte-identical to the authored definition.
         out.push_str(r#"</li>"#);
     }
