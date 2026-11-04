@@ -126,9 +126,26 @@ impl<'a> TextMeasure<'a> {
         heuristic_advance_em(&self.heuristic, ch, face)
     }
 
-    /// Sum of character advances for a run of text, in points.
+    /// Kerning adjustment between adjacent characters in points.
+    ///
+    /// Zero means the face has no pair, the pair crosses two faces, or the
+    /// face runs advance-only because its `kern` feature was not applicable.
+    fn kern(&self, left: char, right: char, face: TextFace, size: f64) -> f64 {
+        self.faces.kerning_em(key_for_run(face.family, face.style), left, right).unwrap_or(0.0) * size
+    }
+
+    /// Width of a run of text in points, advances plus adjacent-pair kerning.
     fn measure(&self, text: &str, size: f64, face: TextFace) -> f64 {
-        text.chars().map(|ch| self.advance_em(ch, face) * size).sum()
+        let mut width = 0.0;
+        let mut previous = None;
+        for ch in text.chars() {
+            if let Some(left) = previous {
+                width += self.kern(left, ch, face, size);
+            }
+            width += self.advance_em(ch, face) * size;
+            previous = Some(ch);
+        }
+        width
     }
 
     /// Degradations this pass had to apply, in diagnostic form.
@@ -146,6 +163,18 @@ impl<'a> TextMeasure<'a> {
                 message: format!(
                     "body faces {} supplied no readable metrics, so their text was measured with the heuristic width model",
                     unreadable.join("`, `")
+                ),
+                span: None,
+            });
+        }
+        let unavailable = self.faces.kerning_unavailable();
+        if !unavailable.is_empty() {
+            diagnostics.push(Diagnostic {
+                code: "vutex.layout.metrics.kerning_unavailable".to_string(),
+                severity: Severity::Warning,
+                message: format!(
+                    "body faces {} declare a `kern` feature that could not be applied as horizontal `PairPos` format 1, so their text was measured and painted advance-only",
+                    unavailable.join("`, `")
                 ),
                 span: None,
             });
@@ -795,8 +824,16 @@ impl<'a> PageBuilder<'a> {
                         run.href = href.clone();
                         run.title = title.clone();
                     }
+                    // A pair that crosses an atom boundary is still one painted
+                    // pair when both atoms stay in the same run.
+                    let cross = run
+                        .text
+                        .chars()
+                        .last()
+                        .zip(text.chars().next())
+                        .map_or(0.0, |(left, right)| self.text.kern(left, right, *face, size));
                     run.text.push_str(text);
-                    x += self.text.measure(text, size, *face);
+                    x += self.text.measure(text, size, *face) + cross;
                 }
                 InlineAtom::Math(math) => {
                     self.paint_inline_run(&mut run, run_x, baseline, size);
@@ -1263,23 +1300,41 @@ fn break_inline_atoms(widths: &TextMeasure<'_>, atoms: Vec<InlineAtom>, size: f6
             InlineAtom::Break => finish_inline_line(&mut lines, &mut current, &mut width),
             InlineAtom::Text { text, face, href, title } => {
                 let atom_width = widths.measure(&text, size, face);
+                // Adjacent atoms that stay in one painted run are kerned as one
+                // pair, so breaking must reserve that pair as well.
+                let tail = match current.last() {
+                    Some(InlineAtom::Text { text: last, face: last_face, href: last_href, title: last_title })
+                        if *last_face == face
+                            && last_href.as_deref() == href.as_deref()
+                            && last_title.as_deref() == title.as_deref() =>
+                    {
+                        last.chars().last()
+                    }
+                    _ => None,
+                };
+                let cross = tail.zip(text.chars().next()).map_or(0.0, |(left, right)| widths.kern(left, right, face, size));
                 if text.trim().is_empty() {
                     // A space never starts a line and never widens past the column.
-                    if !current.is_empty() && width + atom_width <= max_width {
+                    if !current.is_empty() && width + atom_width + cross <= max_width {
                         current.push(InlineAtom::Text { text, face, href, title });
-                        width += atom_width;
+                        width += atom_width + cross;
                     }
                     continue;
                 }
-                if !current.is_empty() && width + atom_width > max_width {
+                let mut cross = cross;
+                if !current.is_empty() && width + atom_width + cross > max_width {
                     finish_inline_line(&mut lines, &mut current, &mut width);
+                    // Nothing is painted across the line break, so no pair.
+                    cross = 0.0;
                 }
                 if atom_width > max_width && current.is_empty() {
                     // Break an oversized word or URL character by character.
                     let mut chunk = String::new();
                     let mut chunk_width = 0.0;
+                    let mut previous = None;
                     for ch in text.chars() {
-                        let advance = widths.advance_em(ch, face) * size;
+                        let advance =
+                            widths.advance_em(ch, face) * size + previous.map_or(0.0, |left| widths.kern(left, ch, face, size));
                         if !chunk.is_empty() && chunk_width + advance > max_width {
                             lines.push(vec![InlineAtom::Text {
                                 text: chunk.trim_end().to_string(),
@@ -1288,17 +1343,22 @@ fn break_inline_atoms(widths: &TextMeasure<'_>, atoms: Vec<InlineAtom>, size: f6
                                 title: title.clone(),
                             }]);
                             chunk.clear();
-                            chunk_width = 0.0;
+                            // The pair across the break is not painted.
+                            chunk.push(ch);
+                            chunk_width = widths.advance_em(ch, face) * size;
+                            previous = Some(ch);
+                            continue;
                         }
                         chunk.push(ch);
                         chunk_width += advance;
+                        previous = Some(ch);
                     }
                     current.push(InlineAtom::Text { text: chunk, face, href, title });
                     width = chunk_width;
                     continue;
                 }
                 current.push(InlineAtom::Text { text, face, href, title });
-                width += atom_width;
+                width += atom_width + cross;
             }
             InlineAtom::Math(math) => {
                 if !current.is_empty() && width + math.width > max_width {
@@ -1436,43 +1496,108 @@ fn wrap_text(widths: &TextMeasure<'_>, text: &str, size: f64, max_width: f64) ->
         let mut width = 0.0;
         for atom in split_atoms(raw) {
             let atom_width = widths.measure(&atom, size, BODY_FACE);
+            // The pair between the previous line end and this atom is painted,
+            // so it counts toward the column even though the atoms are separate
+            // strings.
+            let cross = line
+                .chars()
+                .last()
+                .zip(atom.chars().next())
+                .map_or(0.0, |(left, right)| widths.kern(left, right, BODY_FACE, size));
             if atom.trim().is_empty() {
-                if line.is_empty() || width + atom_width > max_width {
+                if line.is_empty() || width + atom_width + cross > max_width {
                     continue;
                 }
                 line.push(' ');
-                width += atom_width;
+                width += atom_width + cross;
                 continue;
             }
-            if !line.is_empty() && width + atom_width > max_width {
+            let mut cross = cross;
+            if !line.is_empty() && width + atom_width + cross > max_width {
                 lines.push(line.trim_end().to_string());
                 line = String::new();
                 width = 0.0;
+                cross = 0.0;
             }
             if atom_width > max_width && line.is_empty() {
                 // Break an oversized word or URL character by character.
                 let mut chunk = String::new();
                 let mut chunk_width = 0.0;
+                let mut previous = None;
                 for ch in atom.chars() {
-                    let advance = widths.advance_em(ch, BODY_FACE) * size;
+                    let advance = widths.advance_em(ch, BODY_FACE) * size
+                        + previous.map_or(0.0, |left| widths.kern(left, ch, BODY_FACE, size));
                     if !chunk.is_empty() && chunk_width + advance > max_width {
                         lines.push(chunk.trim_end().to_string());
                         chunk = String::new();
-                        chunk_width = 0.0;
+                        // The pair across the break is not painted.
+                        chunk.push(ch);
+                        chunk_width = widths.advance_em(ch, BODY_FACE) * size;
+                        previous = Some(ch);
+                        continue;
                     }
                     chunk.push(ch);
                     chunk_width += advance;
+                    previous = Some(ch);
                 }
                 line = chunk;
                 width = chunk_width;
                 continue;
             }
             line.push_str(&atom);
-            width += atom_width;
+            width += atom_width + cross;
         }
         if !line.trim().is_empty() {
             lines.push(line.trim_end().to_string());
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod kerning_tests {
+    use super::*;
+
+    fn measure() -> TextMeasure<'static> {
+        TextMeasure::new(BodyMetrics::bundled())
+    }
+
+    fn atom(text: &str) -> InlineAtom {
+        InlineAtom::Text { text: text.to_string(), face: BODY_FACE, href: None, title: None }
+    }
+
+    #[test]
+    fn measure_counts_adjacent_pairs() {
+        let widths = measure();
+        let size = 10.0;
+        let advances = (widths.advance_em('A', BODY_FACE) + widths.advance_em('V', BODY_FACE)) * size;
+        // Tinos `A` + `V` is -264 units of 2048.
+        let expected = advances - 264.0 / 2048.0 * size;
+        let width = widths.measure("AV", size, BODY_FACE);
+        assert!((width - expected).abs() < 1e-9, "measured {width}, expected {expected}");
+    }
+
+    #[test]
+    fn wrap_text_counts_the_pair_between_atoms() {
+        let widths = measure();
+        let size = 10.0;
+        let without_cross =
+            widths.measure("A", size, BODY_FACE) + widths.measure(" ", size, BODY_FACE) + widths.measure("V", size, BODY_FACE);
+        let with_cross = widths.measure("A V", size, BODY_FACE);
+        assert!(with_cross < without_cross, "the pairs must narrow the line");
+        let lines = wrap_text(&widths, "A V", size, without_cross - 0.01);
+        assert_eq!(lines, vec!["A V".to_string()]);
+    }
+
+    #[test]
+    fn inline_break_counts_the_pair_between_atoms() {
+        let widths = measure();
+        let size = 10.0;
+        let max_width =
+            widths.measure("A", size, BODY_FACE) + widths.measure(" ", size, BODY_FACE) + widths.measure("V", size, BODY_FACE)
+                - 0.01;
+        let lines = break_inline_atoms(&widths, vec![atom("A"), atom(" "), atom("V")], size, max_width);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].len(), 3);
+    }
 }
