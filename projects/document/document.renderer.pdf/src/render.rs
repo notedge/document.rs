@@ -30,7 +30,7 @@ use std::{
 };
 
 use document_compose::{Diagnostic, Severity, math::FontStyle};
-use document_fonts::{BodyFaceStyle, BodyFamily};
+use document_fonts::{key_for_run, BodyFaceStyle, BodyFamily, BodyMetrics};
 use document_presentation::display::{
     DisplayGraphic, DisplayImage, DisplayItem, DisplayPage, DisplayPath, DisplayPresentation, DisplayRect, DisplayRule,
     DisplayTextRun,
@@ -1072,6 +1072,25 @@ fn write_text(
     paint_text(out, run.x, page_height - run.y, run.size, resource_index, &run.text, embedded_run, &run.font_family, run.style, false, diagnostics);
 }
 
+/// Emit the glyphs collected for one subset, switching to `TJ` when a pair
+/// adjusts the advance.
+fn flush_text_segment(out: &mut String, index: usize, size: f64, parts: &mut Vec<String>, glyphs: &mut String) {
+    if !glyphs.is_empty() {
+        parts.push(format!("<{}>", std::mem::take(glyphs)));
+    }
+    if parts.is_empty() {
+        return;
+    }
+    let _ = write!(out, "/F{index} {} Tf\n", num(size));
+    if parts.len() == 1 {
+        let _ = write!(out, "{} Tj\n", parts[0]);
+    }
+    else {
+        let _ = write!(out, "[{}] TJ\n", parts.join(" "));
+    }
+    parts.clear();
+}
+
 /// Emit one text object at a page-space position.
 ///
 /// `flip` inverts the text matrix so glyphs stay upright inside a y-flipped
@@ -1097,27 +1116,50 @@ pub(crate) fn paint_text(
 ) {
     let down = if flip { -1.0 } else { 1.0 };
     if let Some(embedded) = embedded {
+        // Body text carries kerning from the same `BodyMetrics` layout used, so
+        // the writer never parses a font on its own.
+        let metrics = embedded.body.then(BodyMetrics::bundled);
         let _ = write!(out, "BT\n1 0 0 {down} {} {} Tm\n", num(x), num(y));
         let mut current: Option<usize> = None;
+        let mut parts: Vec<String> = Vec::new();
         let mut glyphs = String::new();
+        let mut previous: Option<char> = None;
         let mut missing: Vec<char> = Vec::new();
         for ch in text.chars() {
             let Some((font, cid)) = embedded.glyph(ch, family, style)
             else {
                 missing.push(ch);
+                // A skipped character breaks the pair, exactly as layout
+                // measures it.
+                previous = None;
                 continue;
             };
             if current != Some(font) {
                 if let Some(index) = current {
-                    let _ = write!(out, "/F{index} {} Tf\n<{glyphs}> Tj\n", num(size));
+                    flush_text_segment(out, index, size, &mut parts, &mut glyphs);
                 }
                 current = Some(font);
-                glyphs.clear();
+                previous = None;
+            }
+            if let Some(metrics) = metrics {
+                if let Some(left) = previous {
+                    if let Some(delta) = metrics.kerning_em(key_for_run(family, style), left, ch) {
+                        if delta != 0.0 {
+                            if !glyphs.is_empty() {
+                                parts.push(format!("<{}>", std::mem::take(&mut glyphs)));
+                            }
+                            // A negative font-unit delta moves the next glyph
+                            // left, which `TJ` expresses as a positive number.
+                            parts.push(num(-delta * 1000.0));
+                        }
+                    }
+                }
             }
             let _ = write!(glyphs, "{cid:04X}");
+            previous = Some(ch);
         }
         if let Some(index) = current {
-            let _ = write!(out, "/F{index} {} Tf\n<{glyphs}> Tj\n", num(size));
+            flush_text_segment(out, index, size, &mut parts, &mut glyphs);
         }
         out.push_str("ET\n");
         if !missing.is_empty() {

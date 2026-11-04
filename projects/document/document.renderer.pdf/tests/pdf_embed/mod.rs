@@ -106,6 +106,19 @@ fn monospaced_runs_fall_back_to_the_prose_face_for_han_characters() {
 }
 
 #[test]
+fn kerning_pairs_switch_the_run_to_tj() {
+    let bytes = render(vec![text("serif", FontStyle::Normal, "AV T")]);
+
+    assert!(bytes.contains("] TJ"), "a kerned run paints through `TJ`: {bytes}");
+    // `A` + `V` is -264 of 2048 units, so the next glyph moves 128.906
+    // thousandths of an em left.
+    assert!(bytes.contains("128.906"), "the `A`+`V` adjustment reaches the content stream");
+
+    let plain = render(vec![text("serif", FontStyle::Normal, "qq")]);
+    assert!(!plain.contains(" TJ"), "an unpaired run keeps the plain `Tj` form");
+}
+
+#[test]
 fn no_base14_face_reaches_a_bundled_document() {
     let bytes = render(vec![
         text("serif", FontStyle::Normal, "Body"),
