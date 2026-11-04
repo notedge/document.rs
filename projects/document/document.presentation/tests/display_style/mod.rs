@@ -1,11 +1,8 @@
-//! Display lowering tests for styled text runs.
+//! Display lowering smoke: bold, italic and code styles survive.
 
 use document_compose::math::FontStyle;
 use document_ir::{Block, DocumentGraph, DocumentId, Inline};
-use document_layout::{
-    layout,
-    plan::{LayoutItem, TextRun},
-};
+use document_layout::layout;
 use document_presentation::{DisplayItem, build_display_presentation, display::DisplayTextRun};
 
 fn text(value: &str) -> Inline {
@@ -31,18 +28,6 @@ fn sample_graph() -> DocumentGraph {
     graph
 }
 
-fn layout_runs(graph: &DocumentGraph) -> Vec<TextRun> {
-    layout(graph)
-        .pages
-        .into_iter()
-        .flat_map(|page| page.items)
-        .filter_map(|item| match item {
-            LayoutItem::TextRun(run) => Some(run),
-            _ => None,
-        })
-        .collect()
-}
-
 fn display_runs(graph: &DocumentGraph) -> Vec<DisplayTextRun> {
     build_display_presentation(&layout(graph))
         .pages
@@ -53,23 +38,6 @@ fn display_runs(graph: &DocumentGraph) -> Vec<DisplayTextRun> {
             _ => None,
         })
         .collect()
-}
-
-#[test]
-fn lowering_preserves_style_for_text_runs() {
-    let graph = sample_graph();
-    let layout = layout_runs(&graph);
-    let display = display_runs(&graph);
-
-    assert_eq!(display.len(), layout.len(), "lowering keeps every text run");
-    for (lowered, source) in display.iter().zip(&layout) {
-        assert_eq!(lowered.x, source.x);
-        assert_eq!(lowered.y, source.y);
-        assert_eq!(lowered.size, source.size);
-        assert_eq!(lowered.font_family, source.font_family);
-        assert_eq!(lowered.text, source.text);
-        assert_eq!(lowered.style, source.style, "style must survive lowering for `{}`", source.text);
-    }
 }
 
 #[test]

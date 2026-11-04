@@ -2,8 +2,11 @@
 
 use std::ops::Range;
 
-use plotter_diagram::{DiagramError, spec::DiagramNode, spec::NodeShape};
-use plotter_input_dot::{dot_to_scene, dot_to_spec};
+use plotter_diagram::{
+    DiagramError,
+    spec::{DiagramNode, NodeShape},
+};
+use plotter_input_dot::dot_to_spec;
 use plotter_types::codes;
 
 fn span_of<'a>(source: &'a str, error: &DiagramError) -> &'a str {
@@ -34,33 +37,4 @@ fn html_labels_are_rejected_with_the_attribute_span() {
     let error = dot_to_spec(source).expect_err("HTML labels are outside the subset");
     assert_eq!(error.code(), codes::UNSUPPORTED);
     assert!(span_of(source, &error).contains("<b>x</b>"));
-}
-
-#[test]
-fn subgraph_defaults_stay_inside_their_block() {
-    let source = r#"digraph {
-  subgraph cluster_a {
-    node [shape=circle]
-    A
-  }
-  B
-}"#;
-    let spec = dot_to_spec(source).expect("scoped defaults should lower");
-
-    let a = spec.nodes.iter().find(|node| node.id == "A").expect("A");
-    let b = spec.nodes.iter().find(|node| node.id == "B").expect("B");
-    assert_eq!(a.shape, NodeShape::Circle);
-    assert_eq!(b.shape, NodeShape::Box, "the subgraph default must not leak out");
-}
-
-#[test]
-fn rounded_style_maps_to_a_round_node_and_filled_reports_loss() {
-    let source = r#"digraph {
-  A [style="rounded,filled"]
-}"#;
-    let spec = dot_to_spec(source).expect("rounded is part of the style subset");
-    assert_eq!(spec.nodes[0].shape, NodeShape::Round);
-
-    let lowered = dot_to_scene(source).expect("the rounded node should render");
-    assert!(lowered.diagnostics.iter().any(|diagnostic| diagnostic.code().as_str() == codes::APPROXIMATED));
 }

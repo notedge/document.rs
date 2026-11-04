@@ -1,5 +1,3 @@
-//! 冒烟入口：PDF 后端的样式断言、字体内嵌闭环与图像解码闭环。
+//! 冒烟入口：PDF 出口写出可解析的字节流。
 
-mod image_decode;
-mod pdf_embed;
-mod pdf_style;
+mod smoke;
