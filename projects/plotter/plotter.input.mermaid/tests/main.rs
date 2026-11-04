@@ -28,3 +28,13 @@ fn unsupported_sequence_statements_fall_back_to_source() {
     let span = error.span().expect("a sequence refusal names the statement");
     assert_eq!(&source[span], "Note over A,B: shared");
 }
+
+#[test]
+fn activation_shorthand_is_refused_with_the_message_span() {
+    let source = "sequenceDiagram\n    A->>+B: ping\n";
+    let error = mermaid_to_scene(source).expect_err("the activation suffix has no AST carrier");
+
+    assert_eq!(error.code(), codes::UNSUPPORTED);
+    let span = error.span().expect("the refusal names the message");
+    assert_eq!(&source[span], "A->>+B: ping");
+}

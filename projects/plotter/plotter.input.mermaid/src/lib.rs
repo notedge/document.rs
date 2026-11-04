@@ -1,18 +1,9 @@
-//! Oak Mermaid frontend: source to diagram spec and to a lowered diagram.
-//!
-//! This module never assembles SVG or scene nodes. It maps the typed
-//! `oak-mermaid` AST onto [`plotter_diagram::spec::DiagramSpec`] and leaves geometry to
-//! [`plotter_diagram::compile::compile`] or [`plotter_diagram::compile::compile_sequence`] and
-//! [`plotter_diagram::render::render`] or [`plotter_diagram::render::render_sequence`].
-//!
-//! Layout diagnostics run without a [`plotter_diagram::SourceMap`]: the `oak-mermaid`
-//! AST exposes only the whole-diagram range, so no node, edge, or participant
-//! token is available. A Mermaid diagnostic therefore carries no primary
-//! label, while the DOT and PlantUML frontends do locate their tokens.
+#![warn(missing_docs)]
+#![doc = include_str!("readme.md")]
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use oak_core::{Builder, SourceText, parser::session::ParseSession};
+use oak_core::{Builder, SourceText, errors::OakError, parser::session::ParseSession};
 use oak_mermaid::{
     MermaidBuilder, MermaidLanguage,
     ast::{
@@ -201,8 +192,22 @@ pub fn parse_mermaid(source: &str) -> Result<MermaidRoot, DiagramError> {
             source.len()
         ))),
         Ok(root) => Ok(root),
-        Err(error) => Err(DiagramError::parse_failed(format!("`oak-mermaid` failed to build an AST: {error}"))),
+        Err(error) => Err(spanned_parse_error(source, &error)),
     }
+}
+
+/// Turn an `oak-mermaid` parser error into a refusal that keeps its span.
+///
+/// A syntax error records the offset of the offending token, so the refused
+/// statement stays locatable instead of collapsing into an unpositioned
+/// "parse failed" message.
+fn spanned_parse_error(source: &str, error: &OakError) -> DiagramError {
+    if let oak_core::errors::OakErrorKind::SyntaxError { message, offset, .. } = error.kind() {
+        let offset = (*offset).min(source.len());
+        let end = source[offset..].find('\n').map(|delta| offset + delta).unwrap_or(source.len());
+        return DiagramError::unsupported(message.clone()).with_span(offset..end);
+    }
+    DiagramError::parse_failed(format!("`oak-mermaid` failed to build an AST: {error}"))
 }
 
 /// Lower Mermaid source into a source-independent diagram spec.
@@ -585,6 +590,17 @@ const DIAGRAM_HEADERS: &[&str] = &[
     "zenuml",
 ];
 
+/// The authored arrow that carries a `+` or `-` activation shorthand.
+///
+/// `oak-mermaid` keeps no activation spans, so accepting `A->>+B` would lower
+/// the message and silently drop the activation. The shorthand is refused at
+/// its authored line instead.
+fn activation_suffix(line: &str) -> Option<&'static str> {
+    const SHORTHANDS: &[&str] =
+        &["-->>+", "-->>-", "->>+", "->>-", "-->+", "-->-", "->+", "->-"];
+    SHORTHANDS.iter().find(|token| line.contains(**token)).copied()
+}
+
 /// Reject sequence statements outside the documented lowering subset.
 ///
 /// `oak-mermaid` skips statements such as `Note`, `loop`, `alt`, `activate`,
@@ -610,6 +626,12 @@ fn validate_sequence_source(source: &str) -> Result<(), DiagramError> {
         }
         if starts_with_keyword(line, "participant") || starts_with_keyword(line, "actor") {
             continue;
+        }
+        if let Some(keyword) = activation_suffix(line) {
+            return Err(DiagramError::unsupported(format!(
+                "sequence activation shorthand `{keyword}` is not lowered, the diagram falls back to its source"
+            ))
+            .with_span(range));
         }
         if line.contains("-->>") || line.contains("->>") || line.contains("-->") || line.contains("->") {
             continue;
