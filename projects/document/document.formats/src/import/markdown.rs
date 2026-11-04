@@ -730,7 +730,9 @@ fn inline_code_text(raw: &str) -> String {
 
 fn parse_inline_link(node: RedNode<MarkdownLanguage>, source: &SourceText, context: &mut LinkContext) -> Option<Inline> {
     let raw = node.text(source);
-    if let Some((text, url, title)) = resolve_link_destination(raw.as_ref(), context) {
+    let span = node.span();
+    let site = SourceSpan { start: span.start as u32, end: span.end as u32 };
+    if let Some((text, url, title)) = resolve_link_destination(raw.as_ref(), context, site) {
         return Some(Inline::Link { target: RelationEndpoint::ExternalUri(url), display: vec![Inline::Text { text }], title });
     }
     Some(Inline::Text { text: decode_escaped_text(raw.trim_end()) })
@@ -738,7 +740,9 @@ fn parse_inline_link(node: RedNode<MarkdownLanguage>, source: &SourceText, conte
 
 fn parse_inline_image(node: RedNode<MarkdownLanguage>, source: &SourceText, context: &mut LinkContext) -> Option<Inline> {
     let raw = node.text(source);
-    let Some((alt, url, title)) = resolve_link_destination(raw.as_ref(), context)
+    let span = node.span();
+    let site = SourceSpan { start: span.start as u32, end: span.end as u32 };
+    let Some((alt, url, title)) = resolve_link_destination(raw.as_ref(), context, site)
     else {
         return Some(Inline::Text { text: decode_escaped_text(raw.trim_end()) });
     };
@@ -747,7 +751,16 @@ fn parse_inline_image(node: RedNode<MarkdownLanguage>, source: &SourceText, cont
 
 /// Resolve an inline or reference destination, recording explicit unresolved
 /// labels.
-fn resolve_link_destination(raw: &str, context: &mut LinkContext) -> Option<(String, String, Option<String>)> {
+///
+/// `site` is the syntactic range of the whole link / image token. The label
+/// lookup happens in the same collector pass that owns the node, so an
+/// unresolved explicit label can point at the exact source range instead of
+/// leaving the loss span-less.
+fn resolve_link_destination(
+    raw: &str,
+    context: &mut LinkContext,
+    site: SourceSpan,
+) -> Option<(String, String, Option<String>)> {
     if let Some((text, url, title)) = split_markdown_link(raw) {
         return Some((text, url, title));
     }
@@ -762,7 +775,7 @@ fn resolve_link_destination(raw: &str, context: &mut LinkContext) -> Option<(Str
                     message: format!("unresolved reference link label: {label}"),
                     status: SemanticStatus::Unresolved,
                 },
-                None,
+                Some(site),
             ));
         }
     }
