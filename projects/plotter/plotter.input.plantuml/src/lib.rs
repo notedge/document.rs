@@ -1,12 +1,5 @@
-//! PlantUML class and sequence frontend.
-//!
-//! This module maps the typed `oak-plantuml` AST onto [`DiagramSpec`]. It never
-//! builds scene nodes or SVG. Lowering accepts the documented subset only:
-//! `@startuml` / `@enduml` around one class diagram or one sequence diagram,
-//! class declarations with members, the six class relation spellings,
-//! participant / actor declarations, the four message arrows, and activation
-//! spans. Everything outside that set fails with a [`DiagramError`] carrying
-//! the offending byte range.
+#![warn(missing_docs)]
+#![doc = include_str!("readme.md")]
 
 use std::{collections::BTreeSet, ops::Range};
 
@@ -14,8 +7,8 @@ use oak_core::{Builder, SourceText, errors::OakError, parser::session::ParseSess
 use oak_plantuml::{
     PlantUmlBuilder, PlantUmlLanguage,
     ast::{
-        ClassDeclaration, ClassDiagram, ClassMember, ClassRelation, ClassRelationKind, MemberVisibility, MessageArrow,
-        ParticipantKind, PlantUmlDiagram, PlantUmlRoot, SequenceDiagram,
+        ClassDeclaration, ClassDiagram, ClassKeyword, ClassMember, ClassRelation, ClassRelationKind, MemberVisibility,
+        MessageArrow, ParticipantKind, PlantUmlDiagram, PlantUmlRoot, SequenceDiagram,
     },
 };
 use plotter_scene::SceneResolver;
@@ -330,13 +323,18 @@ fn sequence_spec(diagram: &SequenceDiagram) -> Result<(DiagramSpec, SourceMap), 
 }
 
 fn class_label(class: &ClassDeclaration) -> String {
-    let mut label = class
+    let name = class
         .display
         .as_deref()
         .map(str::trim)
         .filter(|display| !display.is_empty())
-        .unwrap_or_else(|| class.name.trim())
-        .to_string();
+        .unwrap_or_else(|| class.name.trim());
+    let mut label = match class.keyword {
+        ClassKeyword::Class => name.to_string(),
+        ClassKeyword::Interface => format!("«interface» {name}"),
+        ClassKeyword::Abstract => format!("«abstract» {name}"),
+        ClassKeyword::Enum => format!("«enum» {name}"),
+    };
     for member in &class.members {
         let text = member_text(member);
         if !text.is_empty() {
@@ -428,6 +426,7 @@ fn approximated_at(message: impl Into<String>, span: Range<usize>) -> Diagnostic
 fn reject_unsupported(source: &str) -> Result<(), DiagramError> {
     let mut start: Option<Range<usize>> = None;
     let mut end: Option<Range<usize>> = None;
+    let mut in_block_comment = false;
     let mut offset = 0;
 
     for raw in source.split_inclusive('\n') {
@@ -437,12 +436,25 @@ fn reject_unsupported(source: &str) -> Result<(), DiagramError> {
         let line = raw.trim();
         offset += raw.len();
 
+        if in_block_comment {
+            in_block_comment = !line.contains("'/");
+            continue;
+        }
+        if line.starts_with("/'") {
+            in_block_comment = !line[2..].contains("'/");
+            continue;
+        }
         if line.is_empty() || line.starts_with('\'') {
             continue;
         }
         let lower = line.to_ascii_lowercase();
         if lower.starts_with("@start") {
             if lower.starts_with("@startuml") {
+                let rest = &lower["@startuml".len()..];
+                if !rest.is_empty() && !rest.starts_with(char::is_whitespace) && !rest.starts_with('(') {
+                    return Err(DiagramError::unsupported(format!("unknown PlantUML marker `{line}`"))
+                        .with_span(line_start..line_end));
+                }
                 if start.is_some() {
                     return Err(DiagramError::unsupported("a PlantUML source declares more than one `@startuml`")
                         .with_span(line_start..line_end));

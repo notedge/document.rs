@@ -37,3 +37,29 @@ fn preprocessor_directives_are_refused_with_their_span() {
     assert_eq!(error.code(), codes::UNSUPPORTED);
     assert_eq!(span_of(source, &error), "!include common.iuml");
 }
+
+#[test]
+fn block_comments_are_skipped_before_the_refusal_scan() {
+    let source = "@startuml\n/'\nnote over Order : draft\n'/\nclass Order {\n  +id : String\n}\n@enduml\n";
+    let spec = plantuml_to_spec(source).expect("block comments carry no diagram meaning");
+
+    assert_eq!(spec.nodes, vec![node("Order", Some("Order\n+id : String"), NodeShape::Box)]);
+}
+
+#[test]
+fn class_keywords_survive_as_label_prefixes() {
+    let source = "@startuml\ninterface Repo {\n  +find() : void\n}\n@enduml\n";
+    let spec = plantuml_to_spec(source).expect("interfaces are part of the class subset");
+
+    let label = spec.nodes[0].label.as_deref().expect("an interface keeps its name");
+    assert!(label.starts_with("«interface» Repo"), "got {label}");
+}
+
+#[test]
+fn start_marker_must_be_a_delimited_keyword() {
+    let source = "@startumlx\nclass A\n@enduml\n";
+    let error = plantuml_to_spec(source).expect_err("`@startumlx` is not the start marker");
+
+    assert_eq!(error.code(), codes::UNSUPPORTED);
+    assert_eq!(span_of(source, &error), "@startumlx");
+}
