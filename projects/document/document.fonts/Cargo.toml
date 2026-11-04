@@ -6,9 +6,12 @@ description = "Bundled math font assets (Latin Modern Math, XITS Math) and insta
 license.workspace = true
 edition.workspace = true
 readme = "readme.md"
-include = ["src/lib.rs", "src/metrics.rs", "src/readme.md", "readme.md", "fonts/*"]
+include = ["src/lib.rs", "src/metrics.rs", "src/readme.md", "readme.md", "fonts/*", "tests/*.rs", "tests/fixtures/*"]
 
 [dependencies]
 document-text = { workspace = true }
 document-compose = { workspace = true }
 acorn-ttf = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

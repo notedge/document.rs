@@ -1600,4 +1600,36 @@ mod kerning_tests {
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].len(), 3);
     }
+
+    #[test]
+    fn unreadable_body_face_falls_back_with_an_explicit_diagnostic() {
+        // A damaged face that cannot supply `head`/`hmtx`: the first 64 bytes
+        // of the bundled Tinos-Regular file are not a parseable TrueType face.
+        let damaged = &document_fonts::BODY_FACES[0].bytes[..64];
+        let metrics = BodyMetrics::from_faces([(
+            document_fonts::BodyFaceKey {
+                family: document_fonts::BodyFamily::Serif,
+                style: document_fonts::BodyFaceStyle::Regular,
+            },
+            "damaged/Tinos".to_string(),
+            damaged,
+        )]);
+        assert_eq!(metrics.unreadable(), ["damaged/Tinos".to_string()]);
+
+        let mut graph = DocumentGraph::new(document_ir::DocumentId(7));
+        graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Hello world".to_string() }] });
+        let (plan, diagnostics) = layout_with_metrics(&graph, &LayoutHint::a4(), &Diagrams::new(), &metrics);
+
+        let unreadable = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "vutex.layout.metrics.face_unreadable")
+            .expect("an unreadable face is reported, never silently degraded");
+        assert_eq!(unreadable.severity, Severity::Warning);
+        assert!(unreadable.message.contains("damaged/Tinos"), "the message names the face: {}", unreadable.message);
+
+        // The fallback still lays the text out with the heuristic width model,
+        // so the user sees a page with a warning instead of an empty document.
+        assert_eq!(plan.pages.len(), 1);
+        assert!(plan.pages[0].items.iter().any(|item| matches!(item, LayoutItem::TextRun(_))));
+    }
 }
