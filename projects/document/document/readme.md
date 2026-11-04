@@ -1,35 +1,34 @@
 # document
 
-Document 门面：按 feature 打开 `document::*` 模块，再导出对应 `document-*` crate——同一类型，无重复包装。
+Document 门面：按 feature 打开 `document::*`，再导出对应 `document-*` crate——同一类型，无重复包装。
 
-产品树架构（包图、主链、资产边界）见上级 [`../readme.md`](../readme.md)。
+产品树架构见 [`../readme.md`](../readme.md)；仓库总览见根 [`../../../readme.md`](../../../readme.md)。
 
 ## Features
 
-默认 feature **为空**。按需打开：
+默认 feature **为空**，按需打开：
 
-| Feature | 模块 | 底层 crate |
-|---|---|---|
-| `ir` | `document::ir` | `document.ir` |
-| `formats` | `document::formats` | `document.formats`（无格式 feature） |
-| `types` | `document::types` | `document.types` |
-| `diagnostic` | `document::diagnostic` | `document.diagnostic` |
-| `convert` | `document::convert` | `document.convert` |
-| `compose` / `style` / `text` / `presentation` / `layout` | 同名模块 | 对应 `document.*` |
-| `renderer` / `renderer-{svg,pdf,html,raster}` | `document::renderer*` | 对应 renderer crate |
-| `input-{markdown,tex,typst}` | `document::input::*` | 对应 input crate |
-| `markdown` / `notedown` / `docx` / … | 经 `formats` | `document.formats` + 语言 feature |
+| Feature                                                  | 模块                  | 底层               |
+|----------------------------------------------------------|-----------------------|--------------------|
+| `ir`                                                     | `document::ir`        | `document-ir`      |
+| `formats`                                                | `document::formats`   | `document-formats` |
+| `types` / `diagnostic` / `convert`                       | 同名                  | 对应 crate         |
+| `compose` / `style` / `text` / `presentation` / `layout` | 同名                  | 排版链             |
+| `renderer` / `renderer-{svg,pdf,html,raster}`            | `document::renderer*` | 渲染后端           |
+| `input-{markdown,tex,typst}`                             | `document::input::*`  | 输入适配           |
+| `markdown` / `notedown` / `docx` / …                     | 经 `formats`          | 格式语言 feature   |
 
 `formats` 与各格式 feature 会连带打开 `ir`。
 
 ## Example
 
 ```toml
-[dependencies]
-document = { version = "0.1", default-features = false, features = ["ir", "markdown", "docx"] }
+document = { path = "projects/document/document", default-features = false, features = ["ir", "markdown"] }
 ```
 
 ```rust
-use document::ir::DocumentGraph;
-use document::formats::import::markdown;
+use document::formats::import::markdown::import_markdown_bytes;
+
+let graph = import_markdown_bytes("note.md", "# 标题\n\n正文。")?;
+assert!(!graph.blocks.is_empty());
 ```

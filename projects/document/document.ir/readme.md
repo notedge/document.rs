@@ -1,20 +1,17 @@
-# notedown-ir
+# document-ir
 
-Notedown document semantic IR (`R-7.0`). Owns stable identities, content blocks, relations, assets, provenance, and
-explicit semantic status.
+文档语义 IR：`DocumentGraph`、块 / 行内、关系、资产、provenance 与显式 `SemanticStatus`。不含解析器、排版或渲染。
 
-## Boundaries
+下游转换与排版都围绕本图展开；门面见 [`document`](../document/readme.md)。
 
-- Does **not** depend on text parsers, `oak-notedown`, Acorn format views, or Panduck.
-- Oak AST, Acorn layout views, and Panduck orchestration adapt **into** this crate.
-- `SemanticStatus`, `CoverageReport`, and `LossMarker` live here. Unified `rust-boost/diagnostic` is for cross-layer
-  reporting during import/export, not a dependency of this crate.
+## Example
 
-## Wire format
+```rust
+use document_ir::{Block, DocumentGraph, DocumentId, Inline};
 
-Serialize with [`DocumentEnvelope`](src/wire.rs) (`notedown-ir/v1`). Call `validate()` after load before treating a
-graph as production-safe.
-
-## Acceptance
-
-Integration tests under `tests` are grouped by concern: `contract/`, `graph/`, `inline/`, and `validate/`.
+let mut graph = DocumentGraph::new(DocumentId(1));
+graph.push_block(Block::Paragraph {
+    content: vec![Inline::Text { text: "你好".into() }],
+});
+assert!(graph.validate().is_valid());
+```

@@ -1,41 +1,45 @@
 # document-convert
 
-Implementation modules for conversion routes and report assembly. Public API is `lib.rs`.
+转换编排：经 `document-formats` 读写，持有 `DocumentGraph`，产出报告与发布物。适配器作者用本 crate；CLI 用户走下游产品。
 
-## Route availability
+门面见 [`document`](../document/readme.md)（feature `convert`）。
 
-`supports_route(from, to)` is derived from the single capability table in
-`document_formats::capabilities()`:
+## Example
 
-| capability status | routable |
+```rust
+use document_convert::convert_bytes;
+
+let output = convert_bytes("markdown", "html", "note.md", b"# Hi\n".to_vec(), None)
+    .expect("markdown → html route is wired");
+assert!(output.html.as_deref().unwrap_or("").contains("Hi"));
+```
+
+## 路由可用性
+
+`supports_route(from, to)` 由 `document_formats::capabilities()` 的同一张能力表推导：
+
+| 能力状态 | 是否可路由 |
 | --- | --- |
-| `Ready` | yes |
-| `Partial` | yes — wired and usable; gaps surface per document as loss markers / diagnostics |
-| `Planned` | no — not wired yet |
-| `Unavailable` | no — explicit opt-out, including wired-but-not-deliverable exporters |
-| missing entry | no — the matching cargo feature is off |
+| `Ready` | 是 |
+| `Partial` | 是。已接线可用，具体文档的缺口以 loss marker / 诊断暴露 |
+| `Planned` | 否。尚未接线 |
+| `Unavailable` | 否。显式关闭，包括已接线但不可交付的导出端 |
+| 表中缺项 | 否。对应 cargo feature 未打开 |
 
-A route is available iff `from` is a wired reader (`READERS`), `to` is a wired
-writer (`WRITERS`), the `Import` status of `from` is routable and the `Export`
-status of `to` is routable. `READERS` / `WRITERS` describe wiring only; they no
-longer decide availability by themselves.
+一条路由可用，当且仅当：`from` 是已接线的 reader（`READERS`），`to` 是已接线的 writer（`WRITERS`），
+`from` 的 `Import` 状态可路由，且 `to` 的 `Export` 状态可路由。`READERS` / `WRITERS` 只描述接线，
+不再单独决定可用性。
 
-`docx` and `pdf` exports are `Partial`, so `→ docx` and `→ pdf` routes stay
-available. The conservative DOCX exporter refuses `Math` / `RawHtml` / opaque
-blocks with an `unsupported` diagnostic instead of dropping them, and the PDF
-writer runs `layout → presentation → renderer-pdf`, which keeps layout, embeds
-glyphs for CJK text and typesets math.
+`docx` 与 `pdf` 导出为 `Partial`，所以 `→ docx`、`→ pdf` 路由保持可用。保守的 DOCX 导出端遇到
+`Math` / `RawHtml` / opaque 块时以 `unsupported` 诊断拒绝，而不是静默丢弃。PDF writer 依次执行
+`layout → presentation → renderer-pdf`，保留布局、为 CJK 文本嵌入字形并排版数学。
 
-`Partial` expresses "partially usable" without weakening the route: the route
-stays `true` and each document reports its own gaps through
-`coverage.loss` / `losses[].status` plus the diagnostic envelope. A route is
-only withdrawn when the target cannot deliver for the general case at all.
+`Partial` 表示「部分可用」，不削弱路由：路由仍为 `true`，每份文档通过 `coverage.loss` /
+`losses[].status` 与诊断信封报告自己的缺口。只有当目标对一般场景完全无法交付时才撤回路由。
 
-`convert_bytes` applies the same predicate as an entry gate and returns
-`unsupported_format` when a route is not available.
+`convert_bytes` 以同一谓词作为入口门，路由不可用时返回 `unsupported_format`。
 
-## Downstream consumers
+## 下游消费
 
-`panduck-napi` exposes `supports_conversion` and `supported_routes` directly
-from these two functions, so a `false` here becomes a `false` in the NAPI
-surface with no extra mapping.
+`panduck-napi` 由上述两个函数直接暴露 `supports_conversion` 与 `supported_routes`，因此这里的 `false`
+在 NAPI 表面就是 `false`，无需额外映射。
