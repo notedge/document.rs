@@ -22,6 +22,10 @@ document-diagnostic = { workspace = true }
 
 document-ir = { workspace = true }
 document-formats = { workspace = true, features = ["markdown", "notedown", "docx", "doc", "html", "pdf", "epub"] }
+document-compose = { workspace = true }
+document-layout = { workspace = true }
+document-presentation = { workspace = true }
+document-renderer-pdf = { workspace = true }
 plotter-diagram = { workspace = true }
 plotter-input-plantuml = { workspace = true }
 plotter-input-dot = { workspace = true }

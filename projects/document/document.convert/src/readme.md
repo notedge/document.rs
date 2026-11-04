@@ -20,11 +20,11 @@ writer (`WRITERS`), the `Import` status of `from` is routable and the `Export`
 status of `to` is routable. `READERS` / `WRITERS` describe wiring only; they no
 longer decide availability by themselves.
 
-Today `docx` and `pdf` exports are `Unavailable`, so every `→ docx` and
-`→ pdf` route reports `false`: the conservative DOCX exporter rejects
-`Math` / `RawHtml` / opaque blocks, and `export::pdf` cannot encode CJK and
-prints math as source text. The writers stay compiled and exported; only the
-advertised route is withdrawn.
+`docx` and `pdf` exports are `Partial`, so `→ docx` and `→ pdf` routes stay
+available. The conservative DOCX exporter refuses `Math` / `RawHtml` / opaque
+blocks with an `unsupported` diagnostic instead of dropping them, and the PDF
+writer runs `layout → presentation → renderer-pdf`, which keeps layout, embeds
+glyphs for CJK text and typesets math.
 
 `Partial` expresses "partially usable" without weakening the route: the route
 stays `true` and each document reports its own gaps through
@@ -38,7 +38,4 @@ only withdrawn when the target cannot deliver for the general case at all.
 
 `panduck-napi` exposes `supports_conversion` and `supported_routes` directly
 from these two functions, so a `false` here becomes a `false` in the NAPI
-surface with no extra mapping. PDF consumers in panduck must use the
-`import → layout → presentation → renderer-pdf` chain instead of the withdrawn
-`convert → pdf` writer; see the migration checklist in the route honesty
-report.
+surface with no extra mapping.

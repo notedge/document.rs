@@ -49,14 +49,14 @@ pub fn capabilities() -> Vec<FormatCapability> {
     #[cfg(feature = "docx")]
     {
         capabilities.push(FormatCapability { id: "docx", direction: FormatDirection::Import, status: FormatStatus::Partial });
-        // The conservative DOCX exporter is wired but not deliverable as a
-        // general target: `Block::Math`, `Block::RawHtml` and opaque blocks
-        // return an unsupported error instead of being represented. Marking the
-        // export `Unavailable` withdraws the route while keeping the writer.
+        // The conservative DOCX exporter covers headings, paragraphs, lists,
+        // tables, code, media and footnotes. `Block::Math`, `Block::RawHtml`
+        // and opaque blocks are refused with an unsupported diagnostic instead
+        // of being silently dropped, so the route stays partially deliverable.
         capabilities.push(FormatCapability {
             id: "docx",
             direction: FormatDirection::Export,
-            status: FormatStatus::Unavailable,
+            status: FormatStatus::Partial,
         });
     }
     #[cfg(feature = "doc")]
@@ -71,15 +71,13 @@ pub fn capabilities() -> Vec<FormatCapability> {
     #[cfg(feature = "pdf")]
     {
         capabilities.push(FormatCapability { id: "pdf", direction: FormatDirection::Import, status: FormatStatus::Partial });
-        // `export::pdf` is wired but not deliverable: it hard-errors on every
-        // character outside WinAnsiEncoding (all CJK), prints math as source
-        // text, and ignores layout entirely. The deliverable PDF path is
-        // `layout → presentation → renderer-pdf`, so the direct export must not
-        // be advertised as a route.
+        // The PDF export is delivered by the `layout → presentation →
+        // renderer-pdf` chain, so it keeps layout, embeds glyphs for CJK text
+        // and typesets math instead of printing its source.
         capabilities.push(FormatCapability {
             id: "pdf",
             direction: FormatDirection::Export,
-            status: FormatStatus::Unavailable,
+            status: FormatStatus::Partial,
         });
     }
     #[cfg(feature = "epub")]

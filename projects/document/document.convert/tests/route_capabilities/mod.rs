@@ -12,13 +12,13 @@ fn every_source_routes_to_deliverable_writers() {
 }
 
 #[test]
-fn unavailable_exports_are_not_advertised() {
-    // `document.formats::capabilities()` marks both exports `Unavailable`:
-    // the conservative DOCX exporter rejects `Math` / `RawHtml` / opaque
-    // blocks, and `export::pdf` cannot deliver CJK or typeset math at all.
+fn partial_exports_keep_their_routes() {
+    // The DOCX exporter refuses `Math` / `RawHtml` / opaque blocks with an
+    // unsupported diagnostic per document, and the PDF writer goes through
+    // `layout → presentation → renderer-pdf`, so both stay advertised.
     for from in SOURCES {
-        assert!(!supports_route(from, "docx"), "{from} -> docx");
-        assert!(!supports_route(from, "pdf"), "{from} -> pdf");
+        assert!(supports_route(from, "docx"), "{from} -> docx");
+        assert!(supports_route(from, "pdf"), "{from} -> pdf");
     }
 }
 
@@ -32,7 +32,6 @@ fn unwired_or_unknown_formats_are_rejected() {
 #[test]
 fn supported_routes_is_the_filtered_cross_product() {
     let routes = supported_routes();
-    assert_eq!(routes.len(), SOURCES.len() * 3);
+    assert_eq!(routes.len(), SOURCES.len() * 5);
     assert!(routes.iter().all(|(from, to)| supports_route(from, to)));
-    assert!(!routes.iter().any(|(_, to)| to == "docx" || to == "pdf"));
 }
