@@ -48,6 +48,7 @@ plotter-motion = { path = "projects/plotter/plotter.motion" }
 plotter-input-mermaid = { path = "projects/plotter/plotter.input.mermaid" }
 plotter-input-dot = { path = "projects/plotter/plotter.input.dot" }
 plotter-input-plantuml = { path = "projects/plotter/plotter.input.plantuml" }
+plotter-input-tikz = { path = "projects/plotter/plotter.input.tikz" }
 
 # --- Document (IR / formats / convert / layout / renderer) ---
 document-ir = { path = "projects/document/document.ir" }
