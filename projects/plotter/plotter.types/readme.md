@@ -1,21 +1,15 @@
-# davinci-types
+# plotter-types
 
-Shared geometry, color, transform, and diagnostic primitives for the DaVinci diagram subsystem inside the Notedown
-workspace.
+Plotter 共享原语：几何 / 颜色 / 变换 / 诊断；GoG 侧 ID 与诊断码在 `plotter_types::plot`（原 apollo-types，**无**单独
+`plotter.core`）。
 
-## Boundaries
+一般依赖门面 [`plotter`](../plotter/readme.md) 即可；只有需要收窄依赖面时才直接用本 crate。
 
-- No dependency on `document.ir`, Oak, VuTeX, or a renderer.
-- `plotter.scene` and `plotter.diagram` build on these primitives.
-- Diagnostics reuse the workspace `boost-diagnostic` model with stable `davinci.*` codes.
+## Example
 
-## Contents
+```rust
+use plotter_types::{Color, Point, Rect};
 
-- `Point`, `Size`, `Rect`, `Bounds`
-- `Transform` (affine translate / scale / rotate)
-- `Color` (RGBA, directly usable in CSS and SVG)
-- `diagnostic`, `origin`, `codes`, and re-exported diagnostic records
-
-## Acceptance
-
-`cargo test -p davinci-types` runs the integration tests under `tests`.
+let frame = Rect::new(0.0, 0.0, 320.0, 240.0);
+let _ = (frame, Color::rgba(26, 51, 77, 255), Point::new(1.0, 2.0));
+```
