@@ -69,6 +69,12 @@ fn citations_keep_every_key_and_ignore_the_optional_note() {
     let imported = import_source("virtual://tex-cite-keys.tex", source).expect("multi-key citations must import");
     assert!(imported.report.lossy.iter().any(|item| item.code == "import.tex.citation_marker"), "{:#?}", imported.report.lossy);
 
+    assert!(
+        imported.report.lossy.iter().any(|item| item.code == "import.tex.citation_note"),
+        "the dropped optional note must be reported: {:#?}",
+        imported.report.lossy
+    );
+
     let rendered = render_svg("virtual://tex-cite-keys.tex", source).expect("citations must render");
     for marker in ["[@a]", "[@b]", "[@c]"] {
         assert!(rendered.svg.contains(marker), "missing citation marker {marker}");

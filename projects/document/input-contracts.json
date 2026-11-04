@@ -69,6 +69,7 @@
         {"construct": "\\section* unnumbered", "code": "import.tex.starred_command", "loss": "the section kind has no numbering state", "span": "none"},
         {"construct": "numbered math environment", "code": "import.tex.math_numbering", "loss": "Block::Math has no number or anchor field", "span": "exact"},
         {"construct": "citation marker", "code": "import.tex.citation_marker", "loss": "rendered as the authored [@key] marker", "span": "exact"},
+        {"construct": "citation optional note", "code": "import.tex.citation_note", "loss": "the optional note has no IR carrier", "span": "none"},
         {"construct": "footnote body", "code": "import.tex.footnote_body", "loss": "carried on Inline::Note because IR has no footnote collection", "span": "none"},
         {"construct": "math style command in text mode", "code": "import.tex.math_style_in_text", "loss": "the argument survives without the style", "span": "exact"},
         {"construct": "text-mode spacing command", "code": "import.tex.space_marker", "loss": "kept as a tex-space attribute marker", "span": "none"},

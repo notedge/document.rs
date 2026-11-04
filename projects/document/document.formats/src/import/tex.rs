@@ -727,6 +727,13 @@ impl<'a> TexLowerer<'a> {
                     self.loss("import.tex.empty_citation", "citation command has no key", SemanticStatus::Partial);
                     return InlineOutcome::Dropped;
                 }
+                if command.arguments.iter().any(|argument| matches!(argument, TexArgument::Optional(_))) {
+                    self.loss(
+                        "import.tex.citation_note",
+                        "citation note argument has no IR carrier and is dropped",
+                        SemanticStatus::Partial,
+                    );
+                }
                 self.loss(
                     "import.tex.citation_marker",
                     "citation renders as an authored `[@key]` marker because the IR has no bibliography collection",
