@@ -19,6 +19,9 @@ pub const MATH_SOURCE_PRESERVED: &str = "import.typst.math.source_preserved";
 /// Diagnostic code for a dynamic construct whose group the source never closes.
 pub const UNTERMINATED_GROUP: &str = "vutex.input.typst.unterminated_dynamic_group";
 
+/// Diagnostic code for an escape sequence the frontend cannot delimit faithfully.
+pub const ESCAPE_UNSUPPORTED: &str = "vutex.input.typst.escape_unsupported";
+
 /// Diagnostic code for a source larger than the profile's byte budget.
 pub const SOURCE_TOO_LARGE: &str = "vutex.input.typst.source_too_large";
 

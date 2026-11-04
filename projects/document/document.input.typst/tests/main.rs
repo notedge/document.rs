@@ -2,3 +2,4 @@
 
 mod fail_closed;
 mod render_smoke;
+mod text_nodes;

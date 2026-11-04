@@ -10,7 +10,9 @@ use document_ir::DocumentGraph;
 use document_layout::{Diagrams, LayoutHint, document::layout_with_diagnostics};
 use document_presentation::build_display_presentation;
 
-use crate::report::{IMPORT_FAILED, MAX_SOURCE_BYTES, SOURCE_TOO_LARGE, build_diagnostics, build_report, unterminated_group};
+use crate::report::{
+    ESCAPE_UNSUPPORTED, IMPORT_FAILED, MAX_SOURCE_BYTES, SOURCE_TOO_LARGE, build_diagnostics, build_report, unterminated_group,
+};
 
 /// Outcome of a Typst import: the document graph, its conversion report, and
 /// the diagnostics the lowering produced.
@@ -98,6 +100,14 @@ pub fn import_source(label: &str, source: &str) -> Result<TypstDocument, TypstEr
     }
     let report = build_report(&graph);
     let diagnostics = build_diagnostics(&graph, source);
+    if let Some(found) = diagnostics.iter().find(|diagnostic| diagnostic.code == "import.typst.escape_unsupported") {
+        return Err(TypstError::from(Diagnostic {
+            code: ESCAPE_UNSUPPORTED.to_string(),
+            severity: Severity::Error,
+            message: found.message.clone(),
+            span: found.span,
+        }));
+    }
     Ok(TypstDocument { graph, report, diagnostics })
 }
 

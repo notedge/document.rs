@@ -201,6 +201,11 @@ impl<'a> TypstLowerer<'a> {
                 if is_comment(text) {
                     return;
                 }
+                if let Some(literal) = self.escape_text(text) {
+                    self.line_breaks = 0;
+                    self.push_text(&literal, sink);
+                    return;
+                }
                 self.advance_text(text);
                 self.line_breaks = 0;
                 self.push_text(text, sink);
@@ -480,7 +485,14 @@ impl<'a> TypstLowerer<'a> {
         while index < items.len() {
             match &items[index] {
                 TypstItem::Text(text) => {
-                    if !is_comment(text) {
+                    if text.starts_with('\\') {
+                        self.loss(
+                            "import.typst.escape_unsupported",
+                            "Typst escape sequence cannot be imported faithfully in an inline fragment",
+                            SemanticStatus::Unsupported,
+                        );
+                    }
+                    else if !is_comment(text) {
                         push_text_inlines(&mut inlines, text);
                     }
                 }
@@ -575,6 +587,34 @@ impl<'a> TypstLowerer<'a> {
         }
         let ordered = ordered?;
         Some((lines, ordered, offset))
+    }
+
+    /// Turns a text item that is a bare Typst escape marker into the literal
+    /// character it protects.
+    ///
+    /// The Typst frontend splits `\*` into a text item holding only the
+    /// backslash and drops the escaped character, so lowering reads the
+    /// protected character back from the source and records the downgrade
+    /// instead of emitting a lone backslash as body text.
+    fn escape_text(&mut self, text: &str) -> Option<String> {
+        if !text.starts_with('\\') {
+            return None;
+        }
+        let rest = self.source.get(self.cursor..)?;
+        if !rest.starts_with(text) {
+            return None;
+        }
+        let escaped = rest[1..].chars().next()?;
+        let width = 1 + escaped.len_utf8();
+        let span = SourceSpan::new(self.cursor, self.cursor + width);
+        self.loss_at(
+            "import.typst.escape_unsupported",
+            format!("Typst escape sequence cannot be imported faithfully: \\{escaped}"),
+            SemanticStatus::Unsupported,
+            span,
+        );
+        self.cursor += width;
+        Some(escaped.to_string())
     }
 
     fn advance_text(&mut self, text: &str) {

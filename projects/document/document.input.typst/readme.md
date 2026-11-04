@@ -13,6 +13,11 @@ let rendered = document_input_typst::render_svg("main.typ", "= Title\n\nHello *w
 println!("{}", rendered.svg);
 ```
 
+Comments are dropped without leaving text nodes, and inline markup delimiters stay
+out of child text. Escape sequences (`\*` and friends) are rejected with
+`vutex.input.typst.escape_unsupported` because the current frontend splits the
+backslash from the protected character and shifts the spans that follow.
+
 A source above `MAX_SOURCE_BYTES` (8 MiB) is rejected with
 `vutex.input.typst.source_too_large` before parsing. An empty source imports as
 a documented lossy document instead of a failure.
@@ -28,3 +33,4 @@ a documented lossy document instead of a failure.
 | 3 Typst 数学进 `report.preserved`，layout 诊断出现 | `tests/render_smoke/mod.rs` · `typst_math_is_preserved_and_layout_reports_the_language_gap` |
 | 4 与 Markdown 语义子集的 block 结构可比 | `tests/render_smoke/mod.rs` · `typst_and_markdown_agree_on_the_shared_semantic_subset` |
 | 5 平衡多行组一条诊断且前后正文存活，未闭合组拒绝 | `tests/render_smoke/mod.rs` · `balanced_multiline_group_stays_one_opaque_construct`、`unclosed_group_is_rejected` |
+| 6 注释与行内 markup 不留下冒充正文的 text 节点，转义序列被拒绝 | `tests/text_nodes/mod.rs` · `comments_and_inline_markup_do_not_masquerade_as_body_text`、`escape_sequences_are_rejected_before_any_fake_text` |
