@@ -4,7 +4,8 @@
 //! `tests/main.rs` 里会和「无字体」断言并行竞争。
 
 use document_compose::Severity;
-use document_fonts::install_default_math_font;
+use document_compose::math::MathConstant;
+use document_fonts::{LATIN_MODERN_MATH, install_default_math_font};
 use document_formats::lower_tex_formula_source;
 use document_ir::{Block, DocumentGraph, DocumentId, Inline, MathDisplay, MathFormula};
 use document_layout::{
@@ -14,7 +15,7 @@ use document_layout::{
     math::{LayoutNode, layout_formula},
     plan::{LayoutItem, LayoutPage},
 };
-use document_text::math::MathFontFamily;
+use document_text::math::{MathFontFacts, MathFontFamily};
 
 const NOT_TYPESET: &str = "vutex.layout.math.not_typeset";
 
@@ -50,6 +51,27 @@ fn shifted_box(node: &LayoutNode) -> Option<f64> {
         LayoutNode::HBox(hbox) if hbox.shift.to_f64() != 0.0 => Some(hbox.shift.to_f64()),
         LayoutNode::HBox(hbox) => hbox.children.iter().find_map(shifted_box),
         LayoutNode::VBox(vbox) => vbox.children.iter().find_map(shifted_box),
+        _ => None,
+    }
+}
+
+fn collect_glyph_sizes(node: &LayoutNode, sizes: &mut Vec<f64>) {
+    match node {
+        LayoutNode::Glyph(glyph) => sizes.push(glyph.size.to_f64()),
+        LayoutNode::HBox(hbox) => hbox.children.iter().for_each(|child| collect_glyph_sizes(child, sizes)),
+        LayoutNode::VBox(vbox) => vbox.children.iter().for_each(|child| collect_glyph_sizes(child, sizes)),
+        _ => {}
+    }
+}
+
+fn fraction_stack(node: &LayoutNode) -> Option<(&document_layout::math::HBox, &document_layout::math::VBox)> {
+    match node {
+        LayoutNode::HBox(hbox) if hbox.shift.to_f64() != 0.0 => match hbox.children.first() {
+            Some(LayoutNode::VBox(vbox)) => Some((hbox, vbox)),
+            _ => None,
+        },
+        LayoutNode::HBox(hbox) => hbox.children.iter().find_map(fraction_stack),
+        LayoutNode::VBox(vbox) => vbox.children.iter().find_map(fraction_stack),
         _ => None,
     }
 }
@@ -125,5 +147,61 @@ fn bundled_fonts_turn_source_text_into_typeset_geometry() {
         result.metrics.width.to_f64(),
         result.metrics.height.to_f64(),
         result.metrics.depth.to_f64()
+    );
+
+    // --- fraction: script-scaled digits on the font's own shifts -----------
+    //
+    // `\frac{1}{2}` inline demotes both arguments from Text to Script style, so
+    // the digits must come out at `ScriptPercentScaleDown` of the base em and
+    // the numerator/denominator baselines must sit where the font's
+    // `FractionNumeratorShiftUp` / `FractionDenominatorShiftDown` put them.
+    // KaTeX reports 0.700 and MathJax 0.707 for the same formula, which is the
+    // script scale of the faces they ship, so 1.0 here would be the defect.
+    let facts = MathFontFacts::from_bytes(LATIN_MODERN_MATH).expect("the bundled Latin Modern Math parses");
+    let constant = |name: MathConstant| {
+        facts
+            .constants()
+            .font_value(name)
+            .unwrap_or_else(|| panic!("the bundled font publishes {name:?}"))
+            .to_f64()
+    };
+    let base = 14.0;
+    let script_ratio = constant(MathConstant::ScriptPercentScaleDown);
+    let numerator_shift = constant(MathConstant::FractionNumeratorShiftUp);
+    let denominator_shift = constant(MathConstant::FractionDenominatorShiftDown);
+
+    let fraction = lower_tex_formula_source(r"\frac{1}{2}", MathDisplay::Inline);
+    let (fraction_result, fraction_root, _) =
+        layout_formula(&fraction, base).expect("the bundled default font lays a fraction out");
+    let mut sizes = Vec::new();
+    collect_glyph_sizes(&fraction_root, &mut sizes);
+    assert_eq!(sizes.len(), 2, "one glyph per fraction argument");
+    let script_size = base * script_ratio;
+    for size in &sizes {
+        assert!(
+            (size - script_size).abs() < 1e-3,
+            "numerator and denominator are script-sized: {size} != {script_size} ({script_ratio} em of {base})"
+        );
+    }
+
+    let (wrapper, stack) = fraction_stack(&fraction_root).expect("the fraction wraps its stack in a shifted box");
+    let denominator_offset = wrapper.shift.to_f64();
+    assert!(
+        (denominator_offset - base * denominator_shift).abs() < 1e-3,
+        "denominator baseline sits `FractionDenominatorShiftDown` below the fraction baseline: {denominator_offset}"
+    );
+    let numerator_offset = stack.height.to_f64() - stack.children[0].height().to_f64() - denominator_offset;
+    assert!(
+        (numerator_offset - base * numerator_shift).abs() < 1e-3,
+        "numerator baseline sits `FractionNumeratorShiftUp` above the fraction baseline: {numerator_offset}"
+    );
+    assert!(
+        (fraction_result.metrics.depth.to_f64() - denominator_offset).abs() < 1e-3,
+        "a `1`/`2` denominator has no descender, so the fraction depth is its baseline offset"
+    );
+    println!(
+        "fraction: glyph_size={script_size:.3}px ({script_ratio:.3}em) numerator_offset={numerator_offset:.3} denominator_offset={denominator_offset:.3} height={:.3} depth={:.3}",
+        fraction_result.metrics.height.to_f64(),
+        fraction_result.metrics.depth.to_f64()
     );
 }
