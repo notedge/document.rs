@@ -29,6 +29,10 @@ source imports as a documented lossy document instead of a failure.
 同目录附许可文件），并在渲染前 `install_math_font`，因此 CI 不依赖本机字体或
 `VuTeX` 仓存在。
 
+字体是环境相关的产品级差异：宿主安装字体后公式排成轮廓，SVG 不再出现公式源码；
+未安装时 `vutex.layout.math.not_typeset` 为 `Error`，公式源码作为文本保留。适配器
+自身既不内置也不安装字体，两种环境都在合同可见范围内。
+
 ## Acceptance map
 
 `21-TeX输入适配合同` 的每条验收都由一个能真跑的用例固定。
@@ -58,3 +62,4 @@ source imports as a documented lossy document instead of a failure.
 | `\href{url}{text}`：映射为 `Inline::Link` 外部 URI，SVG 输出 `<a href>`，命令不漏进正文 | `tests/constructs/mod.rs` · `href_becomes_an_external_link` |
 | `\cite{a,b}` 与 `\cite[p.~3]{c}`：每个 key 各出一条 `[@key]` 标记，可选说明无 IR 载体并登记 `import.tex.citation_note` | `tests/constructs/mod.rs` · `citations_keep_every_key_and_ignore_the_optional_note` |
 | 脚注正文挂在引用 `Inline::Note` 上，不摊平进段落文本，`import.tex.footnote_body` 仍登记 | `tests/constructs/mod.rs` · `footnote_body_is_carried_on_the_reference_not_the_flow` |
+| metadata `\title` / `\author`、`\textbf` / `\emph` / `\texttt`、`verbatim`、`enumerate` 进页面 | `tests/constructs/mod.rs` · `metadata_verbatim_inline_styles_and_lists_reach_the_page` |

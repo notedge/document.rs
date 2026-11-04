@@ -8,6 +8,25 @@ use document_input_tex::{import_source, render_svg};
 use document_ir::{Block, Inline};
 
 #[test]
+fn metadata_verbatim_inline_styles_and_lists_reach_the_page() {
+    let source = "\\title{Paper}\n\\author{Author}\n\\begin{document}\n\\section{Intro}\n\\textbf{bold} and \\emph{italic} and \\texttt{mono}.\n\\begin{verbatim}\nlet x = 1;\n\\end{verbatim}\n\\begin{enumerate}\n\\item first\n\\item second\n\\end{enumerate}\n\\end{document}\n";
+    let imported = import_source("virtual://tex-body.tex", source).expect("body constructs must import");
+
+    assert_eq!(imported.graph.metadata.title.as_deref(), Some("Paper"));
+    assert_eq!(imported.graph.metadata.authors, vec!["Author".to_string()]);
+
+    let rendered = render_svg("virtual://tex-body.tex", source).expect("body constructs must render");
+    for text in ["Intro", "bold", "italic", "mono", "let x = 1;", "first", "second"] {
+        assert!(rendered.svg.contains(text), "missing rendered text: {text}");
+    }
+    assert!(
+        rendered.diagnostics.iter().all(|diagnostic| diagnostic.severity != Severity::Error),
+        "{:#?}",
+        rendered.diagnostics
+    );
+}
+
+#[test]
 fn nested_lists_keep_the_inner_level_as_a_child() {
     let source = "\\begin{document}\n\\begin{itemize}\n\\item Outer\n\\begin{itemize}\n\\item Inner\n\\end{itemize}\n\\end{itemize}\n\\end{document}\n";
     let imported = import_source("virtual://tex-nested-list.tex", source).expect("nested lists must import");

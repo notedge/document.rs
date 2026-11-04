@@ -12,6 +12,14 @@
     "downstream": "the same profile / supported / approximated / refused shape as projects/plotter/input-contracts.json",
     "audit": "each acceptance item of 19 / 20 / 21 was mapped to a named test in the adapter readme, and the construct tables were checked against the lowering branches"
   },
+  "environment": {
+    "math_font": {
+      "installed": "formulas are painted as outline paths and the authored source text no longer appears in the svg",
+      "missing": "session diagnostics carry `vutex.layout.math.not_typeset` as Error and the formula source stays visible as text",
+      "affects": ["input-tex-minimal", "input-markdown-constructs"],
+      "note": "the import adapters never ship a font and never install one, the host decides, so both environments are part of the visible contract"
+    }
+  },
   "families": [
     {
       "language": "markdown",
@@ -118,7 +126,6 @@
       "supported": [
         {"construct": "headings and paragraphs", "sample": "= Title\n\nBody.\n"},
         {"construct": "unordered and ordered lists", "sample": "- one\n- two\n"},
-        {"construct": "links", "sample": "See #link(\"https://example.org\")[docs].\n"},
         {"construct": "strong and emphasis spans", "sample": "*bold* and _italic_\n"},
         {"construct": "inline and fenced raw code", "sample": "`x` and ```rust\nfn main() {}\n```\n"},
         {"construct": "inline and display math source preserved", "sample": "$a^2$\n\n$ x + y $\n"}
@@ -132,7 +139,7 @@
         {"construct": "whole-import coverage summary", "code": "import.typst.partial_coverage", "span": "none"}
       ],
       "refused": [
-        {"construct": "#let / #show / #import / #set / #page / #place / #float / #table / #image / #figure / custom function / script", "code": "import.typst.dynamic_content", "span": "exact"},
+        {"construct": "#let / #show / #import / #set / #page / #place / #float / #table / #image / #figure / #link(...) / custom function / script", "code": "import.typst.dynamic_content", "span": "exact"},
         {"construct": "dynamic group whose brackets never balance", "code": "vutex.input.typst.unterminated_dynamic_group", "span": "exact"},
         {"construct": "source above 8 MiB", "code": "vutex.input.typst.source_too_large", "span": "none"},
         {"construct": "source the parser refuses", "code": "vutex.input.typst.import_failed", "span": "none"}
@@ -142,8 +149,8 @@
   "specs": [
     {"id": "input-markdown-minimal", "language": "markdown", "classification": "accept", "source": "# Title\n\nBody.\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
     {"id": "input-markdown-table", "language": "markdown", "classification": "accept", "source": "| a | b |\n|---|---|\n| 1 | 2 |\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
-    {"id": "input-markdown-constructs", "language": "markdown", "classification": "accept", "source": "1. one\n2. two\n\n[docs](https://example.org)\n\n![alt](pic.png)\n\n`x`\n\n```rust\nlet y = 1;\n```\n\n> outer\n> > inner\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
-    {"id": "input-tex-minimal", "language": "tex", "classification": "accept", "source": "\\begin{document}\n\\section{Title}\nBody.\n\\end{document}\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-markdown-constructs", "language": "markdown", "classification": "accept", "source": "1. one\n2. two\n\n[docs](https://example.org)\n\n![alt](pic.png)\n\n`x`\n\n```rust\nlet y = 1;\n```\n\n> outer\n> > inner\n\n$x^2$\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-tex-minimal", "language": "tex", "classification": "accept", "source": "\\begin{document}\n\\section{Title}\nBody $x^2$.\n\\end{document}\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
     {"id": "input-tex-structures", "language": "tex", "classification": "accept", "source": "\\begin{document}\n\\begin{tabular}{ll}\nAlpha & Beta \\\\\n\\end{tabular}\n\\begin{equation}\nE = mc^2\n\\label{eq:energy}\n\\end{equation}\nBody\\footnote{Footnote body} text. Citation \\cite{smith2020}. See \\ref{eq:energy}.\n\\end{document}\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
     {"id": "input-tex-href", "language": "tex", "classification": "accept", "source": "See \\href{https://example.org/docs}{Docs}.\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
     {"id": "input-typst-minimal", "language": "typst", "classification": "accept", "source": "= Title\n\nBody.\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},

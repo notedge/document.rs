@@ -42,3 +42,5 @@ a documented lossy document instead of a failure.
 |---|---|
 | `#let` / `#show` / `#import` / `#table` / `#image` 各为一个 `Block::Opaque`，`unsupported` 记 `import.typst.dynamic_content`，诊断 `span` 覆盖各自构造 | `tests/constructs/mod.rs` · `dynamic_constructs_keep_their_kind_and_span` |
 | 行内数学与行间数学分别计入 `report.preserved` | `tests/constructs/mod.rs` · `inline_and_display_math_are_counted_apart` |
+| 无序 / 有序列表、`*strong*` / `_emphasis_`、行内与围栏 raw 代码进 SVG | `tests/constructs/mod.rs` · `lists_styles_and_raw_code_reach_the_rendered_svg` |
+| `#link(...)` 为 `Block::Opaque`，`import.typst.dynamic_content`（`Error`），`span` 覆盖表达式且不进页面 | `tests/constructs/mod.rs` · `hashtag_link_is_reported_as_an_opaque_dynamic_construct` |

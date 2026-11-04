@@ -27,6 +27,10 @@ as a documented lossy document instead of a failure.
 同目录附许可文件），并在渲染前 `install_math_font`，因此 CI 不依赖本机字体或
 `VuTeX` 仓存在。
 
+字体是环境相关的产品级差异：宿主安装字体后公式排成轮廓，SVG 不再出现公式源码；
+未安装时 `vutex.layout.math.not_typeset` 为 `Error`，公式源码作为文本保留。适配器
+自身既不内置也不安装字体，两种环境都在合同可见范围内。
+
 ## Acceptance map
 
 `20-Markdown输入适配合同` 的每条验收都由一个能真跑的用例固定。

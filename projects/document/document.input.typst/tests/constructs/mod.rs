@@ -1,6 +1,7 @@
 //! Construct-level coverage: dynamic Typst constructs keep their authored kind
 //! and range, and inline versus display math stay counted apart.
 
+use document_compose::Severity;
 use document_input_typst::{import_source, render_svg};
 
 #[test]
@@ -47,6 +48,43 @@ fn dynamic_constructs_keep_their_kind_and_span() {
     for leaked in ["answer", "figure.png", "columns"] {
         assert!(!rendered.svg.contains(leaked), "opaque payload must not reach the page as body text: {leaked}");
     }
+}
+
+#[test]
+fn lists_styles_and_raw_code_reach_the_rendered_svg() {
+    let source = "- first\n- second\n\n+ one\n+ two\n\n*bold* and _italic_\n\nInline `x` and:\n\n```rust\nfn main() {}\n```\n";
+    let imported = import_source("virtual://typst-body.typ", source).expect("body constructs must import");
+    assert!(
+        imported.diagnostics.iter().all(|diagnostic| diagnostic.severity != Severity::Error),
+        "{:#?}",
+        imported.diagnostics
+    );
+
+    let rendered = render_svg("virtual://typst-body.typ", source).expect("body constructs must render");
+    for text in ["first", "second", "one", "two", "bold", "italic", "fn main() {}"] {
+        assert!(rendered.svg.contains(text), "missing rendered text: {text}");
+    }
+}
+
+#[test]
+fn hashtag_link_is_reported_as_an_opaque_dynamic_construct() {
+    let source = "See #link(\"https://example.org\")[docs].\n";
+    let imported = import_source("virtual://typst-link.typ", source).expect("an opaque link must not fail the import");
+    let diagnostic = imported
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "import.typst.dynamic_content")
+        .expect("the authored #link must be reported");
+    assert_eq!(diagnostic.severity, Severity::Error);
+    let span = diagnostic.span.expect("the refused link keeps its authored range");
+    let covered = &source[span.start as usize..span.end as usize];
+    assert!(
+        covered.starts_with("#link(") && covered.contains("[docs]") && !covered.contains("See"),
+        "the span must cover the dynamic expression, not the surrounding prose: {covered:?}"
+    );
+
+    let rendered = render_svg("virtual://typst-link.typ", source).expect("render must succeed");
+    assert!(!rendered.svg.contains("https://example.org"), "the refused link must not silently reach the page as body text");
 }
 
 #[test]
