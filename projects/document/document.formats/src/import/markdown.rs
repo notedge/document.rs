@@ -33,6 +33,7 @@ fn markdown_import_language() -> MarkdownLanguage {
     language.allow_headings = true;
     language.allow_math = true;
     language.allow_footnotes = true;
+    language.allow_front_matter = true;
     language.allow_strikethrough = true;
     language.allow_lists = true;
     language.allow_definition_lists = true;
@@ -96,6 +97,20 @@ fn lower_markdown_tree(
                 language => Block::Code { language, content },
             };
             graph.push_block_at(block, span);
+            pending_footnote = None;
+            continue;
+        }
+        if node.element_type() == MarkdownElementType::FrontMatter {
+            // Front matter carries metadata, not document content, and the IR has
+            // no metadata field yet. Keeping it as an unsupported opaque block
+            // preserves the authored bytes and the span, so the adapter can fail
+            // closed instead of rendering the YAML as horizontal rules and text.
+            let payload = node.text(source).into_owned();
+            let span = node.span();
+            graph.push_block_at(
+                Block::Opaque { kind: "front_matter".into(), payload_hint: payload, status: SemanticStatus::Unsupported },
+                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+            );
             pending_footnote = None;
             continue;
         }

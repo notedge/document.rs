@@ -12,3 +12,8 @@ drift from the one the other input adapters share.
 `import_file` reads one Markdown file. `render_svg` runs the same import through
 layout, display presentation, and SVG output. Diagram fences stay owned by the
 host: register their lowered scenes before rendering.
+
+YAML front matter is metadata, not document content. The importer keeps it as an
+unsupported opaque block with its real source span, so `import_source` fails
+closed with `vutex.input.markdown.opaque_block` instead of rendering the YAML as
+horizontal rules and body text.
