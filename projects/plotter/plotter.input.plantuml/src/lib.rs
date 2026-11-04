@@ -122,7 +122,6 @@ const DROPPED_ACTIVITY_STATEMENTS: &[&str] = &[
     "kill",
     "partition",
     "alt",
-    "else",
     "loop",
     "group",
     "par",
