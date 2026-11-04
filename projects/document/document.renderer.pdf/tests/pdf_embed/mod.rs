@@ -105,14 +105,44 @@ fn monospaced_runs_fall_back_to_the_prose_face_for_han_characters() {
     assert!(fonts.iter().any(|name| name.ends_with("+NotoSerifSC-Regular")), "CJK part uses the prose face: {fonts:?}");
 }
 
+/// Numeric values of the first `TJ` array's adjustment entries.
+fn tj_adjustments(pdf: &str) -> Vec<f64> {
+    let end = pdf.find("] TJ").expect("a kerned run paints through `TJ`");
+    let start = pdf[..end].rfind('[').expect("the `TJ` array start");
+    pdf[start + 1..end]
+        .split_whitespace()
+        .filter(|token| !token.starts_with('<'))
+        .map(|token| token.parse::<f64>().expect("a `TJ` number"))
+        .collect()
+}
+
+/// The `/W` advance the PDF assigns to one subset CID.
+fn width_for_cid(pdf: &str, cid: u16) -> f64 {
+    let start = pdf.find("/W [").expect("an embedded font writes `/W`");
+    let rest = &pdf[start + 4..];
+    let entry = format!("{cid} [");
+    let at = rest.find(&entry).expect("the requested CID has a width");
+    let inner = &rest[at + entry.len()..];
+    inner[..inner.find(']').expect("the width entry ends")].trim().parse().expect("a real width")
+}
+
 #[test]
 fn kerning_pairs_switch_the_run_to_tj() {
     let bytes = render(vec![text("serif", FontStyle::Normal, "AV T")]);
 
-    assert!(bytes.contains("] TJ"), "a kerned run paints through `TJ`: {bytes}");
-    // `A` + `V` is -264 of 2048 units, so the next glyph moves 128.906
-    // thousandths of an em left.
-    assert!(bytes.contains("128.906"), "the `A`+`V` adjustment reaches the content stream");
+    // `A` + `V` is -264 of 2048 units, so the next glyph moves 128.90625
+    // thousandths of an em left. The `TJ` number also returns the 0.16796875
+    // that `/W` rounded away from `A`, reaching the stream as a number rather
+    // than a truncated string.
+    let adjustments = tj_adjustments(&bytes);
+    assert!(
+        adjustments.iter().any(|value| (value - 128.73828125).abs() < 1e-9),
+        "the `A`+`V` adjustment carries the kern and the `/W` remainder: {adjustments:?}"
+    );
+
+    // `/W` names the whole thousandth a reader keeps, and `TJ` carries the rest.
+    let width = width_for_cid(&bytes, 2);
+    assert!((width - 722.0).abs() < 1e-9, "`A` keeps the reader's advance: {width}");
 
     let plain = render(vec![text("serif", FontStyle::Normal, "qq")]);
     assert!(!plain.contains(" TJ"), "an unpaired run keeps the plain `Tj` form");

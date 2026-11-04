@@ -219,7 +219,7 @@ impl SystemFont {
 
         // Advance widths and glyph ids for the characters the document uses.
         let mut cids: BTreeMap<char, u16> = BTreeMap::new();
-        let mut widths: BTreeMap<u16, u16> = BTreeMap::new();
+        let mut widths: BTreeMap<u16, f64> = BTreeMap::new();
         for (ch, old) in &chars {
             let cid = *mapping.get(old)?;
             cids.insert(*ch, cid);
@@ -256,9 +256,12 @@ impl SystemFont {
     }
 
     /// Advance width in the 1000-unit glyph space PDF expects.
-    fn scaled_width(&self, advance: u16) -> u16 {
-        let scaled = u32::from(advance) * 1000 / u32::from(self.units_per_em);
-        scaled.min(u32::from(u16::MAX)) as u16
+    ///
+    /// Kept exact rather than truncated, because the content stream needs the
+    /// fractional part: readers such as MuPDF store `/W` in an integer glyph
+    /// space, so the writer rounds `/W` and carries the remainder in `TJ`.
+    fn scaled_width(&self, advance: u16) -> f64 {
+        f64::from(advance) * 1000.0 / f64::from(self.units_per_em)
     }
 
     fn subset_head(&self) -> Vec<u8> {
@@ -320,8 +323,11 @@ pub(crate) struct Subset {
     pub(crate) name: String,
     /// Character to CID (`Identity-H` treats the CID as the subset glyph id).
     pub(crate) cids: BTreeMap<char, u16>,
-    /// Advance width per CID, in the 1000-unit glyph space.
-    pub(crate) widths: BTreeMap<u16, u16>,
+    /// Advance width per CID, in the 1000-unit glyph space, as an exact real.
+    ///
+    /// The `/W` entry rounds this to a whole thousandth, which is the value a
+    /// reader keeps, and the fractional part reaches the page through `TJ`.
+    pub(crate) widths: BTreeMap<u16, f64>,
     /// `/FontBBox`, already scaled.
     pub(crate) bbox: [i16; 4],
     /// Ascender in the 1000-unit glyph space.

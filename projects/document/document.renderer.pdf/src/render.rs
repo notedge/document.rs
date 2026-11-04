@@ -948,7 +948,9 @@ fn type0_font_object(name: &str, cid_object: usize, to_unicode_object: usize) ->
 }
 
 fn cid_font_object(name: &str, descriptor_object: usize, subset: &Subset) -> String {
-    let widths: Vec<String> = subset.widths.iter().map(|(cid, width)| format!("{cid} [{width}]")).collect();
+    // Readers keep `/W` in an integer glyph space, so the table carries the
+    // rounded advance and `paint_text` corrects the remainder in `TJ`.
+    let widths: Vec<String> = subset.widths.iter().map(|(cid, width)| format!("{cid} [{}]", num_real(width.round()))).collect();
     format!(
         "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{name} \
          /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> \
@@ -1091,6 +1093,15 @@ fn flush_text_segment(out: &mut String, index: usize, size: f64, parts: &mut Vec
     parts.clear();
 }
 
+/// Exact advance of one painted glyph, in the 1000-unit glyph space.
+///
+/// `font` is the one-based `/F` resource index, so the subset sits that far
+/// past the chain's first index.
+fn embedded_width(embedded: &EmbeddedText<'_>, font: usize, cid: u16) -> Option<f64> {
+    let subset = font.checked_sub(embedded.first_index)?;
+    embedded.chain.subsets().get(subset)?.widths.get(&cid).copied()
+}
+
 /// Emit one text object at a page-space position.
 ///
 /// `flip` inverts the text matrix so glyphs stay upright inside a y-flipped
@@ -1119,11 +1130,12 @@ pub(crate) fn paint_text(
         // Body text carries kerning from the same `BodyMetrics` layout used, so
         // the writer never parses a font on its own.
         let metrics = embedded.body.then(BodyMetrics::bundled);
+        let key = key_for_run(family, style);
         let _ = write!(out, "BT\n1 0 0 {down} {} {} Tm\n", num(x), num(y));
         let mut current: Option<usize> = None;
         let mut parts: Vec<String> = Vec::new();
         let mut glyphs = String::new();
-        let mut previous: Option<char> = None;
+        let mut previous: Option<(char, usize, u16)> = None;
         let mut missing: Vec<char> = Vec::new();
         for ch in text.chars() {
             let Some((font, cid)) = embedded.glyph(ch, family, style)
@@ -1141,22 +1153,23 @@ pub(crate) fn paint_text(
                 current = Some(font);
                 previous = None;
             }
-            if let Some(metrics) = metrics {
-                if let Some(left) = previous {
-                    if let Some(delta) = metrics.kerning_em(key_for_run(family, style), left, ch) {
-                        if delta != 0.0 {
-                            if !glyphs.is_empty() {
-                                parts.push(format!("<{}>", std::mem::take(&mut glyphs)));
-                            }
-                            // A negative font-unit delta moves the next glyph
-                            // left, which `TJ` expresses as a positive number.
-                            parts.push(num(-delta * 1000.0));
-                        }
+            if let Some((left, left_font, left_cid)) = previous {
+                let kern = metrics.and_then(|metrics| metrics.kerning_em(key, left, ch)).unwrap_or(0.0);
+                // `/W` carries the advance rounded to a whole thousandth, so
+                // the pen needs the fractional part back. A `TJ` number moves
+                // right when negative and left when positive, which is also
+                // how a negative kern points.
+                let residual = embedded_width(&embedded, left_font, left_cid).map_or(0.0, |exact| exact.round() - exact);
+                let adjustment = residual - kern * 1000.0;
+                if adjustment.abs() > 1e-9 {
+                    if !glyphs.is_empty() {
+                        parts.push(format!("<{}>", std::mem::take(&mut glyphs)));
                     }
+                    parts.push(num_real(adjustment));
                 }
             }
             let _ = write!(glyphs, "{cid:04X}");
-            previous = Some(ch);
+            previous = Some((ch, font, cid));
         }
         if let Some(index) = current {
             flush_text_segment(out, index, size, &mut parts, &mut glyphs);
@@ -1598,6 +1611,19 @@ fn winansi_byte(ch: char) -> Option<u8> {
 /// Stable decimal rendering: at most three decimals, no trailing zeros, no `-0`.
 pub(crate) fn num(value: f64) -> String {
     let text = format!("{value:.3}");
+    let trimmed = text.trim_end_matches('0').trim_end_matches('.');
+    if trimmed.is_empty() || trimmed == "-0" { "0".to_string() } else { trimmed.to_string() }
+}
+
+/// Higher-precision rendering for `/W` widths and `TJ` adjustments.
+///
+/// Eight decimals cover every font-unit ratio exactly for the bundled faces
+/// (`1000/2048` is a terminating binary fraction), so a kern of `-264/2048`
+/// reaches the stream as `128.90625` instead of a three-decimal approximation.
+/// A pair adjustment also carries the fractional part of the previous glyph's
+/// advance, which `/W` rounds away.
+pub(crate) fn num_real(value: f64) -> String {
+    let text = format!("{value:.8}");
     let trimmed = text.trim_end_matches('0').trim_end_matches('.');
     if trimmed.is_empty() || trimmed == "-0" { "0".to_string() } else { trimmed.to_string() }
 }
