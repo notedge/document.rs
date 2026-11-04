@@ -15,12 +15,37 @@ println!("{}", rendered.svg);
 
 Comments are dropped without leaving text nodes, and inline markup delimiters stay
 out of child text. Escape sequences (`\*` and friends) are rejected with
-`vutex.input.typst.escape_unsupported` because the current frontend splits the
-backslash from the protected character and shifts the spans that follow.
+`vutex.input.typst.escape_unsupported` until the upstream span defect is fixed,
+see the limitation section below.
 
 A source above `MAX_SOURCE_BYTES` (8 MiB) is rejected with
 `vutex.input.typst.source_too_large` before parsing. An empty source imports as
 a documented lossy document instead of a failure.
+
+## 已知限制：`oak-typst` 转义与多字节 span
+
+当前 `oak-typst` 修订无法把转义序列交给适配层而不损坏正文。最小复现：
+
+```typst
+= 标题
+
+转义 \* 中文后文
+```
+
+- 现在看到：`\*` 被拆成一条只含 `\` 的 text 条目，`*` 丢失，紧随其后的
+  text 条目按字节偏移整体后移。源里有中文时，偏移落到字符中间或跨到下一字，
+  `SourceSpan` 与源字节索引不一致。
+- 期望行为：`\*` 产出字面 `*`，其后 text 的起点正好等于转义对之后的字节
+  位置，多字节字符的 span 按 UTF-8 字节对齐源。
+- 接管位置：`document.formats/src/import/typst.rs` 的 `escape_text` 读源回填
+  被保护字符并记录 `import.typst.escape_unsupported`，
+  `document.input.typst/src/adapter.rs` 的 `import_source` 再把这条 loss 投影
+  成 `Err`。`tests/text_nodes/mod.rs` · `escape_sequences_are_rejected_before_any_fake_text`
+  固定了当前拒绝行为。
+- 上游修好后：删除 `escape_text`、适配层的投影、`ESCAPE_UNSUPPORTED` 常量与
+  对应用例，不保留兼容开关。
+
+修上游属于 `oak-typst` 的线，不在本仓补 parser 轮子。
 
 ## Acceptance map
 

@@ -35,7 +35,7 @@ source imports as a documented lossy document instead of a failure.
 | 3 外来数学语言进 `unsupported` 与 `Error`，导入不中断 | `tests/fail_closed/mod.rs` · `foreign_math_language_fails_closed`、`tex_math_without_a_language_tag_stays_accepted` |
 | 4 空文档 `parsed.considered == 0`，`empty_document` 进 `lossy`，无诊断 | `tests/fail_closed/mod.rs` · `empty_source_keeps_document_level_losses_unpositioned` |
 | 5 解析失败返回 `Err`，码 `parse_failed`，不产出图 | `tests/fail_closed/mod.rs` · `rejected_source_returns_a_structured_error` |
-| 6 输出阶段拒绝时诊断码原样透传 | `tests/fail_closed/mod.rs` · `renderer_rejection_keeps_its_own_diagnostic_code` |
+| 6 渲染器拒绝经 `From<Diagnostic>` 透传时码与 `severity` 不变 | `tests/fail_closed/mod.rs` · `renderer_rejection_keeps_its_own_diagnostic_code` |
 | 7 表格、公式编号损失、脚注、citation、label/ref 闭环 | `tests/render_smoke/mod.rs` · `structures_reach_the_rendered_svg` |
 
 验收 6 的边界：SVG 渲染器只拒绝画布尺寸非正的图形，而 TeX 入口不接收宿主
