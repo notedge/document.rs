@@ -827,13 +827,28 @@ impl<'a> TexLowerer<'a> {
                     children: Vec::new(),
                 })
             }
-            // Math style/font/limits commands belong inside math mode; lowering
-            // does not interpret them as inline semantics, and when they do
-            // appear outside a math span (parser edge case or stray token)
-            // dropping them silently is correct because the math layout stage
-            // (VuTeX) never sees these stray non-math tokens.
-            "displaystyle" | "textstyle" | "scriptstyle" | "scriptscriptstyle" | "mathbf" | "mathit" | "mathrm" | "mathcal"
-            | "mathbb" | "mathfrak" | "limits" | "nolimits" => InlineOutcome::Dropped,
+            // Font commands carry content even when they appear outside math
+            // mode. Keeping only a loss would erase the argument, so the
+            // argument is lowered as plain inlines and the missing style is
+            // recorded.
+            "mathbf" | "mathit" | "mathrm" | "mathcal" | "mathbb" | "mathfrak" => {
+                let children =
+                    self.required_argument(command).map(|fragment| self.lower_inline_fragment(fragment)).unwrap_or_default();
+                self.loss(
+                    "import.tex.math_style_in_text",
+                    "math-mode style command used in text mode keeps its argument without the style",
+                    SemanticStatus::Partial,
+                );
+                if children.is_empty() {
+                    InlineOutcome::Dropped
+                }
+                else {
+                    InlineOutcome::Inlines(children)
+                }
+            }
+            "displaystyle" | "textstyle" | "scriptstyle" | "scriptscriptstyle" | "limits" | "nolimits" => {
+                InlineOutcome::Dropped
+            }
             _ => InlineOutcome::Unknown,
         }
     }

@@ -338,7 +338,10 @@ fn inline_text(graph: &DocumentGraph, inlines: &[Inline]) -> Result<String, Form
                     "inline semantic node is not representable by the conservative PDF exporter yet",
                 ));
             }
-            Inline::RawHtml { .. } => {}
+            // The PDF exporter has no HTML renderer, but collapsing the node
+            // to nothing would silently erase authored content. Keeping the
+            // authored markup as text matches the block-level fallback.
+            Inline::RawHtml { html } => output.push_str(html),
         }
         Ok(output)
     })

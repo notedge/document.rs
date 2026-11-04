@@ -204,16 +204,34 @@ fn lower_markdown_tree(
             }
             pending_footnote = None;
         }
-        if matches!(
-            node.element_type(),
-            MarkdownElementType::HtmlTag
-                | MarkdownElementType::HtmlComment
-                | MarkdownElementType::XmlTag
-                | MarkdownElementType::XmlComment
-        ) {
+        if matches!(node.element_type(), MarkdownElementType::HtmlComment | MarkdownElementType::XmlComment) {
+            pending_footnote = None;
+            continue;
+        }
+        if matches!(node.element_type(), MarkdownElementType::HtmlTag | MarkdownElementType::XmlTag) {
+            let raw = node.text(source);
+            if let Some((url, display)) = autolink_target(raw.trim_end()) {
+                let span = node.span();
+                graph.push_block_at(
+                    Block::Paragraph {
+                        content: vec![Inline::Link {
+                            target: RelationEndpoint::ExternalUri(url),
+                            display: vec![Inline::Text { text: display }],
+                            title: None,
+                        }],
+                    },
+                    Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+                );
+                pending_footnote = None;
+                continue;
+            }
             let (html, consumed) = extract_html_block(node, children.get(index..).unwrap_or_default(), source);
             index += consumed;
             let html = html.trim_end_matches('\n').trim_end_matches('\r').to_owned();
+            let span = SourceSpan {
+                start: node.span().start as u32,
+                end: (node.span().start + html.len()) as u32,
+            };
             // GFM tables cannot express merged cells, so a spanning table is
             // exported as an inline HTML table. Reopening it as an opaque raw
             // block would quietly turn the table back into markup, so a
@@ -224,6 +242,12 @@ fn lower_markdown_tree(
             // so the authored block stays verbatim rather than being guessed.
             #[cfg(not(feature = "html"))]
             let block = Block::RawHtml { html };
+            // A raw HTML block is preserved for HTML/EPUB export, but the
+            // semantic SVG/PDF reflow does not lay it out. Record the loss so
+            // the report never claims a rendering that did not happen.
+            if matches!(&block, Block::RawHtml { .. }) {
+                graph.push_loss_at(raw_html_loss_marker(), Some(span));
+            }
             graph.push_block(block);
             pending_footnote = None;
             continue;
@@ -472,9 +496,25 @@ fn lower_block_node(
             payload_hint: "---".into(),
             status: SemanticStatus::Partial,
         }),
-        MarkdownElementType::HtmlTag | MarkdownElementType::HtmlComment => {
-            BlockOutcome::Block(Block::RawHtml { html: node.text(source).into_owned() })
+        MarkdownElementType::HtmlTag | MarkdownElementType::XmlTag => {
+            let raw = node.text(source).into_owned();
+            if let Some((url, display)) = autolink_target(raw.trim_end()) {
+                return BlockOutcome::Block(Block::Paragraph {
+                    content: vec![Inline::Link {
+                        target: RelationEndpoint::ExternalUri(url),
+                        display: vec![Inline::Text { text: display }],
+                        title: None,
+                    }],
+                });
+            }
+            let span = node.span();
+            context.losses.push((
+                raw_html_loss_marker(),
+                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+            ));
+            BlockOutcome::Block(Block::RawHtml { html: raw })
         }
+        MarkdownElementType::HtmlComment | MarkdownElementType::XmlComment => BlockOutcome::Skip,
         _ => BlockOutcome::Loss(LossMarker {
             code: "import.markdown.unsupported_block".into(),
             message: format!("unsupported markdown block: {kind:?}"),
@@ -524,12 +564,29 @@ fn collect_inlines(node: RedNode<MarkdownLanguage>, source: &SourceText, context
                 let text = leaf.text(source);
                 if !text.is_empty() && !is_markdown_marker(text.as_ref()) {
                     let inline = match leaf.kind() {
-                        MarkdownTokenType::HtmlTag | MarkdownTokenType::HtmlComment if is_authored_html_tag(text.as_ref()) => {
-                            Inline::RawHtml { html: text.into_owned() }
+                        MarkdownTokenType::HtmlComment => None,
+                        MarkdownTokenType::HtmlTag if is_authored_html_tag(text.as_ref()) => {
+                            if let Some((url, display)) = autolink_target(text.as_ref()) {
+                                Some(Inline::Link {
+                                    target: RelationEndpoint::ExternalUri(url),
+                                    display: vec![Inline::Text { text: display }],
+                                    title: None,
+                                })
+                            }
+                            else {
+                                let span = leaf.span();
+                                context.losses.push((
+                                    raw_html_loss_marker(),
+                                    Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+                                ));
+                                Some(Inline::RawHtml { html: text.into_owned() })
+                            }
                         }
-                        _ => Inline::Text { text: decode_escaped_text(text.as_ref()) },
+                        _ => Some(Inline::Text { text: decode_escaped_text(text.as_ref()) }),
                     };
-                    push_inline(&mut inlines, inline);
+                    if let Some(inline) = inline {
+                        push_inline(&mut inlines, inline);
+                    }
                 }
             }
         }
@@ -572,9 +629,23 @@ fn lower_inline_node(node: RedNode<MarkdownLanguage>, source: &SourceText, conte
         MarkdownElementType::Strikethrough => {
             Some(Inline::Styled { style: "strike".into(), children: collect_inlines(node, source, context) })
         }
-        MarkdownElementType::HtmlTag | MarkdownElementType::HtmlComment => {
-            Some(Inline::RawHtml { html: node.text(source).into_owned() })
+        MarkdownElementType::HtmlTag | MarkdownElementType::XmlTag => {
+            let raw = node.text(source).into_owned();
+            if let Some((url, display)) = autolink_target(raw.trim_end()) {
+                return Some(Inline::Link {
+                    target: RelationEndpoint::ExternalUri(url),
+                    display: vec![Inline::Text { text: display }],
+                    title: None,
+                });
+            }
+            let span = node.span();
+            context.losses.push((
+                raw_html_loss_marker(),
+                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+            ));
+            Some(Inline::RawHtml { html: raw })
         }
+        MarkdownElementType::HtmlComment | MarkdownElementType::XmlComment => None,
         _ => None,
     }
 }
@@ -1140,6 +1211,49 @@ fn is_authored_html_tag(text: &str) -> bool {
         Some('!') | Some('?') => true,
         Some('/') => matches!(rest[1..].chars().next(), Some(first) if first.is_ascii_alphabetic()),
         _ => false,
+    }
+}
+
+/// Recover a CommonMark autolink that the lexer reports as an HTML tag.
+///
+/// Autolinks open with `<`, so the lexer marks `<https://example.com>` as an
+/// authored tag. Keeping it as raw HTML hides the URL from every semantic
+/// renderer, so the destination and display text are reconstructed here.
+fn autolink_target(text: &str) -> Option<(String, String)> {
+    let text = text.trim();
+    let inner = text.strip_prefix('<')?.strip_suffix('>')?;
+    if inner.is_empty() || inner.chars().any(|character| character.is_whitespace() || character == '<' || character == '>') {
+        return None;
+    }
+    if let Some((scheme, rest)) = inner.split_once(':') {
+        let scheme_ok = (2..=32).contains(&scheme.len())
+            && scheme.chars().next().is_some_and(|character| character.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'));
+        if scheme_ok && !rest.is_empty() {
+            return Some((inner.to_owned(), inner.to_owned()));
+        }
+    }
+    let (local, domain) = inner.split_once('@')?;
+    if local.is_empty()
+        || domain.is_empty()
+        || !domain.contains('.')
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+    {
+        return None;
+    }
+    Some((format!("mailto:{inner}"), inner.to_owned()))
+}
+
+/// The loss marker for HTML the semantic reflow cannot lay out.
+fn raw_html_loss_marker() -> LossMarker {
+    LossMarker {
+        code: "import.markdown.raw_html_unrendered".into(),
+        message: "raw HTML is preserved for HTML/EPUB export but semantic SVG/PDF reflow does not lay it out"
+            .into(),
+        status: SemanticStatus::Partial,
     }
 }
 

@@ -2,7 +2,7 @@
 //! through the profile's own closed loop.
 
 use document_compose::Severity;
-use document_input_tex::render_svg;
+use document_input_tex::{import_source, render_svg};
 
 #[test]
 fn structures_reach_the_rendered_svg() {
@@ -53,4 +53,22 @@ fn minimal_source_reaches_the_rendered_svg() {
     assert!(rendered.svg.starts_with("<svg"), "{}", &rendered.svg[..rendered.svg.len().min(80)]);
     assert!(rendered.svg.contains("TeX to SVG"), "heading text must reach the svg");
     assert!(rendered.svg.contains("Hello"), "paragraph text must reach the svg");
+}
+
+#[test]
+fn text_mode_math_style_keeps_its_argument_and_reports_the_loss() {
+    let source = "Body \\mathbf{Alpha} text.\n";
+    let imported = import_source("virtual://tex-math-style.tex", source).expect("a stray font command is a downgrade");
+    let rendered = render_svg("virtual://tex-math-style.tex", source).expect("render must succeed");
+    assert!(rendered.svg.contains("Alpha"), "the argument must not disappear: {}", rendered.svg);
+
+    let loss = imported
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "import.tex.math_style_in_text")
+        .expect("the downgrade must be diagnosed");
+    assert_eq!(loss.severity, Severity::Warning);
+    let span = loss.span.expect("the downgrade must keep its authored range");
+    let authored = &source[span.start as usize..span.end as usize];
+    assert!(authored.contains("\\mathbf{Alpha}"), "the span must cover the command: {authored:?}");
 }

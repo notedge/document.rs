@@ -1,6 +1,6 @@
 use document_compose::Severity;
 use document_input_markdown::{codes, import_source, render_svg};
-use document_ir::Block;
+use document_ir::{Block, Inline, RelationEndpoint};
 use document_layout::Diagrams;
 
 const SOURCE: &str = "\
@@ -215,4 +215,67 @@ fn opaque_blocks_are_reported_instead_of_dropped() {
         .find(|diagnostic| diagnostic.code == codes::OPAQUE_BLOCK)
         .expect("opaque block must produce a diagnostic");
     assert_eq!(diagnostic.severity, Severity::Info);
+}
+
+#[test]
+fn autolinks_and_raw_html_do_not_disappear_without_a_report() {
+    let source = "See <https://example.com> now.\n\n<div>authored block</div>\n";
+    let imported = import_source("virtual://raw-html.md", source).expect("html is a downgrade, not a rejection");
+
+    let rendered = render_svg("virtual://raw-html.md", source, &Diagrams::new()).expect("render must succeed");
+    assert!(rendered.svg.contains("https://example.com"), "the autolink must survive into svg: {}", rendered.svg);
+    assert!(!rendered.svg.contains("authored block"), "the semantic renderer does not lay out raw html");
+
+    let has_link = imported.graph.blocks.iter().any(|node| match &node.block {
+        Block::Paragraph { content } => content.iter().any(|inline| {
+            matches!(
+                inline,
+                Inline::Link { target: RelationEndpoint::ExternalUri(url), .. } if url == "https://example.com"
+            )
+        }),
+        _ => false,
+    });
+    assert!(has_link, "the autolink must lower to a semantic link");
+
+    let raw = imported
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "import.markdown.raw_html_unrendered")
+        .expect("raw html must be reported");
+    let span = raw.span.expect("the raw html loss must keep its authored range");
+    let authored = &source[span.start as usize..span.end as usize];
+    assert!(authored.contains("<div>authored block</div>"), "the loss must point at the html block: {authored:?}");
+    assert_eq!(
+        imported.diagnostics.iter().filter(|diagnostic| diagnostic.code == "import.markdown.raw_html_unrendered").count(),
+        1,
+        "the recovered autolink must not be reported as raw html"
+    );
+}
+
+#[test]
+fn markdown_constructs_reach_the_rendered_svg() {
+    let source = "\
+1. first
+2. second
+
+[link](https://example.com/page) and ![alt text](https://example.com/a.png) and `inline code` and \\*literal\\*.
+
+> outer
+> > inner
+
+```rust
+fn demo() {}
+```
+
+<div>authored block</div>
+";
+    let imported = import_source("virtual://constructs.md", source).expect("markdown constructs are not fatal");
+    assert!(imported.diagnostics.iter().all(|diagnostic| diagnostic.severity != Severity::Error));
+
+    let rendered = render_svg("virtual://constructs.md", source, &Diagrams::new()).expect("render must succeed");
+    for expected in ["first", "second", "link", "inline code", "*literal*", "outer", "inner", "fn demo() {}"] {
+        assert!(rendered.svg.contains(expected), "svg must contain {expected:?}: {}", rendered.svg);
+    }
+    assert!(rendered.svg.contains("https://example.com/a.png"), "the image source must reach svg: {}", rendered.svg);
+    assert!(rendered.svg.contains("data-alt=\"alt text\""), "the image alt must reach svg: {}", rendered.svg);
 }
