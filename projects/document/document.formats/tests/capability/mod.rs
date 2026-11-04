@@ -23,7 +23,12 @@ fn capabilities_do_not_overstate_partial_formats() {
     #[cfg(feature = "docx")]
     assert!(
         caps.iter()
-            .any(|cap| { cap.id == "docx" && cap.direction == FormatDirection::Export && cap.status == FormatStatus::Partial })
+            .any(|cap| { cap.id == "docx" && cap.direction == FormatDirection::Export && cap.status == FormatStatus::Unavailable })
+    );
+    #[cfg(feature = "pdf")]
+    assert!(
+        caps.iter()
+            .any(|cap| { cap.id == "pdf" && cap.direction == FormatDirection::Export && cap.status == FormatStatus::Unavailable })
     );
     #[cfg(feature = "epub")]
     assert!(

@@ -21,6 +21,7 @@ use document_diagnostic::diagnostics_from_graph;
 use document_formats::import::{
     doc::import_doc_bytes, docx::import_docx_bytes, epub::import_epub_bytes, html::import_html_bytes, pdf::import_pdf_bytes,
 };
+use document_formats::{FormatDirection, FormatStatus, capabilities};
 use document_ir::DocumentGraph;
 use document_types::{AdapterError, Result};
 use serde::Serialize;
@@ -52,29 +53,68 @@ pub use writers::{
     write_markdown_project,
 };
 
-/// Reader formats wired into this build (lowercase).
+/// Reader handlers wired into this build (lowercase).
+///
+/// This list only says a reader implementation exists. It does not by itself
+/// make a route available — [`supports_route`] also requires the `Import`
+/// capability in `document_formats::capabilities()` to be routable.
 pub const READERS: &[&str] = &["docx", "doc", "pdf", "epub", "html", "markdown", "notedown"];
 
-/// Writer formats wired into this build (lowercase).
+/// Writer handlers wired into this build (lowercase).
+///
+/// Same rule as [`READERS`]: wiring is not availability. In particular `docx`
+/// and `pdf` are wired but their `Export` capability is `Unavailable`, so no
+/// route targets them.
 pub const WRITERS: &[&str] = &["markdown", "docx", "pdf", "html", "epub"];
 
-/// Whether Panduck has a reader for `from` and a writer for `to`.
+/// Look up one direction of a format in the single capability table.
+fn capability_status(id: &str, direction: FormatDirection) -> Option<FormatStatus> {
+    capabilities()
+        .into_iter()
+        .find(|capability| capability.id == id && capability.direction == direction)
+        .map(|capability| capability.status)
+}
+
+/// Whether a capability status may be routed.
 ///
-/// Pure capability check — a route is supported iff both sides are wired
-/// with real implementations. No runtime registry, no partial status, no
-/// transitional "planned" markers.
+/// `Ready` and `Partial` are routable: `Partial` means the implementation is
+/// wired and usable for its advertised subset, and every gap it hits is
+/// reported per document through loss markers and diagnostics, so the route
+/// itself stays honest. `Planned` is not wired yet. `Unavailable` is an
+/// explicit opt-out — including the wired-but-not-deliverable exports — so
+/// neither may be routed. A direction missing from the table means the
+/// corresponding cargo feature is off.
+fn is_routable(status: Option<FormatStatus>) -> bool {
+    matches!(status, Some(FormatStatus::Ready | FormatStatus::Partial))
+}
+
+/// Whether `from` can be read and `to` can be written.
+///
+/// A route is available iff `from` is a wired reader whose `Import` capability
+/// is routable and `to` is a wired writer whose `Export` capability is
+/// routable. `document_formats::capabilities()` is the only capability table;
+/// this function never hard-codes a status of its own.
 pub fn supports_route(from: &str, to: &str) -> bool {
     let from = from.to_ascii_lowercase();
     let to = to.to_ascii_lowercase();
-    READERS.contains(&from.as_str()) && WRITERS.contains(&to.as_str())
+    READERS.contains(&from.as_str())
+        && WRITERS.contains(&to.as_str())
+        && is_routable(capability_status(&from, FormatDirection::Import))
+        && is_routable(capability_status(&to, FormatDirection::Export))
 }
 
-/// Lists wired conversion routes: every (reader, writer) pair.
+/// Lists available conversion routes.
+///
+/// Each wired pair is filtered through [`supports_route`], so a format whose
+/// export capability is `Unavailable` — currently `docx` and `pdf` — never
+/// appears as a target.
 pub fn supported_routes() -> Vec<(String, String)> {
-    let mut routes = Vec::with_capacity(READERS.len() * WRITERS.len());
+    let mut routes = Vec::new();
     for reader in READERS {
         for writer in WRITERS {
-            routes.push((reader.to_string(), writer.to_string()));
+            if supports_route(reader, writer) {
+                routes.push((reader.to_string(), writer.to_string()));
+            }
         }
     }
     routes
@@ -334,7 +374,8 @@ fn build_convert_project_output(
 
 /// Returns whether Panduck can emit a Markdown project from this source format.
 pub fn supports_markdown_project_source(from: &str) -> bool {
-    matches!(from.to_ascii_lowercase().as_str(), "docx" | "doc" | "pdf" | "epub" | "html" | "markdown" | "notedown")
+    let from = from.to_ascii_lowercase();
+    READERS.contains(&from.as_str()) && is_routable(capability_status(&from, FormatDirection::Import))
 }
 
 /// Converts a file on disk into a Markdown project directory.

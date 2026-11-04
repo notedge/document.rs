@@ -16,7 +16,11 @@ pub enum FormatStatus {
     Partial,
     /// Scaffolded but not yet wired.
     Planned,
-    /// Explicitly not available (must not be routed).
+    /// Explicitly not available to the routing layer.
+    ///
+    /// Covers both "no module exists" and "a module exists but cannot deliver
+    /// this direction" — for example the conservative DOCX and PDF exporters.
+    /// A route must never advertise a direction marked with this status.
     Unavailable,
 }
 
