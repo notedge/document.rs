@@ -76,6 +76,7 @@ pub fn layout_formula_for_with_conformance(
     };
     let font_system = builtin_font_metrics_for(family);
     let engine = LayoutEngine::with_facts(font_system, MathFontFacts::for_family(family))
+        .with_font_family(family)
         .with_base_size(base_size)
         .with_font_conformance(conformance);
     let nodes: &[document_compose::math::FormulaNode] = match &tree.root {

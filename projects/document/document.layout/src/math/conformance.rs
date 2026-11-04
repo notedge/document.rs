@@ -35,6 +35,9 @@ pub enum FontConformance {
 pub enum FontFallback {
     /// Layout consumed a `MATH` constant the font does not publish.
     MissingConstant(MathConstant),
+    /// Layout consumed a TeX rule-18 parameter the `MATH` table has no carrier
+    /// for, and substituted the font's closest constant instead.
+    MissingTexParameter(&'static str),
     /// A delimiter or large operator needed a size variant the font ships no
     /// construction for.
     MissingGlyphVariant(char),
@@ -55,6 +58,7 @@ impl FontFallback {
     pub fn code(&self) -> &'static str {
         match self {
             Self::MissingConstant(_) => "vutex.math.conformance.missing_constant",
+            Self::MissingTexParameter(_) => "vutex.math.conformance.missing_constant",
             Self::MissingGlyphVariant(_) => "vutex.math.conformance.missing_glyph_variant",
             Self::MissingAssemblyPiece(_) => "vutex.math.conformance.missing_assembly_piece",
             Self::MissingItalicCorrection(_) => "vutex.math.conformance.missing_italic_correction",
@@ -67,6 +71,7 @@ impl FontFallback {
     pub fn subject(&self) -> String {
         match self {
             Self::MissingConstant(constant) => format!("MATH constant `{constant:?}`"),
+            Self::MissingTexParameter(name) => format!("TeX parameter `{name}`"),
             Self::MissingGlyphVariant(ch) => format!("glyph variant for '{ch}' (U+{:04X})", *ch as u32),
             Self::MissingAssemblyPiece(ch) => format!("assembly piece for '{ch}' (U+{:04X})", *ch as u32),
             Self::MissingItalicCorrection(ch) => format!("italic correction for '{ch}' (U+{:04X})", *ch as u32),

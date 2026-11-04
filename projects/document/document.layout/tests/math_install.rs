@@ -4,7 +4,7 @@
 //! `tests/main.rs` 里会和「无字体」断言并行竞争。
 
 use document_compose::Severity;
-use document_compose::math::MathConstant;
+use document_compose::math::{FormulaNode, MathConstant, MathSemantics, MathStyle};
 use document_fonts::{LATIN_MODERN_MATH, install_default_math_font};
 use document_formats::lower_tex_formula_source;
 use document_ir::{Block, DocumentGraph, DocumentId, Inline, MathDisplay, MathFormula};
@@ -12,7 +12,7 @@ use document_layout::{
     Diagrams,
     document::layout_with_diagnostics,
     hint::LayoutHint,
-    math::{LayoutNode, layout_formula},
+    math::{FontFallback, LayoutEngine, LayoutNode, layout_formula, lower_formula_tree},
     plan::{LayoutItem, LayoutPage},
 };
 use document_text::math::{MathFontFacts, MathFontFamily};
@@ -204,4 +204,81 @@ fn bundled_fonts_turn_source_text_into_typeset_geometry() {
         fraction_result.metrics.height.to_f64(),
         fraction_result.metrics.depth.to_f64()
     );
+
+    // --- subscripts: TeX `sub1` alone, `sub2` with a superscript -------------
+    //
+    // TeX rule 18 applies `sub1` (σ16) when the base carries only a subscript
+    // and `sub2` (σ17) when a superscript shares it. The `MATH` table has one
+    // `subscriptShiftDown`, which the bundled faces fill with σ17, so the
+    // semantics layer owns σ16. Tectonic measures `$x_1$` at 0.150 em and
+    // `$x_1^2$` at 0.248 em for the same faces.
+    let sub2 = constant(MathConstant::SubscriptShiftDown);
+    let sub1 = MathSemantics::tex_lone_subscript_shift_down(MathFontFamily::LmMath.label())
+        .expect("the bundled Latin Modern Math is in the TeX parameter table")
+        .to_f64();
+    assert!(base * sub1 < base * sub2, "σ16 sits above σ17, so the two branches must differ");
+
+    let lone = lower_tex_formula_source(r"x_1", MathDisplay::Inline);
+    let (lone_result, _, _) = layout_formula(&lone, base).expect("a lone subscript lays out");
+    assert!(
+        (lone_result.metrics.depth.to_f64() - base * sub1).abs() < 1e-3,
+        "`x_1` depth is TeX `sub1`: {} != {} ({sub1} em of {base})",
+        lone_result.metrics.depth.to_f64(),
+        base * sub1
+    );
+
+    let paired = lower_tex_formula_source(r"x_1^2", MathDisplay::Inline);
+    let (paired_result, _, _) = layout_formula(&paired, base).expect("a paired script lays out");
+    assert!(
+        (paired_result.metrics.depth.to_f64() - base * sub2).abs() < 1e-3,
+        "`x_1^2` depth is TeX `sub2`: {} != {} ({sub2} em of {base})",
+        paired_result.metrics.depth.to_f64(),
+        base * sub2
+    );
+    println!(
+        "subscript: sub1={sub1:.3}em lone_depth={:.3}px sub2={sub2:.3}em paired_depth={:.3}px",
+        lone_result.metrics.depth.to_f64(),
+        paired_result.metrics.depth.to_f64()
+    );
+
+    // --- fallback: an unlisted face keeps `SubscriptShiftDown` and reports ---
+    //
+    // StixTwoMath is deliberately outside the TeX parameter table, so the lone
+    // subscript branch must land on the font's `SubscriptShiftDown` and leave a
+    // `MissingTexParameter` record. The engine keeps the Latin Modern Math
+    // metrics so the numbers stay comparable.
+    let fallback_engine = LayoutEngine::with_facts(
+        document_text::math::builtin_font_metrics_for(MathFontFamily::LmMath),
+        Some(facts.clone()),
+    )
+    .with_font_family(MathFontFamily::StixTwoMath)
+    .with_base_size(base);
+    let fallback_nodes = lowering_nodes(r"x_1");
+    let (fallback_result, _) = fallback_engine
+        .layout_formula_result(&fallback_nodes, MathStyle::Text)
+        .expect("the fallback branch still lays out");
+    assert!(
+        fallback_engine.font_fallbacks().contains(&FontFallback::MissingTexParameter("sub1")),
+        "an unlisted face must report the missing TeX parameter instead of silently reusing σ17"
+    );
+    assert!(
+        (fallback_result.metrics.depth.to_f64() - base * sub2).abs() < 1e-3,
+        "the unlisted face falls back to the font's `SubscriptShiftDown`: {} != {}",
+        fallback_result.metrics.depth.to_f64(),
+        base * sub2
+    );
+    println!(
+        "fallback: family=stix-two-math depth={:.3}px fallbacks={:?}",
+        fallback_result.metrics.depth.to_f64(),
+        fallback_engine.font_fallbacks()
+    );
+}
+
+fn lowering_nodes(source: &str) -> Vec<FormulaNode> {
+    let formula: MathFormula = lower_tex_formula_source(source, MathDisplay::Inline);
+    let (tree, _) = lower_formula_tree(&formula).expect("the formula lowers");
+    match &tree.root {
+        FormulaNode::Sequence(items) => items.clone(),
+        other => vec![other.clone()],
+    }
 }

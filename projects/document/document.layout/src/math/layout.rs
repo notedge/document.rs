@@ -3,7 +3,9 @@
 
 use std::{cell::RefCell, collections::BTreeSet, sync::OnceLock};
 
-use document_text::math::{FontMetricsSystem, GlyphId, KernCorner, MathFontFacts, StretchAxis, StretchPlan};
+use document_text::math::{
+    FontMetricsSystem, GlyphId, KernCorner, MathFontFacts, MathFontFamily, StretchAxis, StretchPlan,
+};
 use serde::{Deserialize, Serialize};
 
 use super::conformance::{FontConformance, FontFallback};
@@ -12,9 +14,9 @@ use document_compose::{
     math::{
         Alignment, AlignmentAnchors, BBox, DelimiterComponent, DelimiterVariant, EnvironmentKind, Fixed, FontMetricsSnapshot,
         FontStyle, FormulaLayoutResult, FormulaMetrics, FormulaNode, GlyphKey, GlyphMetrics, LimitsPolicy, LineStyle,
-        MathConstant, MathEnvironment, MathError, MathItem, MathList, MathResult, MathStyle, MathStyleState, Noad, NoadKind,
-        Numbering, OperatorClass, PaintNode, RowPlacement, SpacingRule, SymbolRole, math_alphalect, normalize_math_list,
-        project_formula_with_state,
+        MathConstant, MathEnvironment, MathError, MathItem, MathList, MathResult, MathSemantics, MathStyle,
+        MathStyleState, Noad, NoadKind, Numbering, OperatorClass, PaintNode, RowPlacement, SpacingRule, SymbolRole,
+        math_alphalect, normalize_math_list, project_formula_with_state,
     },
 };
 
@@ -363,6 +365,13 @@ fn font_facts() -> Option<&'static MathFontFacts> {
 pub struct LayoutEngine {
     font_system: FontMetricsSystem,
     facts: Option<MathFontFacts>,
+    /// The face label these facts came from, when the caller named one.
+    ///
+    /// TeX parameters the `MATH` table has no carrier for (currently `sub1`)
+    /// are keyed by this label. `None` means only the metrics cache is known,
+    /// so those parameters fall back to the font's own constants and land in
+    /// the G5 ledger.
+    family: Option<MathFontFamily>,
     base_size: Fixed,
     conformance: FontConformance,
     /// Every font fallback layout consumes, deduplicated and ordered.
@@ -383,6 +392,7 @@ impl LayoutEngine {
         Self {
             font_system,
             facts: font_facts().cloned(),
+            family: MathFontFamily::builtin_default(),
             base_size: Fixed::ONE,
             conformance: FontConformance::default(),
             fallbacks: RefCell::new(BTreeSet::new()),
@@ -400,10 +410,23 @@ impl LayoutEngine {
         Self {
             font_system,
             facts,
+            family: None,
             base_size: Fixed::ONE,
             conformance: FontConformance::default(),
             fallbacks: RefCell::new(BTreeSet::new()),
         }
+    }
+
+    /// Declare which math face `facts` came from.
+    ///
+    /// A caller that selected one family passes the same label it used for the
+    /// metrics cache and the [`MathFontFacts`]. TeX parameters the `MATH` table
+    /// cannot carry are keyed by it, so leaving the label unset makes layout
+    /// fall back to the font's own constants and record
+    /// [`FontFallback::MissingTexParameter`].
+    pub fn with_font_family(mut self, family: MathFontFamily) -> Self {
+        self.family = Some(family);
+        self
     }
 
     /// Set the G5 conformance mode deciding how font fallbacks are treated.
@@ -452,6 +475,25 @@ impl LayoutEngine {
         self.font_system.get_math_constant(family, constant)
     }
 
+    /// TeX rule 18 `sub1` (σ16): the minimum baseline drop for a subscript
+    /// whose base carries no superscript, in layout units.
+    ///
+    /// No `MATH` constant carries this number: the table has one
+    /// `subscriptShiftDown`, and the bundled faces fill it with TeX's `sub2`
+    /// (σ17, applied when a superscript shares the base). The semantics layer
+    /// holds the per-face TeX parameter. A face without one falls back to the
+    /// font's `subscriptShiftDown` and lands in the G5 ledger, so a gate can
+    /// see the substitution instead of mistaking σ17 for σ16.
+    fn lone_subscript_shift(&self, size: Fixed) -> Fixed {
+        match self.family.map(MathFontFamily::label).and_then(MathSemantics::tex_lone_subscript_shift_down) {
+            Some(sub1) => sub1 * size,
+            None => {
+                self.record_fallback(FontFallback::MissingTexParameter("sub1"));
+                self.math_constant(MathConstant::SubscriptShiftDown, size).unwrap_or(Fixed::ZERO)
+            }
+        }
+    }
+
     /// One G5 diagnostic per consumed fallback, in ledger order.
     ///
     /// Severity follows the mode: production keeps every record a countable
@@ -467,7 +509,15 @@ impl LayoutEngine {
             .map(|fallback| Diagnostic {
                 code: fallback.code().to_string(),
                 severity,
-                message: format!("the math font publishes no {}, so layout substituted a synthetic value", fallback.subject()),
+                message: match &fallback {
+                    FontFallback::MissingTexParameter(name) => format!(
+                        "the math face publishes no TeX parameter `{name}`, so layout fell back to the font's `SubscriptShiftDown`"
+                    ),
+                    other => format!(
+                        "the math font publishes no {}, so layout substituted a synthetic value",
+                        other.subject()
+                    ),
+                },
                 span: None,
             })
             .collect()
@@ -2117,7 +2167,15 @@ impl LayoutEngine {
         if let Some(sub_node) = sub {
             let sub_inner = self.layout_node_state(sub_node, state.sub())?;
             let sub_layout = self.pack_hbox(vec![sub_inner, LayoutNode::Kern(script_space)], None);
-            let sub_shift = self.math_constant(MathConstant::SubscriptShiftDown, size).unwrap_or(Fixed::ZERO);
+            // TeX rule 18 keeps the two minima apart. `sub1` (σ16) applies when
+            // the base carries only a subscript, and `sub2` (σ17, the font's
+            // `subscriptShiftDown`) applies when a superscript shares it.
+            let sub_shift = if sup.is_some() {
+                self.math_constant(MathConstant::SubscriptShiftDown, size).unwrap_or(Fixed::ZERO)
+            }
+            else {
+                self.lone_subscript_shift(size)
+            };
             let sub_top_max = self.math_constant(MathConstant::SubscriptTopMax, size).unwrap_or(Fixed::ZERO);
 
             calculated_sub_shift = sub_shift.max(sub_layout.height() - sub_top_max);
