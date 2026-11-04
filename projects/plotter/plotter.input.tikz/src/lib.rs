@@ -517,6 +517,9 @@ impl Parser {
         else {
             return Err(TikzError::syntax(offset, "expected a path command such as `\\draw`"));
         };
+        if name == "node" {
+            return self.parse_node_statement(offset);
+        }
         let command = match name.as_str() {
             "draw" => Command::Draw,
             "fill" => Command::Fill,
@@ -529,6 +532,24 @@ impl Parser {
         let nodes = self.parse_path(command, style)?;
         self.nodes.extend(nodes);
         Ok(())
+    }
+
+    /// Parse a standalone `\node[options] at (x,y) [options] {text};` label.
+    fn parse_node_statement(&mut self, offset: usize) -> Result<(), TikzError> {
+        let mut options = self.parse_node_options()?;
+        if !matches!(self.peek_kind(), Some(TokenKind::Word(word)) if word.eq_ignore_ascii_case("at")) {
+            return Err(TikzError::syntax(offset, "a standalone `\\node` needs an `at (x,y)` position"));
+        }
+        self.cursor += 1;
+        let point = self.parse_coordinate()?;
+        if matches!(self.peek_kind(), Some(TokenKind::BracketOpen)) {
+            for option in self.parse_options()? {
+                apply_node_option(&mut options, &option)?;
+            }
+        }
+        let label = self.finish_node(point, options, Style::default())?;
+        self.nodes.push(label);
+        self.expect_kind(TokenKind::Semicolon, "`\\node` is missing its `;`")
     }
 
     /// Parse the option list that follows a drawing command.
@@ -755,6 +776,11 @@ impl Parser {
     /// Parse `node[options] {text}` at `point`.
     fn parse_node(&mut self, point: Point, path_style: Style) -> Result<SceneNode, TikzError> {
         let options = self.parse_node_options()?;
+        self.finish_node(point, options, path_style)
+    }
+
+    /// Build one label node from its already-parsed options.
+    fn finish_node(&mut self, point: Point, options: NodeOptions, path_style: Style) -> Result<SceneNode, TikzError> {
         let offset = self.offset();
         let Some(TokenKind::Brace(text)) = self.next_kind()
         else {
@@ -882,11 +908,28 @@ fn apply_node_option(options: &mut NodeOptions, option: &OptionSpec) -> Result<(
 
 /// Resolve the supported colour names.
 fn named_color(name: &str, offset: usize) -> Result<Color, TikzError> {
+    // The `xcolor` base set that TikZ loads by default, in its authored RGB
+    // values, so a real picture keeps the paint it asked for.
     match name.trim().to_ascii_lowercase().as_str() {
         "black" => Ok(Color::BLACK),
+        "white" => Ok(Color::WHITE),
         "red" => Ok(Color::rgb(255, 0, 0)),
-        "blue" => Ok(Color::rgb(0, 0, 255)),
         "green" => Ok(Color::rgb(0, 255, 0)),
+        "blue" => Ok(Color::rgb(0, 0, 255)),
+        "cyan" => Ok(Color::rgb(0, 255, 255)),
+        "magenta" => Ok(Color::rgb(255, 0, 255)),
+        "yellow" => Ok(Color::rgb(255, 255, 0)),
+        "gray" => Ok(Color::rgb(128, 128, 128)),
+        "darkgray" => Ok(Color::rgb(64, 64, 64)),
+        "lightgray" => Ok(Color::rgb(191, 191, 191)),
+        "brown" => Ok(Color::rgb(191, 128, 64)),
+        "lime" => Ok(Color::rgb(191, 255, 0)),
+        "olive" => Ok(Color::rgb(128, 128, 0)),
+        "orange" => Ok(Color::rgb(255, 128, 0)),
+        "pink" => Ok(Color::rgb(255, 191, 191)),
+        "purple" => Ok(Color::rgb(191, 0, 64)),
+        "teal" => Ok(Color::rgb(0, 128, 128)),
+        "violet" => Ok(Color::rgb(128, 0, 128)),
         other => Err(TikzError::unsupported(offset, format!("unknown TikZ colour `{other}`"))),
     }
 }
