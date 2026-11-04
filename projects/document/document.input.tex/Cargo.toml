@@ -11,8 +11,6 @@ readme = "readme.md"
 document-ir = { workspace = true }
 document-formats = { workspace = true, features = ["tex"] }
 document-compose = { workspace = true }
-
-[dev-dependencies]
 document-layout = { workspace = true }
 document-presentation = { workspace = true }
 document-renderer-svg = { workspace = true }

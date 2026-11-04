@@ -26,6 +26,8 @@ use document_compose::{
 };
 use document_formats::{FormatError, import::tex::import_tex_bytes};
 use document_ir::{Block, DocumentGraph, Inline, MathExpression, MathFormula, SemanticStatus, SourceSpan as IrSpan};
+use document_layout::{Diagrams, LayoutHint, document::layout_with_diagnostics};
+use document_presentation::build_display_presentation;
 
 /// Stable identifier of the TeX input profile.
 ///
@@ -58,6 +60,21 @@ pub struct TexDocument {
     pub report: ConversionReport,
     /// Structured diagnostics, including recovered source spans.
     pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Outcome of the closed loop from TeX source to SVG output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TexRender {
+    /// Rendered SVG document.
+    pub svg: String,
+    /// Shared conversion report projected from the imported graph.
+    pub report: ConversionReport,
+    /// Import diagnostics followed by the layout stage diagnostics.
+    pub diagnostics: Vec<Diagnostic>,
+    /// Number of laid out pages.
+    pub pages: usize,
+    /// Number of positioned items across all pages.
+    pub items: usize,
 }
 
 /// Failure that stops the profile before any document reaches layout.
@@ -99,6 +116,12 @@ impl Display for TexInputError {
 
 impl Error for TexInputError {}
 
+impl From<Diagnostic> for TexInputError {
+    fn from(diagnostic: Diagnostic) -> Self {
+        Self { diagnostic }
+    }
+}
+
 /// Convert TeX source text into the document model.
 ///
 /// A rejected source returns an error instead of a partial document, so a host
@@ -119,6 +142,23 @@ pub fn import_file(path: impl AsRef<Path>) -> Result<TexDocument, TexInputError>
     let source = std::fs::read_to_string(path)
         .map_err(|error| TexInputError::new(IO_FAILED, format!("failed to read {}: {error}", path.display())))?;
     import_source(&path.display().to_string(), &source)
+}
+
+/// Import TeX source and run it through layout, presentation, and SVG output.
+///
+/// The layout stage contributes its own diagnostics, so the returned list holds
+/// the import diagnostics first and the layout diagnostics after them. A
+/// renderer rejection becomes a [`TexInputError`] carrying the renderer
+/// diagnostic unchanged.
+pub fn render_svg(label: &str, source: &str) -> Result<TexRender, TexInputError> {
+    let TexDocument { graph, report, mut diagnostics } = import_source(label, source)?;
+    let (plan, layout_diagnostics) = layout_with_diagnostics(&graph, &LayoutHint::a4(), &Diagrams::new());
+    diagnostics.extend(layout_diagnostics);
+    let display = build_display_presentation(&plan);
+    let pages = display.pages.len();
+    let items = display.pages.iter().map(|page| page.items.len()).sum();
+    let svg = document_renderer_svg::render_svg(&display).map_err(TexInputError::from)?;
+    Ok(TexRender { svg, report, diagnostics, pages, items })
 }
 
 /// Check that a lowered graph satisfies the document-model invariants layout
