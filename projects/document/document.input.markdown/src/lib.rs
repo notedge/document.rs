@@ -11,7 +11,7 @@ use std::{
 use document_compose::{
     ConversionReport, CoverageSummary, Diagnostic, LossyItem, OpaqueItem, PreservedItem, Severity, SourceSpan, UnsupportedItem,
 };
-use document_formats::import::markdown::import_markdown_bytes;
+use document_formats::import::markdown::{import_markdown_bytes, import_markdown_bytes_for_flow};
 use document_ir::{Block, DocumentGraph, SemanticStatus};
 use document_layout::{Diagrams, LayoutHint, document::layout_with_diagnostics};
 use document_presentation::build_display_presentation;
@@ -120,8 +120,25 @@ impl Error for MarkdownInputError {}
 /// reports as unsupported fails closed instead of yielding a graph whose
 /// content would be dropped later in the pipeline without a diagnostic.
 pub fn import_source(label: &str, source: &str) -> Result<MarkdownDocument, MarkdownInputError> {
+    import_source_with_footnotes(label, source, false)
+}
+
+/// Import for a flow target such as SVG: footnote bodies cannot be placed, so
+/// the graph records the two footnote loss markers instead of dropping them
+/// silently.
+fn import_source_for_flow(label: &str, source: &str) -> Result<MarkdownDocument, MarkdownInputError> {
+    import_source_with_footnotes(label, source, true)
+}
+
+fn import_source_with_footnotes(label: &str, source: &str, flow_footnotes: bool) -> Result<MarkdownDocument, MarkdownInputError> {
     ensure_source_budget(source)?;
-    let graph = import_markdown_bytes(label, source).map_err(|error| {
+    let graph = if flow_footnotes {
+        import_markdown_bytes_for_flow(label, source)
+    }
+    else {
+        import_markdown_bytes(label, source)
+    }
+    .map_err(|error| {
         MarkdownInputError::from(Diagnostic {
             code: codes::PARSE_FAILED.to_owned(),
             severity: Severity::Error,
@@ -152,7 +169,7 @@ pub fn import_file(path: impl AsRef<Path>) -> Result<MarkdownDocument, MarkdownI
 /// before calling. An unregistered diagram is left to the layout stage, which
 /// keeps the authored source visible instead of guessing at a scene.
 pub fn render_svg(label: &str, source: &str, diagrams: &Diagrams) -> Result<MarkdownRender, MarkdownInputError> {
-    let MarkdownDocument { graph, report, mut diagnostics } = import_source(label, source)?;
+    let MarkdownDocument { graph, report, mut diagnostics } = import_source_for_flow(label, source)?;
     let (plan, layout_diagnostics) = layout_with_diagnostics(&graph, &LayoutHint::a4(), diagrams);
     diagnostics.extend(layout_diagnostics);
     let display = build_display_presentation(&plan);

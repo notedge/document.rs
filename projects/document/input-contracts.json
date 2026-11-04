@@ -34,7 +34,8 @@
         {"construct": "bold / italic / strikethrough", "sample": "**bold** _italic_ ~~gone~~\n"},
         {"construct": "inline and display math", "sample": "$x^2$\n\n$$\nx^2\n$$\n"},
         {"construct": "Mermaid / DOT / PlantUML diagram fences lowered by the host", "sample": "```mermaid\nflowchart TD\n  A --> B\n```\n"},
-        {"construct": "raw HTML block preserved verbatim", "sample": "<div>\nauthored block\n</div>\n", "code": "vutex.input.markdown.preserved_raw_html", "span": "exact"}
+        {"construct": "raw HTML block preserved verbatim", "sample": "<div>\nauthored block\n</div>\n", "code": "vutex.input.markdown.preserved_raw_html", "span": "exact"},
+        {"construct": "footnote definition and reference", "sample": "Body[^1]\n\n[^1]: Footnote body.\n", "note": "HTML, EPUB, DOCX and Markdown writers place the body in an endnotes section and keep the reference as a linked marker"}
       ],
       "approximated": [
         {"construct": "definition list", "code": "import.markdown.definition_list", "loss": "the description item loses its term/description relation", "span": "exact"},
@@ -42,8 +43,8 @@
         {"construct": "invalid link definition", "code": "import.markdown.invalid_link_definition", "loss": "the definition is kept as text", "span": "exact"},
         {"construct": "unresolved reference link", "code": "import.markdown.unresolved_reference_link", "loss": "the label is kept as text", "span": "none"},
         {"construct": "raw inline HTML", "code": "import.markdown.raw_html_unrendered", "loss": "the tag stays literal text", "span": "exact"},
-        {"construct": "footnote body", "code": "import.markdown.footnote_body_unplaced", "loss": "the body stays a Partial opaque block instead of a footnote collection", "span": "exact"},
-        {"construct": "footnote reference marker", "code": "import.markdown.footnote_reference_marker", "loss": "the marker is kept as text", "span": "exact"},
+        {"construct": "footnote body in a flow-only profile", "code": "import.markdown.footnote_body_unplaced", "loss": "the flow profile for SVG has no footnote collection, so the body stays a Partial opaque block", "span": "exact"},
+        {"construct": "footnote reference marker in a flow-only profile", "code": "import.markdown.footnote_reference_marker", "loss": "the flow profile keeps only the literal marker text", "span": "exact"},
         {"construct": "empty document", "code": "import.markdown.empty_document", "loss": "the import still returns an empty graph", "span": "none"}
       ],
       "refused": [

@@ -226,7 +226,7 @@ fn write_table(out: &mut String, rows: &[TableRow], image_urls: Option<&HashMap<
     if rows.iter().any(|row| row.cells.iter().any(|cell| cell.colspan > 1 || cell.rowspan > 1)) {
         // GFM tables cannot express merged cells, so a spanning table is written
         // as an inline HTML table instead of silently dropping the spans.
-        super::html::write_table(out, rows)?;
+        super::html::write_table(out, rows, &mut super::html::FootnoteRefIds::default())?;
         out.push('\n');
         return Ok(());
     }

@@ -261,7 +261,7 @@ fn autolinks_and_raw_html_do_not_disappear_without_a_report() {
 }
 
 #[test]
-fn footnote_bodies_and_references_do_not_disappear_without_a_report() {
+fn footnote_bodies_stay_for_writers_and_flow_reports_what_it_cannot_place() {
     let source = "Body with a note[^n].\n\n[^n]: Footnote body text.\n";
     let imported = import_source("virtual://footnote.md", source).expect("footnotes are a downgrade, not a rejection");
 
@@ -289,16 +289,24 @@ fn footnote_bodies_and_references_do_not_disappear_without_a_report() {
         })
         .expect("the footnote reference must stay a semantic note");
     assert_eq!(reference, "n");
+    assert!(
+        !imported.diagnostics.iter().any(|diagnostic| diagnostic.code.contains("footnote")),
+        "a placing writer owns footnotes, so semantic import reports no footnote loss: {:#?}",
+        imported.diagnostics
+    );
 
+    // A flow target such as SVG cannot place the body, so the same import path
+    // reports both markers with their authored ranges.
+    let rendered = render_svg("virtual://footnote.md", source, &Diagrams::new()).expect("flow rendering succeeds with a reported loss");
     for (code, expected) in [
         ("import.markdown.footnote_body_unplaced", "[^n]: Footnote body text."),
         ("import.markdown.footnote_reference_marker", "[^n]"),
     ] {
-        let diagnostic = imported
+        let diagnostic = rendered
             .diagnostics
             .iter()
             .find(|diagnostic| diagnostic.code == code)
-            .unwrap_or_else(|| panic!("missing report for {code}: {:#?}", imported.diagnostics));
+            .unwrap_or_else(|| panic!("missing report for {code}: {:#?}", rendered.diagnostics));
         assert_eq!(diagnostic.severity, Severity::Warning, "{code} is a downgrade, not a failure");
         let span = diagnostic.span.unwrap_or_else(|| panic!("{code} must keep its authored range"));
         let authored = &source[span.start as usize..span.end as usize];

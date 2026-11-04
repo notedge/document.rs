@@ -15,6 +15,25 @@ pub struct RenderedDiagram {
     pub svg: String,
 }
 
+/// Unique `id` values for footnote reference anchors.
+///
+/// The first reference to a label gets `fnref-<label>` so the endnote
+/// backlink resolves. Repeated references get `fnref-<label>-<n>` so ids stay
+/// unique inside one document.
+#[derive(Default)]
+pub(crate) struct FootnoteRefIds {
+    counts: HashMap<String, usize>,
+}
+
+impl FootnoteRefIds {
+    fn next(&mut self, label: &str) -> String {
+        let count = self.counts.entry(label.to_string()).or_insert(0);
+        let id = if *count == 0 { format!("fnref-{label}") } else { format!("fnref-{label}-{count}") };
+        *count += 1;
+        id
+    }
+}
+
 /// Export a semantic document graph as a standalone HTML fragment.
 ///
 /// Diagram blocks without a host-rendered scene keep the source-only `<pre>`
@@ -47,6 +66,7 @@ pub fn export_html_with_diagrams(
         out.push_str("</h1></header>");
     }
     let nested = nested_block_ids(graph);
+    let mut footnote_refs = FootnoteRefIds::default();
     let mut footnotes: Vec<&str> = Vec::new();
     for node in &graph.blocks {
         if nested.contains(&node.id) {
@@ -58,7 +78,7 @@ pub fn export_html_with_diagrams(
                 continue;
             }
         }
-        write_node(&mut out, graph, node.id, &node.block, diagrams)?;
+        write_node(&mut out, graph, node.id, &node.block, diagrams, &mut footnote_refs)?;
     }
     if !footnotes.is_empty() {
         write_footnote_section(&mut out, &footnotes);
@@ -112,10 +132,11 @@ fn write_node(
     id: NodeId,
     block: &Block,
     diagrams: &HashMap<NodeId, RenderedDiagram>,
+    footnote_refs: &mut FootnoteRefIds,
 ) -> Result<(), FormatError> {
     write!(out, r#"<div id="node-{}" data-node-id="{}">"#, id.0, id.0)
         .map_err(|error| FormatError::unsupported("html", error.to_string()))?;
-    write_block(out, graph, id, block, diagrams)?;
+    write_block(out, graph, id, block, diagrams, footnote_refs)?;
     out.push_str("</div>");
     Ok(())
 }
@@ -143,33 +164,34 @@ fn write_block(
     id: NodeId,
     block: &Block,
     diagrams: &HashMap<NodeId, RenderedDiagram>,
+    footnote_refs: &mut FootnoteRefIds,
 ) -> Result<(), FormatError> {
     match block {
         Block::Section { level, title, children } => {
             let level = (*level).clamp(1, 6);
             write!(out, "<h{}>", level).map_err(format_error)?;
-            write_inlines(out, title)?;
+            write_inlines(out, title, footnote_refs)?;
             write!(out, "</h{}>", level).map_err(format_error)?;
             for child_id in children {
                 let child = graph
                     .block(*child_id)
                     .ok_or_else(|| FormatError::invalid_input(format!("section child `{child_id:?}` is missing")))?;
-                write_node(out, graph, child.id, &child.block, diagrams)?;
+                write_node(out, graph, child.id, &child.block, diagrams, footnote_refs)?;
             }
         }
         Block::Paragraph { content } => {
             out.push_str("<p>");
-            write_inlines(out, content)?;
+            write_inlines(out, content, footnote_refs)?;
             out.push_str("</p>");
         }
         Block::Quote { content, children } => {
             out.push_str("<blockquote>");
-            write_inlines(out, content)?;
+            write_inlines(out, content, footnote_refs)?;
             for child_id in children {
                 let child = graph
                     .block(*child_id)
                     .ok_or_else(|| FormatError::invalid_input(format!("quote child `{child_id:?}` is missing")))?;
-                write_node(out, graph, child.id, &child.block, diagrams)?;
+                write_node(out, graph, child.id, &child.block, diagrams, footnote_refs)?;
             }
             out.push_str("</blockquote>");
         }
@@ -235,8 +257,8 @@ fn write_block(
             escape_text(out, &formula.source);
             out.push_str("</div>");
         }
-        Block::List { ordered, items } => write_list(out, graph, *ordered, items, diagrams)?,
-        Block::Table { rows, .. } => write_table(out, rows)?,
+        Block::List { ordered, items } => write_list(out, graph, *ordered, items, diagrams, footnote_refs)?,
+        Block::Table { rows, .. } => write_table(out, rows, footnote_refs)?,
         Block::Opaque { kind, payload_hint, .. } if kind == "thematic_break" => {
             out.push_str("<hr>");
             if !payload_hint.is_empty() {
@@ -264,6 +286,7 @@ fn write_list(
     ordered: bool,
     items: &[ListItem],
     diagrams: &HashMap<NodeId, RenderedDiagram>,
+    footnote_refs: &mut FootnoteRefIds,
 ) -> Result<(), FormatError> {
     out.push_str(if ordered { "<ol>" } else { "<ul>" });
     for item in items {
@@ -277,12 +300,12 @@ fn write_list(
         else {
             out.push_str("<li>");
         }
-        write_inlines(out, &item.content)?;
+        write_inlines(out, &item.content, footnote_refs)?;
         for child_id in &item.children {
             let child = graph
                 .block(*child_id)
                 .ok_or_else(|| FormatError::invalid_input(format!("list child `{child_id:?}` is missing")))?;
-            write_node(out, graph, child.id, &child.block, diagrams)?;
+            write_node(out, graph, child.id, &child.block, diagrams, footnote_refs)?;
         }
         out.push_str("</li>");
     }
@@ -290,7 +313,7 @@ fn write_list(
     Ok(())
 }
 
-pub(crate) fn write_table(out: &mut String, rows: &[TableRow]) -> Result<(), FormatError> {
+pub(crate) fn write_table(out: &mut String, rows: &[TableRow], footnote_refs: &mut FootnoteRefIds) -> Result<(), FormatError> {
     out.push_str("<table>");
     for row in rows {
         out.push_str("<tr>");
@@ -309,7 +332,7 @@ pub(crate) fn write_table(out: &mut String, rows: &[TableRow]) -> Result<(), For
                 out.push('"');
             }
             out.push('>');
-            write_inlines(out, &cell.content)?;
+            write_inlines(out, &cell.content, footnote_refs)?;
             out.push_str("</");
             out.push_str(tag);
             out.push('>');
@@ -320,7 +343,7 @@ pub(crate) fn write_table(out: &mut String, rows: &[TableRow]) -> Result<(), For
     Ok(())
 }
 
-fn write_inlines(out: &mut String, inlines: &[Inline]) -> Result<(), FormatError> {
+fn write_inlines(out: &mut String, inlines: &[Inline], footnote_refs: &mut FootnoteRefIds) -> Result<(), FormatError> {
     for inline in inlines {
         match inline {
             Inline::Text { text } => escape_text(out, text),
@@ -351,7 +374,7 @@ fn write_inlines(out: &mut String, inlines: &[Inline]) -> Result<(), FormatError
                         return Err(FormatError::unsupported("html", format!("invalid color style `{style}`")));
                     }
                     write!(out, "<span style=\"color:#{color}\">").map_err(format_error)?;
-                    write_inlines(out, children)?;
+                    write_inlines(out, children, footnote_refs)?;
                     out.push_str("</span>");
                     continue;
                 }
@@ -367,7 +390,7 @@ fn write_inlines(out: &mut String, inlines: &[Inline]) -> Result<(), FormatError
                     }
                 };
                 write!(out, "<{}>", tag).map_err(format_error)?;
-                write_inlines(out, children)?;
+                write_inlines(out, children, footnote_refs)?;
                 write!(out, "</{}>", tag).map_err(format_error)?;
             }
             Inline::Link { target, display, title } => {
@@ -383,7 +406,7 @@ fn write_inlines(out: &mut String, inlines: &[Inline]) -> Result<(), FormatError
                 out.push('"');
                 write_optional_title(out, title.as_deref());
                 out.push('>');
-                write_inlines(out, display)?;
+                write_inlines(out, display, footnote_refs)?;
                 out.push_str("</a>");
             }
             Inline::Image { source, alt, title, asset: _ } => {
@@ -403,17 +426,20 @@ fn write_inlines(out: &mut String, inlines: &[Inline]) -> Result<(), FormatError
                 out.push_str("<span");
                 write_attributes(out, attributes)?;
                 out.push('>');
-                write_inlines(out, children)?;
+                write_inlines(out, children, footnote_refs)?;
                 out.push_str("</span>");
             }
             Inline::Note { label, display } => {
                 out.push_str(r#"<sup class="footnote-reference" data-footnote-label=""#);
                 escape_attribute(out, label);
-                out.push_str(r##""><a href="#fn-"##);
+                out.push_str("\"><a id=\"");
+                escape_attribute(out, &footnote_refs.next(label));
+                out.push('"');
+                out.push_str(r##" href="#fn-"##);
                 escape_attribute(out, label);
                 out.push_str("\">");
                 match display {
-                    Some(display) => write_inlines(out, display)?,
+                    Some(display) => write_inlines(out, display, footnote_refs)?,
                     None => escape_text(out, label),
                 }
                 out.push_str("</a></sup>");

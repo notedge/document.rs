@@ -48,7 +48,26 @@ fn markdown_import_language() -> MarkdownLanguage {
 }
 
 /// Import Markdown text into `notedown-ir` via `oak-markdown`.
+///
+/// Footnote definitions stay `Block::Opaque { kind: "footnote_definition" }`
+/// with their authored payload, and references stay `Inline::Note`, because
+/// every writer that can place footnotes (HTML, EPUB, DOCX, Markdown) reads
+/// those two carries directly. Importing alone loses nothing, so this profile
+/// records no footnote loss.
 pub fn import_markdown_bytes(label: &str, text: &str) -> Result<DocumentGraph, FormatError> {
+    import_markdown_bytes_with_footnote_flow(label, text, false)
+}
+
+/// Import Markdown for a flow-only target such as SVG/PDF reflow.
+///
+/// The graph is identical to [`import_markdown_bytes`], but the two footnote
+/// loss markers are recorded: a flow target has no footnote collection, so the
+/// body is never placed and the reference keeps only its textual marker.
+pub fn import_markdown_bytes_for_flow(label: &str, text: &str) -> Result<DocumentGraph, FormatError> {
+    import_markdown_bytes_with_footnote_flow(label, text, true)
+}
+
+fn import_markdown_bytes_with_footnote_flow(label: &str, text: &str, flow_footnotes: bool) -> Result<DocumentGraph, FormatError> {
     let language = markdown_import_language();
     let masked = mask_fenced_code_angles(text);
     let lex_source = SourceText::new(masked.as_str());
@@ -57,7 +76,7 @@ pub fn import_markdown_bytes(label: &str, text: &str) -> Result<DocumentGraph, F
     let parser = MarkdownParser::new(&language);
     let parsed = parser.parse(&lex_source, &[], &mut cache);
     let green_tree = parsed.result.map_err(|error| FormatError::parse("markdown", error.to_string()))?;
-    lower_markdown_tree(label, green_tree, &source)
+    lower_markdown_tree(label, green_tree, &source, flow_footnotes)
 }
 
 /// Hide `<` inside fenced code bodies from the lexer.
@@ -134,10 +153,11 @@ fn lower_markdown_tree(
     label: &str,
     green_tree: &GreenNode<MarkdownLanguage>,
     source: &SourceText,
+    flow_footnotes: bool,
 ) -> Result<DocumentGraph, FormatError> {
     let red_root = RedNode::new(green_tree, 0);
     let mut graph = DocumentGraph::new(document_id_for(label));
-    let mut context = LinkContext::default();
+    let mut context = LinkContext { flow_footnotes, ..LinkContext::default() };
     let children = red_root.children().collect::<Vec<_>>();
     for child in &children {
         if let RedTree::Node(node) = *child {
@@ -189,9 +209,9 @@ fn lower_markdown_tree(
         if node.element_type() == MarkdownElementType::FootnoteDefinition {
             let span = node.span();
             let site = Some(SourceSpan { start: span.start as u32, end: span.end as u32 });
-            // Flow targets have no footnote collection, so the body survives only
-            // as an opaque payload. Recording the loss keeps the authored text
-            // accounted for instead of letting it vanish without a report.
+            // The definition keeps its authored payload for the writers that
+            // place it at document end. Only a flow-only import records the loss,
+            // because only a flow target drops the body.
             graph.push_block_at(
                 Block::Opaque {
                     kind: "footnote_definition".into(),
@@ -200,7 +220,9 @@ fn lower_markdown_tree(
                 },
                 site,
             );
-            graph.push_loss_at(footnote_body_loss_marker(), site);
+            if context.flow_footnotes {
+                graph.push_loss_at(footnote_body_loss_marker(), site);
+            }
             pending_footnote = Some((graph.blocks.len() - 1, node.span().end));
             continue;
         }
@@ -321,6 +343,8 @@ enum BlockOutcome {
 struct LinkContext {
     definitions: HashMap<String, LinkDefinition>,
     losses: Vec<(LossMarker, Option<SourceSpan>)>,
+    /// True when the graph serves a flow-only target that cannot place footnotes.
+    flow_footnotes: bool,
 }
 
 struct LinkDefinition {
@@ -633,11 +657,13 @@ fn lower_inline_node(node: RedNode<MarkdownLanguage>, source: &SourceText, conte
         MarkdownElementType::FootnoteReference => {
             let raw = node.text(source);
             let label = raw.trim().strip_prefix("[^").and_then(|value| value.strip_suffix(']')).unwrap_or_default().to_string();
-            let span = node.span();
-            context.losses.push((
-                footnote_reference_loss_marker(),
-                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
-            ));
+            if context.flow_footnotes {
+                let span = node.span();
+                context.losses.push((
+                    footnote_reference_loss_marker(),
+                    Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+                ));
+            }
             Some(Inline::Note { label, display: None })
         }
         MarkdownElementType::Strikethrough => {
