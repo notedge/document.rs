@@ -1,24 +1,16 @@
 # crawler-store
 
-Persistence adapter for Crawler crawls: `Store` trait, keyspace encoding, in-memory storage, and optional `YydbStore`
-integration.
+采集持久化：`MemoryStore` 与可选 `YydbStore`，覆盖响应缓存、checkpoint 与页面事务合同。
 
-Checkpoints, committed page indexes, and crawl metadata flow through this crate so `crawler resume` can continue a
-paused run.
+复杂合同 JSON / doctor 套件在 **下游**产品仓；本仓测试只留冒烟。门面：[`crawler`](../crawler/readme.md)。
 
-## 🗄 Implementations
+## Example
 
-| Backend       | Use                                                       |
-|---------------|-----------------------------------------------------------|
-| `MemoryStore` | Tests, ephemeral runs, doctor checks                      |
-| `YydbStore`   | Durable local storage when `yydb` is enabled in the build |
+```rust
+use crawler_store::{MemoryStore, Store, StoreConfig};
 
-## 🔑 Keyspace
+let mut store = MemoryStore::open(StoreConfig::memory()).expect("memory store opens");
+store.reopen().expect("reopen keeps session contract");
+```
 
-Keys encode crawl identity, frontier state, and artifact references in a stable layout shared with diagnostics. Do not
-invent parallel key formats in adapters—extend the trait instead.
-
-## 🔌 Integration
-
-`crawler` writes checkpoints when crawl options request them. Node users pass `--checkpoint-out` or `--checkpoint-dir`
-on the CLI; the store layout is opaque to npm consumers but required for `resume`.
+响应缓存、robots 缓存与 checkpoint 均在 `Store` trait 上，由具体后端决定持久化方式。

@@ -1,24 +1,16 @@
 # crawler-extract
 
-Semantic extractors that turn `crawler-types::FetchArtifact` HTML (and related inputs) into `notedown-ir::DocumentGraph`
-output plus extraction diagnostics.
+语义抽取：把 `FetchArtifact`（通常是 HTML）降到 `document-ir::DocumentGraph`。
 
-Shared by the `crawler` facade and `crawler-napi` so CLI and Node hosts see the same extraction behavior.
+门面再导出为 `crawler::semantic`。见 [`crawler`](../crawler/readme.md)。
 
-## 🧪 Inputs and outputs
+## Example
 
-| Input                         | Output                                           |
-|-------------------------------|--------------------------------------------------|
-| Saved HTML / fetched artifact | `DocumentGraph` JSON + coverage/loss report      |
-| Inspect stages                | Structural metadata without full semantic commit |
+```rust
+use crawler_extract::{Extractor, HtmlExtractor};
 
-Heuristic HTML extraction may block or partial-commit on unknown markup. Always read the report—not only the exit code.
+let extractors: [&dyn Extractor; 1] = [&HtmlExtractor];
+```
 
-## ⚠️ Oak HTML maturity
-
-Oak-backed HTML paths are under active acceptance testing. Fixture pages may extract cleanly while arbitrary production
-sites still gap.
-
-## 🔌 Integration
-
-See the `crawler` facade and integration tests for how extractors are invoked in this release.
+把 fetch 阶段产出的 `crawler_fetch::FetchArtifact` 连同 `ExtractBudget` / `ExtractContext` 传给
+`run_extract`；完整编排优先用门面 `crawler::run_extract`。

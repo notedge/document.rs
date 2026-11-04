@@ -1,8 +1,9 @@
 # Crawler
 
-`projects/crawler/` 是 document.rs 里的**采集子系统**（原 Pandark 产品域）：抓取编排、传输、语义抽取与持久化，统一品牌 `crawler-*`，由门面 crate `crawler` 做稳定再导出。
+`projects/crawler/` 是 document.rs 里的 **采集子系统**（原 Pandark 产品域）：抓取编排、传输、语义抽取与持久化，统一品牌
+`crawler-*`，由门面 crate `crawler` 做稳定再导出。
 
-本目录**只放 Rust 实现**。大型站点 fixtures、视觉/二进制黄金留在下游产品仓或 CI artifact；实现仓可保留文本合同 JSON。
+本目录 **只放 Rust 实现**。大型站点 fixtures、视觉/二进制黄金、数据驱动合同 JSON 留在下游产品仓；本仓测试只留冒烟。
 
 ## 1. 包图
 
@@ -41,22 +42,22 @@ flowchart TB
   F -.-> IR & FMT
 ```
 
-| 目录 | Package | 职责 |
-|---|---|---|
-| `crawler` | `crawler` | 编排门面：plan / crawl / resume / extract / inspect / browser |
-| `crawler.types` | `crawler-types` | `FetchArtifact`、frontier、报告、诊断 namespace `crawler` |
-| `crawler.fetch` | `crawler-fetch` | HTTP / file / memory 传输、robots、响应缓存 |
-| `crawler.extract` | `crawler-extract` | HTML → `document.ir` 语义抽取与 inspect |
-| `crawler.store` | `crawler-store` | checkpoint / 页面事务 / memory & yydb 后端 |
+| 目录              | Package           | 职责                                                          |
+|-------------------|-------------------|---------------------------------------------------------------|
+| `crawler`         | `crawler`         | 编排门面：plan / crawl / resume / extract / inspect / browser |
+| `crawler.types`   | `crawler-types`   | `FetchArtifact`、frontier、报告、诊断 namespace `crawler`     |
+| `crawler.fetch`   | `crawler-fetch`   | HTTP / file / memory 传输、robots、响应缓存                   |
+| `crawler.extract` | `crawler-extract` | HTML → `document.ir` 语义抽取与 inspect                       |
+| `crawler.store`   | `crawler-store`   | checkpoint / 页面事务 / memory & yydb 后端                    |
 
 诊断与 schema 合同（`1.0.0` 前 `/v0`）：
 
-| 常量 | 值 |
-|---|---|
-| `NAMESPACE` | `crawler` |
-| 报告 | `crawler.report/v0` |
-| checkpoint | `crawler.checkpoint/v0` |
-| inspect | `crawler.inspect/v0` |
+| 常量        | 值                      |
+|-------------|-------------------------|
+| `NAMESPACE` | `crawler`               |
+| 报告        | `crawler.report/v0`     |
+| checkpoint  | `crawler.checkpoint/v0` |
+| inspect     | `crawler.inspect/v0`    |
 
 ## 2. 主链：seed → fetch → extract → store
 
@@ -116,12 +117,12 @@ sequenceDiagram
 
 ## 3. 资产与下游边界
 
-| 内容 | 归属 |
-|---|---|
-| 实现仓 Rust 测试 | **仅冒烟**（开库 / 缓存读写 / 编排烟测） |
-| store 合同 JSON、doctor / 并发套件 | **下游** 产品仓 |
-| 大型站点 fixtures / 二进制快照 | **下游**（`CRAWLER_FIXTURES`） |
-| NAPI / CLI / npm 包装 | **下游**（原 pandark 产品仓） |
+| 内容                               | 归属                                     |
+|------------------------------------|------------------------------------------|
+| 实现仓 Rust 测试                   | **仅冒烟**（开库 / 缓存读写 / 编排烟测） |
+| store 合同 JSON、doctor / 并发套件 | **下游** 产品仓                          |
+| 大型站点 fixtures / 二进制快照     | **下游**（`CRAWLER_FIXTURES`）           |
+| NAPI / CLI / npm 包装              | **下游**（原 pandark 产品仓）            |
 
 ## 4. 本地开发
 

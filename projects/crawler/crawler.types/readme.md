@@ -1,28 +1,14 @@
 # crawler-types
 
-Shared crawl and extraction contracts for Crawler. Defines the shapes adapters and stores agree on before any HTTP
-request or HTML parse runs.
+采集合同：`FetchArtifact`、frontier、抽取结果、事件与报告。语义正文不在这里——落在 `document-ir::DocumentGraph`。
 
-Semantic document content is **not** owned here—it lives in `notedown-ir::DocumentGraph`.
+诊断 namespace 为 `crawler`；schema 形如 `crawler.report/v0`。通常经门面 [`crawler`](../crawler/readme.md) 使用。
 
-## 📋 Core types
+## Example
 
-| Type            | Role                                           |
-|-----------------|------------------------------------------------|
-| `FetchArtifact` | Normalized fetch result passed to extractors   |
-| `FrontierItem`  | Planned or queued crawl target                 |
-| `ExtractResult` | Extraction outcome and document handle         |
-| `CrawlEvent`    | Progress and state transitions during a run    |
-| `CrawlReport`   | Serializable counters, diagnostics, and status |
+```rust
+use crawler_types::{CrawlRequest, canonicalize_request_url};
 
-Policies for robots, challenges, and budgets are expressed as types in this crate and enforced in `crawler.fetch` /
-`crawler`.
-
-## 🔌 Who depends on this
-
-- `crawler.fetch` — produces `FetchArtifact`
-- `crawler.extract` — consumes artifacts, emits `ExtractResult`
-- `crawler.store` — persists crawl keys and checkpoints
-- `crawler-napi` — serializes reports to JSON for Node
-
-Keep breaking changes rare: npm and CLI reports deserialize these contracts.
+let url = canonicalize_request_url("https://Example.com/a").expect("absolute http(s) URL");
+let _ = CrawlRequest::from_seed(url.as_str()).expect("seedable URL");
+```

@@ -1,28 +1,18 @@
 # crawler-fetch
 
-Transport layer for Crawler: HTTP, local file, and in-memory sources with optional response caching and robots policy
-hooks.
+传输层：HTTP / 本地文件 / 内存源，附带响应缓存与 robots 钩子，产出 `FetchArtifact`。
 
-Produces `crawler-types::FetchArtifact` values for `crawler.extract` and crawl orchestration in `crawler`.
+礼貌抓取策略仍属原型强度；生产调度与大型 fixtures 在下游。门面：[`crawler`](../crawler/readme.md)。
 
-## 🚚 Transports
+## Example
 
-| Transport | Typical input                           |
-|-----------|-----------------------------------------|
-| HTTP      | `https://` seeds and discovered links   |
-| File      | Saved HTML or fixture snapshots on disk |
-| Memory    | Tests and embedded fixture bytes        |
+```rust
+use crawler_fetch::{FetchClient, FetchRequest, MemoryTransport, RobotsPolicy};
+use crawler_types::PolitenessProfile;
+use url::Url;
 
-## 🤖 Robots and politeness
-
-Robots.txt parsing and scheduling policies are implemented here, but **production politeness is not fully accepted** in
-the current release. Treat robots handling as prototype behavior until fixture gates pass.
-
-## 💾 Cache
-
-Optional cache directories deduplicate repeated fetches during development and fixture runs. Cache semantics are
-per-transport—do not assume a cache hit skips robots evaluation without verifying the release.
-
-## 🔌 Integration
-
-`crawler` selects transports from crawl options. `crawler-napi` exposes `fetchSeed` for single-seed diagnostics.
+let transport = MemoryTransport::new();
+let client = FetchClient::new(transport, RobotsPolicy::from_profile(PolitenessProfile::Developer));
+let req = FetchRequest { url: Url::parse("https://example.com/")?, headers: Default::default() };
+let _artifact = client.fetch(&req)?;
+```

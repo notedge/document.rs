@@ -1,44 +1,31 @@
 # crawler
 
-Rust crawl orchestration facade for Crawler. Wires `crawler.fetch` transports, `crawler.extract` semantic extractors,
-and optional `crawler.store` persistence into plan, fetch, crawl, resume, extract, and inspect flows consumed by
-`crawler-napi` and tests.
+Crawler 编排门面：串联 `crawler-fetch` / `crawler-extract` / `crawler-store`，并再导出合同类型。根 API 提供
+`plan_crawl` / `run_crawl` / `resume_crawl_from_checkpoint` / `run_extract` / `inspect_artifact`，浏览器能力走原生
+`BrowserProvider`。
 
-CLI users should install `@notedge/crawler` instead of depending on this crate directly.
+终端用户应使用下游 `@notedge/crawler` 等产品包装；应用集成可直接依赖本 crate。架构见 [`../readme.md`](../readme.md)。
 
-## 🧩 Ownership
+## 再导出
 
-| Concern                              | Crate             |
-|--------------------------------------|-------------------|
-| Contracts (`FetchArtifact`, reports) | `crawler.types`   |
-| HTTP/file/memory fetch               | `crawler.fetch`   |
-| HTML → `document.ir`                 | `crawler.extract` |
-| Checkpoints and crawl storage        | `crawler.store`   |
-| Node-API surface                     | `crawler-napi`    |
+| 模块                | 底层              |
+|---------------------|-------------------|
+| `crawler::types`    | `crawler-types`   |
+| `crawler::fetch`    | `crawler-fetch`   |
+| `crawler::semantic` | `crawler-extract` |
+| `crawler::store`    | `crawler-store`   |
 
-Document semantics live in `document-ir::DocumentGraph`, not in this crate.
+## Example
 
-## 🔌 Integration
+```rust
+use crawler::plan_crawl;
+use crawler::types::CrawlRequest;
 
-Downstream adapters call the public Rust API to run bounded crawls and extraction. Browser sessions go through a
-`BrowserProvider` capability on native paths only.
+let request = CrawlRequest::from_seed("https://example.com/").expect("seed parses");
+let plan = plan_crawl(request).expect("crawl plan");
+assert!(!plan.frontier.is_empty());
+```
 
-Submodule re-exports mirror the `document` facade pattern:
+## 状态说明
 
-| Module | Crate |
-|--------|-------|
-| `crawler::types` | `crawler.types` |
-| `crawler::fetch` | `crawler.fetch` |
-| `crawler::semantic` | `crawler.extract` |
-| `crawler::store` | `crawler.store` |
-
-Root-level exports remain the orchestration entry points for crawl, extract, and inspect flows.
-
-产品树架构见 [`../readme.md`](../readme.md)。测试入口在本 crate 的 `tests/`。
-
-## ⚠️ Release status
-
-Collection behavior is still validated against fixtures and small scopes. Do not treat politeness, Oak HTML extraction,
-or multi-host scheduling as production-complete from this facade alone.
-
-Repository: https://github.com/notedge/document.rs
+礼貌抓取、多宿主调度等行为仍以冒烟与下游 fixtures 为准；不要仅凭本门面推断生产完备性。
