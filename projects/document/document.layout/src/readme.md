@@ -6,11 +6,15 @@ Page, block, line, table, and pagination layout.
 
 Formulas are typeset only when the host installs a math font
 (`document_text::math::install_math_font`, for example Latin Modern Math).
+Installing fonts at the operating-system level is not enough: the resolver only
+sees the in-process registry, so the host must load the font bytes itself.
 Without one, `layout` keeps the author's source on the page as text and emits an
 `Error` diagnostic, `vutex.layout.math.not_typeset`, with a span over the
 formula. Both display `Math` blocks and inline math take that path, and the
 layout is never reported as a clean pass.
 
-With a font installed, formulas become outline paths. That is deliberate: the
-glyphs are geometry, so the PDF text layer cannot extract or search a formula the
-way it extracts prose. Prose stays extractable; math does not.
+The source-text fallback is drawn as ordinary text, so it stays searchable in
+the PDF while showing no formula geometry. With host-installed font bytes the
+glyphs are emitted as outlines instead, which is why a typeset formula is not
+searchable in the PDF text layer. That is deliberate: prose stays extractable,
+math does not.
