@@ -75,36 +75,6 @@ pub(crate) struct SystemFont {
 }
 
 impl SystemFont {
-    /// Load every system font that covers characters in `charset`.
-    ///
-    /// A document that needs glyphs outside WinAnsi usually needs more than one
-    /// face: a CJK body font rarely carries emoji, and a symbol face rarely
-    /// carries Han characters. Candidates are visited in [`CANDIDATES`] order
-    /// and each one is only kept when it covers a character no earlier font
-    /// already provided, so the returned list is the fallback chain and its
-    /// subsets are disjoint. A candidate that is absent, unreadable, or offers
-    /// nothing new is skipped.
-    pub(crate) fn discover_fonts(charset: &BTreeSet<char>) -> Vec<Self> {
-        let mut remaining = charset.clone();
-        let mut fonts = Vec::new();
-        for path in CANDIDATES {
-            if remaining.is_empty() {
-                break;
-            }
-            let Some(font) = Self::load(Path::new(path))
-            else {
-                continue;
-            };
-            let covered: BTreeSet<char> = remaining.iter().copied().filter(|ch| font.glyph_id(*ch).is_some()).collect();
-            if covered.is_empty() {
-                continue;
-            }
-            remaining.retain(|ch| !covered.contains(ch));
-            fonts.push(font);
-        }
-        fonts
-    }
-
     /// Load one font file, rejecting CFF outlines and malformed tables.
     pub(crate) fn load(path: &Path) -> Option<Self> {
         let raw = fs::read(path).ok()?;

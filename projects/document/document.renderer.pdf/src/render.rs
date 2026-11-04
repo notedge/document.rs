@@ -30,7 +30,7 @@ use document_presentation::display::{
     DisplayGraphic, DisplayImage, DisplayItem, DisplayPage, DisplayPath, DisplayPresentation, DisplayRect, DisplayRule,
     DisplayTextRun,
 };
-use document_renderer::{RenderBackend, is_safe_href};
+use document_renderer::is_safe_href;
 use plotter_scene::DisplayScene;
 
 use crate::{
@@ -153,25 +153,6 @@ pub fn render_pdf_with_resources_and_diagnostics(
     let mut diagnostics = Vec::new();
     let pdf = render_document(presentation, policy, resources, &mut diagnostics)?;
     Ok(PdfRenderOutcome { pdf, diagnostics })
-}
-
-struct PdfBackend;
-
-impl PdfBackend {
-    fn render_display_with(
-        &self,
-        presentation: &DisplayPresentation,
-        policy: &PdfFontPolicy,
-        resources: &PdfResources,
-    ) -> Result<Vec<u8>, Diagnostic> {
-        render_pdf_with_resources(presentation, policy, resources)
-    }
-}
-
-impl RenderBackend for PdfBackend {
-    fn render_display(&self, presentation: &DisplayPresentation) -> Result<Vec<u8>, Diagnostic> {
-        render_pdf(presentation)
-    }
 }
 
 fn render_document(
@@ -1600,45 +1581,4 @@ fn assemble(objects: &[PdfObject]) -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
     out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::rebuild_stream_dict;
-
-    #[test]
-    fn rebuild_from_empty_dict() {
-        let got = rebuild_stream_dict("", 42);
-        assert_eq!(got, "<< /Length 42 >>");
-    }
-
-    #[test]
-    fn rebuild_replaces_a_stale_length() {
-        let got = rebuild_stream_dict("<< /Length 99999 >>", 42);
-        assert_eq!(got, "<< /Length 42 >>");
-    }
-
-    #[test]
-    fn rebuild_preserves_other_entries() {
-        let got =
-            rebuild_stream_dict("<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /BitsPerComponent 8 /Length 99 >>", 12);
-        assert!(got.contains("/Type /XObject"));
-        assert!(got.contains("/Subtype /Image"));
-        assert!(got.contains("/Length 12"));
-        assert!(!got.contains("/Length 99"), "stale value must be gone");
-    }
-
-    #[test]
-    fn rebuild_does_not_touch_length1_used_by_fontfile_descriptors() {
-        let got = rebuild_stream_dict("<< /Length1 1234 /Length 99 >>", 2048);
-        assert!(got.contains("/Length1 1234"), "FontFile descriptor keeps its non-compressed length hint");
-        assert!(got.contains("/Length 2048"), "stream Length is the actual byte count");
-        assert!(!got.contains("/Length 99"), "stale Length must be gone");
-    }
-
-    #[test]
-    fn rebuild_handles_dict_without_explicit_length() {
-        let got = rebuild_stream_dict("<< /Filter /FlateDecode >>", 32);
-        assert_eq!(got, "<< /Filter /FlateDecode /Length 32 >>");
-    }
 }

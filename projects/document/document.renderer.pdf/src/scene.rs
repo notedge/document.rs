@@ -30,8 +30,7 @@ use plotter_types::{Color, Point, Rect, Transform};
 use document_compose::Diagnostic;
 
 use crate::render::{
-    EmbeddedText, ImageResources, OpacityResources, append_warning, base_font_for, needs_embedding, num, paint_text,
-    scene_font_style,
+    EmbeddedText, ImageResources, OpacityResources, base_font_for, needs_embedding, num, paint_text, scene_font_style,
 };
 
 /// Width of one character as a fraction of the font size.

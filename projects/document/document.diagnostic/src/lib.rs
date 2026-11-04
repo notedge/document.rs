@@ -312,12 +312,16 @@ pub fn emit_adapter_error(error: &AdapterError) {
 pub fn log_adapter_error(error: &AdapterError) {
     #[cfg(feature = "logger")]
     emit_adapter_error(error);
+    #[cfg(not(feature = "logger"))]
+    let _ = error;
 }
 
 /// Emit every diagnostic in a set when the `logger` feature is enabled.
 pub fn log_diagnostic_set(set: &DiagnosticSet) {
     #[cfg(feature = "logger")]
     emit_diagnostic_set(set);
+    #[cfg(not(feature = "logger"))]
+    let _ = set;
 }
 
 /// Build a single-diagnostic envelope for failed adapter operations.

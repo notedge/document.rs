@@ -13,7 +13,6 @@ document-ir = { workspace = true }
 document-formats = { workspace = true }
 plotter-scene = { workspace = true }
 document-compose = { workspace = true, features = ["serde"] }
-document-style = { workspace = true }
 document-text = { workspace = true }
 
 [dev-dependencies]

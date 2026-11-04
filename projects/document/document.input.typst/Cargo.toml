@@ -9,7 +9,7 @@ readme = "readme.md"
 
 [dependencies]
 document-ir = { workspace = true }
-document-formats = { workspace = true }
+document-formats = { workspace = true, features = ["typst"] }
 document-compose = { workspace = true }
 document-layout = { workspace = true }
 document-presentation = { workspace = true }

@@ -1086,7 +1086,7 @@ fn split_inline_atoms(text: &str, face: TextFace, href: Option<&str>, title: Opt
     let mut atoms = Vec::new();
     let mut word = String::new();
     let mut in_space = false;
-    let mut push_text = |value: String, atoms: &mut Vec<InlineAtom>| {
+    let push_text = |value: String, atoms: &mut Vec<InlineAtom>| {
         atoms.push(InlineAtom::Text { text: value, face, href: href.map(str::to_string), title: title.map(str::to_string) });
     };
     for ch in text.chars() {

@@ -6,6 +6,3 @@ description = "Semantic styles, named styles, inheritance, and themes"
 license.workspace = true
 edition.workspace = true
 readme = "readme.md"
-
-[dependencies]
-document-compose = { workspace = true, features = ["serde"] }
