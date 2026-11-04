@@ -1,0 +1,16 @@
+[package]
+name = "plotter-input-tikz"
+version.workspace = true
+authors.workspace = true
+readme = "readme.md"
+description = "TikZ frontend: tikzpicture source to plotter DisplayScene"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+plotter-diagram = { workspace = true }
+plotter-scene = { workspace = true }
+
+[dev-dependencies]
+plotter-types = { workspace = true }
