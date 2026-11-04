@@ -93,20 +93,35 @@
         {"construct": "class / interface / abstract / enum with visibility members", "sample": "@startuml\nclass Order {\n  +id : String\n}\n@enduml\n"},
         {"construct": "class relations association / inheritance / composition / aggregation / dependency / link"},
         {"construct": "sequence participant / actor with solid / dotted / solid-arrow / dotted-arrow messages and activate / deactivate", "sample": "@startuml\nAlice -> Bob: hello\n@enduml\n"},
+        {"construct": "activity actions `:text;`, start and stop, decisions with then / elseif / else / endif, forks with fork again and end fork / merge / split, swimlanes |Name| and |#color|Name|, legacy arrow transitions", "sample": "@startuml\nstart\n:Read;\nif (ready?) then (yes)\n:Write;\nelse (no)\n:Skip;\nendif\nstop\n@enduml\n"},
+        {"construct": "state declarations, composite states with regions separated by --, transitions, [*] start and end chosen by arrow direction, and the <<fork>> / <<join>> / <<choice>> / <<start>> / <<end>> / <<entryPoint>> / <<exitPoint>> stereotypes", "sample": "@startuml\nstate Idle\nstate Busy\n[*] --> Idle\nIdle --> Busy : start\nBusy --> [*]\n@enduml\n"},
+        {"construct": "component packages, component / interface / [Name] declarations, port / portin / portout, and relations reusing the class relation kinds with multiplicity and label", "sample": "@startuml\npackage core {\n  component A\n  component B\n}\ninterface API\nA --> B : uses\n@enduml\n"},
         {"construct": "line comments and /' ... '/ block comments"}
       ],
       "approximated": [
-        {"construct": "multiplicity on a relation end", "code": "davinci.diagram.approximated", "loss": "folded into the relation label"}
+        {"construct": "multiplicity on a class or component relation end", "code": "davinci.diagram.approximated", "loss": "folded into the relation label"},
+        {"construct": "activity decision branch gate label", "code": "davinci.diagram.approximated", "loss": "the spec has no gate primitive, so the label rides the edge leaving the rhombus"},
+        {"construct": "activity fork construct", "code": "davinci.diagram.approximated", "loss": "drawn as a plain box node because the spec has no bar primitive"},
+        {"construct": "activity swimlane colour |#color|", "code": "davinci.diagram.approximated", "loss": "the cluster frame keeps the theme colour"},
+        {"construct": "state composite region", "code": "davinci.diagram.approximated", "loss": "each region becomes one untitled flat frame and nested states join every ancestor frame"},
+        {"construct": "state start / end / entryPoint / exitPoint stereotypes", "code": "davinci.diagram.approximated", "loss": "they share the circle outline because the spec has one circle shape"},
+        {"construct": "component port", "code": "davinci.diagram.approximated", "loss": "drawn as a standalone round node because the AST records no owning component"},
+        {"construct": "nested component package", "code": "davinci.diagram.approximated", "loss": "inner packages flatten into the outer frame"}
       ],
       "refused": [
-        {"construct": "activity / state / component / deployment / usecase / object / timing / gantt / mindmap / wbs / salt / ditaa / nwdiag / rackdiag / packetdiag / archimate / gitgraph / chart", "code": "davinci.diagram.unsupported", "gap": "oak-plantuml only builds class and sequence diagrams", "span": "family header line"},
-        {"construct": "skinparam / note / alt / else / loop / group / par / opt / break / critical / ref / box / title / caption / header / footer / legend / scale / autonumber / newpage / hide / show / left / right / top / bottom / allow_mixing", "code": "davinci.diagram.unsupported"},
-        {"construct": "preprocessor directive", "code": "davinci.diagram.unsupported"},
-        {"construct": "foreign start marker", "code": "davinci.diagram.unsupported"},
-        {"construct": "missing or repeated markers", "code": "davinci.diagram.unsupported"},
-        {"construct": "content outside the markers", "code": "davinci.diagram.unsupported"},
-        {"construct": "class and sequence mixed in one source", "code": "davinci.diagram.unsupported"},
-        {"construct": "source the parser refuses", "code": "davinci.diagram.unsupported"}
+        {"construct": "deployment / usecase / object / timing / gantt / mindmap / wbs / salt / ditaa / nwdiag / rackdiag / packetdiag / archimate / gitgraph / chart", "code": "davinci.diagram.unsupported", "gap": "oak-plantuml builds no AST for these families", "span": "family header line"},
+        {"construct": "class or sequence discarded statements skinparam / note / alt / else / loop / group / par / opt / break / critical / ref / box / title / caption / header / footer / legend / scale / autonumber / newpage / hide / show / left / right / top / bottom / allow_mixing", "code": "davinci.diagram.unsupported", "gap": "the class and sequence builders drop these statements, so the whole diagram falls back to its source", "span": "authored line"},
+        {"construct": "activity discarded statements repeat / while / endwhile / detach / kill / partition / note / skinparam / title / caption / header / footer / legend / scale / autonumber / newpage / hide / show / left / right / top / bottom / allow_mixing", "code": "davinci.diagram.unsupported", "gap": "the activity builder keeps only actions, decisions, forks, swimlanes, and transitions", "span": "authored line"},
+        {"construct": "state discarded statements note / skinparam / title / caption / header / footer / legend / scale / autonumber / newpage / hide / show / direction / style / left / right / top / bottom / allow_mixing", "code": "davinci.diagram.unsupported", "gap": "the state builder drops these statements", "span": "authored line"},
+        {"construct": "state stereotype outside fork / join / choice / start / end / entry / exit", "code": "davinci.diagram.unsupported", "gap": "the builder downgrades an unknown <<Name>> to a plain state", "span": "authored line"},
+        {"construct": "component discarded statements database / node / cloud / artifact / folder / frame / rectangle / queue / storage / note / skinparam / title / caption / header / footer / legend / scale / autonumber / newpage / hide / show / left / right / top / bottom / allow_mixing", "code": "davinci.diagram.unsupported", "gap": "the component AST models only component, interface, port, package, and relations", "span": "authored line"},
+        {"construct": "preprocessor directive", "code": "davinci.diagram.unsupported", "gap": "includes and macro expansion are resolved before the AST, so the source text cannot be lowered"},
+        {"construct": "foreign start marker", "code": "davinci.diagram.unsupported", "gap": "only @startuml is read"},
+        {"construct": "missing or repeated markers", "code": "davinci.diagram.unsupported", "gap": "the source must be exactly one wrapped diagram"},
+        {"construct": "content outside the markers", "code": "davinci.diagram.unsupported", "gap": "lines outside the pair carry no diagram meaning"},
+        {"construct": "class and sequence mixed in one source", "code": "davinci.diagram.unsupported", "gap": "one source lowers to one family"},
+        {"construct": "diagram with no nodes and no edges", "code": "davinci.diagram.empty-diagram", "gap": "an empty scene is not rendered"},
+        {"construct": "source the parser refuses", "code": "davinci.diagram.unsupported", "gap": "the refusal keeps the authored line span"}
       ]
     },
     {
@@ -146,6 +161,9 @@
     {"id": "diagram-mermaid-er", "language": "mermaid", "classification": "accept", "source": "erDiagram\n  CUSTOMER {\n    string id PK\n  }\n  ORDER {\n    int id PK\n  }\n  CUSTOMER ||--o{ ORDER : places\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
     {"id": "diagram-plantuml-class", "language": "plantuml", "classification": "accept", "source": "@startuml\nclass Order {\n  +id : String\n}\n@enduml\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
     {"id": "diagram-plantuml-sequence", "language": "plantuml", "classification": "accept", "source": "@startuml\nAlice -> Bob: hello\n@enduml\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+    {"id": "diagram-plantuml-activity", "language": "plantuml", "classification": "accept", "source": "@startuml\nstart\n:Read;\nif (ready?) then (yes)\n:Write;\nelse (no)\n:Skip;\nendif\nstop\n@enduml\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+    {"id": "diagram-plantuml-state", "language": "plantuml", "classification": "accept", "source": "@startuml\nstate Idle\nstate Busy\n[*] --> Idle\nIdle --> Busy : start\nBusy --> [*]\n@enduml\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+    {"id": "diagram-plantuml-component", "language": "plantuml", "classification": "accept", "source": "@startuml\npackage core {\n  component A\n  component B\n}\ninterface API\nA --> B : uses\n@enduml\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
     {"id": "diagram-tikz-polyline", "language": "tikz", "classification": "accept", "source": "\\begin{tikzpicture}\n\\draw (0,0) -- (2,1);\n\\end{tikzpicture}\n", "expect": {"lower": "scene", "deterministic": true}},
     {"id": "diagram-tikz-rectangle", "language": "tikz", "classification": "accept", "source": "\\draw[red] (0,0) rectangle (1,1);\n", "expect": {"lower": "scene", "deterministic": true}},
     {"id": "diagram-tikz-node-label", "language": "tikz", "classification": "accept", "source": "\\node[above, text=red] at (0,0) {label};\n", "expect": {"lower": "scene", "deterministic": true}}
@@ -161,6 +179,9 @@
     {"id": "diagram-dot-color-attribute", "language": "dot", "source": "digraph {\n  a [fillcolor=\"#ff0000\"]\n}\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "fillcolor=\"#ff0000\""},
     {"id": "diagram-plantuml-skinparam", "language": "plantuml", "source": "@startuml\nskinparam monochrome true\nA -> B\n@enduml\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "skinparam monochrome true"},
     {"id": "diagram-plantuml-missing-header", "language": "plantuml", "source": "A -> B\n@enduml\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "A -> B"},
+    {"id": "diagram-plantuml-activity-note", "language": "plantuml", "source": "@startuml\nstart\n:Read;\nnote right: draft\nstop\n@enduml\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "note right: draft"},
+    {"id": "diagram-plantuml-state-note", "language": "plantuml", "source": "@startuml\nstate Idle\nnote right of Idle: waiting\n@enduml\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "note right of Idle: waiting"},
+    {"id": "diagram-plantuml-component-database", "language": "plantuml", "source": "@startuml\ncomponent A\ndatabase DB\n@enduml\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "database DB"},
     {"id": "diagram-tikz-clip", "language": "tikz", "source": "\\begin{tikzpicture}\n\\clip (0,0) rectangle (1,1);\n\\end{tikzpicture}\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "\\clip (0,0) rectangle (1,1);"}
   ]
 }
