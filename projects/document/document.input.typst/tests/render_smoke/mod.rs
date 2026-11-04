@@ -84,10 +84,17 @@ fn typst_math_is_preserved_and_layout_reports_the_language_gap() {
     assert_eq!(imported.report.lowered.handled, 2, "the heading and the paragraph stay lowered: {:#?}", imported.report);
 
     let rendered = render_svg("virtual://typst-math.typ", source).expect("render must succeed");
-    assert!(
-        rendered.diagnostics.iter().any(|diagnostic| diagnostic.code == "vutex.layout.math.unsupported_language"),
-        "layout must report the Typst language gap: {:#?}",
-        rendered.diagnostics
+    let gap = rendered
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "vutex.layout.math.unsupported_language")
+        .unwrap_or_else(|| panic!("layout must report the Typst language gap: {:#?}", rendered.diagnostics));
+    assert_eq!(gap.severity, Severity::Warning);
+    let span = gap.span.expect("the language gap must carry the formula range instead of none");
+    assert_eq!(
+        span.end - span.start,
+        "a^2 + b^2 = c^2".len() as u32,
+        "the reported range must cover the authored formula"
     );
     assert!(rendered.svg.contains("a^2 + b^2 = c^2"), "the math source must stay visible");
     assert!(rendered.svg.contains("holds"), "the paragraph must reach the svg");

@@ -187,11 +187,20 @@ fn lower_markdown_tree(
             continue;
         }
         if node.element_type() == MarkdownElementType::FootnoteDefinition {
-            graph.push_block(Block::Opaque {
-                kind: "footnote_definition".into(),
-                payload_hint: node.text(source).into_owned(),
-                status: SemanticStatus::Resolved,
-            });
+            let span = node.span();
+            let site = Some(SourceSpan { start: span.start as u32, end: span.end as u32 });
+            // Flow targets have no footnote collection, so the body survives only
+            // as an opaque payload. Recording the loss keeps the authored text
+            // accounted for instead of letting it vanish without a report.
+            graph.push_block_at(
+                Block::Opaque {
+                    kind: "footnote_definition".into(),
+                    payload_hint: node.text(source).into_owned(),
+                    status: SemanticStatus::Partial,
+                },
+                site,
+            );
+            graph.push_loss_at(footnote_body_loss_marker(), site);
             pending_footnote = Some((graph.blocks.len() - 1, node.span().end));
             continue;
         }
@@ -624,6 +633,11 @@ fn lower_inline_node(node: RedNode<MarkdownLanguage>, source: &SourceText, conte
         MarkdownElementType::FootnoteReference => {
             let raw = node.text(source);
             let label = raw.trim().strip_prefix("[^").and_then(|value| value.strip_suffix(']')).unwrap_or_default().to_string();
+            let span = node.span();
+            context.losses.push((
+                footnote_reference_loss_marker(),
+                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+            ));
             Some(Inline::Note { label, display: None })
         }
         MarkdownElementType::Strikethrough => {
@@ -1252,6 +1266,26 @@ fn raw_html_loss_marker() -> LossMarker {
     LossMarker {
         code: "import.markdown.raw_html_unrendered".into(),
         message: "raw HTML is preserved for HTML/EPUB export but semantic SVG/PDF reflow does not lay it out"
+            .into(),
+        status: SemanticStatus::Partial,
+    }
+}
+
+/// The loss marker for a footnote body flow targets cannot place.
+fn footnote_body_loss_marker() -> LossMarker {
+    LossMarker {
+        code: "import.markdown.footnote_body_unplaced".into(),
+        message: "footnote body is kept as an opaque payload because flow targets have no footnote collection"
+            .into(),
+        status: SemanticStatus::Partial,
+    }
+}
+
+/// The loss marker for a footnote reference reduced to its textual marker.
+fn footnote_reference_loss_marker() -> LossMarker {
+    LossMarker {
+        code: "import.markdown.footnote_reference_marker".into(),
+        message: "footnote reference renders as a textual `[^label]` marker because flow targets have no footnote apparatus"
             .into(),
         status: SemanticStatus::Partial,
     }

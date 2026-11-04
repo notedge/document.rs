@@ -56,6 +56,29 @@ fn minimal_source_reaches_the_rendered_svg() {
 }
 
 #[test]
+fn citations_and_unresolved_references_report_their_authored_site() {
+    let source = "Body \\cite{smith2020} and \\ref{missing}.\n";
+    let imported = import_source("virtual://tex-cite.tex", source).expect("citations and dangling references are downgrades");
+
+    let citation = imported
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "import.tex.citation_marker")
+        .expect("the citation marker must be reported");
+    assert_eq!(citation.severity, Severity::Warning);
+    let span = citation.span.expect("the citation loss must keep its authored range");
+    assert_eq!(&source[span.start as usize..span.end as usize], "\\cite{smith2020}");
+
+    let reference = imported
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "import.tex.unresolved_reference")
+        .expect("the dangling reference must be reported");
+    let span = reference.span.expect("the unresolved reference must keep the site it was written at");
+    assert_eq!(&source[span.start as usize..span.end as usize], "\\ref{missing}");
+}
+
+#[test]
 fn text_mode_math_style_keeps_its_argument_and_reports_the_loss() {
     let source = "Body \\mathbf{Alpha} text.\n";
     let imported = import_source("virtual://tex-math-style.tex", source).expect("a stray font command is a downgrade");

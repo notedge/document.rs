@@ -87,10 +87,16 @@ pub fn import_tex_bytes(label: &str, text: &str) -> Result<DocumentGraph, Format
     lowerer.loss_span = None;
 
     for label in resolve_pending_references(&mut lowerer.graph, &lowerer.state.labels) {
-        lowerer.loss(
-            "import.tex.unresolved_reference",
-            format!("reference target has no semantic node identity: {label}"),
-            SemanticStatus::Unresolved,
+        // The reference site is known from its own command span, so the
+        // document-level summary loss keeps a precise range instead of none.
+        let span = lowerer.state.reference_spans.get(&label).copied();
+        lowerer.graph.push_loss_at(
+            LossMarker {
+                code: "import.tex.unresolved_reference".into(),
+                message: format!("reference target has no semantic node identity: {label}"),
+                status: SemanticStatus::Unresolved,
+            },
+            span,
         );
     }
     if lowerer.state.title.is_some() || !lowerer.state.authors.is_empty() {
@@ -194,6 +200,9 @@ struct TexDocState {
     last_block: Option<NodeId>,
     last_number: Option<String>,
     labels: HashMap<String, LabelInfo>,
+    /// Authoring range of each `\ref` whose label had no anchor yet, keyed by
+    /// label so the unresolved summary loss can point at the real site.
+    reference_spans: HashMap<String, SourceSpan>,
     cited: HashSet<String>,
     next_link: u64,
 }
@@ -718,6 +727,11 @@ impl<'a> TexLowerer<'a> {
                     self.loss("import.tex.empty_citation", "citation command has no key", SemanticStatus::Partial);
                     return InlineOutcome::Dropped;
                 }
+                self.loss(
+                    "import.tex.citation_marker",
+                    "citation renders as an authored `[@key]` marker because the IR has no bibliography collection",
+                    SemanticStatus::Partial,
+                );
                 let mut inlines = Vec::new();
                 for key in keys {
                     if self.state.cited.insert(key.clone()) {
@@ -745,6 +759,11 @@ impl<'a> TexLowerer<'a> {
                 let label = self.required_argument(command).unwrap_or_default().trim().to_string();
                 let eqref = name == "eqref";
                 let resolved = self.state.labels.get(&label).cloned();
+                if resolved.as_ref().and_then(|info| info.node).is_none() {
+                    if let Some(span) = self.loss_span {
+                        self.state.reference_spans.insert(label.clone(), span);
+                    }
+                }
                 let target = match resolved.as_ref().and_then(|info| info.node) {
                     Some(node) => RelationEndpoint::Node(node),
                     None => RelationEndpoint::Unresolved { label: label.clone() },

@@ -253,29 +253,106 @@ fn autolinks_and_raw_html_do_not_disappear_without_a_report() {
 }
 
 #[test]
-fn markdown_constructs_reach_the_rendered_svg() {
-    let source = "\
-1. first
-2. second
+fn footnote_bodies_and_references_do_not_disappear_without_a_report() {
+    let source = "Body with a note[^n].\n\n[^n]: Footnote body text.\n";
+    let imported = import_source("virtual://footnote.md", source).expect("footnotes are a downgrade, not a rejection");
 
-[link](https://example.com/page) and ![alt text](https://example.com/a.png) and `inline code` and \\*literal\\*.
+    let body = imported
+        .graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Opaque { kind, payload_hint, .. } if kind == "footnote_definition" => Some(payload_hint.clone()),
+            _ => None,
+        })
+        .expect("the footnote body must stay in the graph instead of vanishing");
+    assert!(body.contains("Footnote body text"), "the authored body must be preserved: {body}");
 
-> outer
-> > inner
+    let reference = imported
+        .graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Paragraph { content } => content.iter().find_map(|inline| match inline {
+                Inline::Note { label, .. } => Some(label.clone()),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("the footnote reference must stay a semantic note");
+    assert_eq!(reference, "n");
 
-```rust
-fn demo() {}
-```
-
-<div>authored block</div>
-";
-    let imported = import_source("virtual://constructs.md", source).expect("markdown constructs are not fatal");
-    assert!(imported.diagnostics.iter().all(|diagnostic| diagnostic.severity != Severity::Error));
-
-    let rendered = render_svg("virtual://constructs.md", source, &Diagrams::new()).expect("render must succeed");
-    for expected in ["first", "second", "link", "inline code", "*literal*", "outer", "inner", "fn demo() {}"] {
-        assert!(rendered.svg.contains(expected), "svg must contain {expected:?}: {}", rendered.svg);
+    for (code, expected) in [
+        ("import.markdown.footnote_body_unplaced", "[^n]: Footnote body text."),
+        ("import.markdown.footnote_reference_marker", "[^n]"),
+    ] {
+        let diagnostic = imported
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("missing report for {code}: {:#?}", imported.diagnostics));
+        assert_eq!(diagnostic.severity, Severity::Warning, "{code} is a downgrade, not a failure");
+        let span = diagnostic.span.unwrap_or_else(|| panic!("{code} must keep its authored range"));
+        let authored = &source[span.start as usize..span.end as usize];
+        assert_eq!(authored, expected, "{code} must point at its own construct");
     }
-    assert!(rendered.svg.contains("https://example.com/a.png"), "the image source must reach svg: {}", rendered.svg);
-    assert!(rendered.svg.contains("data-alt=\"alt text\""), "the image alt must reach svg: {}", rendered.svg);
+}
+
+/// Render one Markdown construct through the profile's own closed loop.
+fn rendered_svg(source: &str) -> String {
+    render_svg("virtual://constructs.md", source, &Diagrams::new()).map(|rendered| rendered.svg).expect("render must succeed")
+}
+
+#[test]
+fn ordered_lists_reach_the_rendered_svg() {
+    let svg = rendered_svg("1. first\n2. second\n");
+    assert!(svg.contains("first"), "the first item must reach the svg: {svg}");
+    assert!(svg.contains("second"), "the second item must reach the svg: {svg}");
+}
+
+#[test]
+fn links_and_images_reach_the_rendered_svg() {
+    let svg = rendered_svg("[link](https://example.com/page)\n\n![alt text](https://example.com/a.png)\n");
+    assert!(svg.contains(r#"href="https://example.com/page""#), "the link destination must reach the svg: {svg}");
+    assert!(svg.contains("link"), "the link display text must reach the svg: {svg}");
+    assert!(svg.contains(r#"href="https://example.com/a.png""#), "the image source must reach the svg: {svg}");
+    assert!(svg.contains(r#"data-alt="alt text""#), "the image alt must reach the svg: {svg}");
+}
+
+#[test]
+fn fenced_code_and_inline_code_reach_the_rendered_svg() {
+    let svg = rendered_svg("```rust\nfn demo() {}\n```\n\nInline `inline code` span.\n");
+    assert!(svg.contains("fn demo() {}"), "the fence body must reach the svg: {svg}");
+    assert!(svg.contains("inline code"), "the inline code text must reach the svg: {svg}");
+}
+
+#[test]
+fn escaped_markup_reaches_the_rendered_svg_as_literal_text() {
+    let svg = rendered_svg("\\*literal\\*\n");
+    assert!(svg.contains("*literal*"), "the escape must keep the literal characters: {svg}");
+    assert!(!svg.contains("\\*"), "the escape backslash must not survive into the svg: {svg}");
+}
+
+#[test]
+fn nested_quotes_reach_the_rendered_svg() {
+    let svg = rendered_svg("> outer\n> > inner\n");
+    assert!(svg.contains("outer"), "the outer quote must reach the svg: {svg}");
+    assert!(svg.contains("inner"), "the nested quote must reach the svg: {svg}");
+}
+
+#[test]
+fn html_blocks_are_reported_instead_of_reaching_the_rendered_svg() {
+    let source = "<div>authored block</div>\n";
+    let imported = import_source("virtual://constructs.md", source).expect("html blocks are a downgrade");
+    let rendered = render_svg("virtual://constructs.md", source, &Diagrams::new()).expect("render must succeed");
+    assert!(!rendered.svg.contains("authored block"), "the semantic renderer must not invent html layout: {}", rendered.svg);
+
+    let loss = imported
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "import.markdown.raw_html_unrendered")
+        .expect("the html block must be reported");
+    let span = loss.span.expect("the html loss must keep its authored range");
+    let authored = &source[span.start as usize..span.end as usize];
+    assert_eq!(authored, "<div>authored block</div>", "the loss must point at the whole html block");
 }

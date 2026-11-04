@@ -136,12 +136,18 @@ fn is_tikz_language(language: Option<&str>) -> bool {
 
 /// The degradation reported when math carries a language the formula engine
 /// cannot lower.
-fn unsupported_math_language_diagnostic(language: &str) -> Diagnostic {
+///
+/// The source is still painted as text, so the formula range gives the report a
+/// precise site instead of an unpositioned warning.
+fn unsupported_math_language_diagnostic(formula: &document_ir::MathFormula) -> Diagnostic {
     Diagnostic {
         code: "vutex.layout.math.unsupported_language".to_string(),
         severity: Severity::Warning,
-        message: format!("math language `{language}` has no lowering in the TeX formula engine, the source was kept as text"),
-        span: None,
+        message: format!(
+            "math language `{}` has no lowering in the TeX formula engine, the source was kept as text",
+            formula.language.as_deref().unwrap_or_default()
+        ),
+        span: Some(SourceSpan { start: 0, end: formula.source.len() as u32 }),
     }
 }
 
@@ -600,8 +606,7 @@ impl<'a> PageBuilder<'a> {
                         }
                     }
                     else {
-                        self.diagnostics
-                            .push(unsupported_math_language_diagnostic(formula.language.as_deref().unwrap_or_default()));
+                        self.diagnostics.push(unsupported_math_language_diagnostic(formula));
                         flow.atoms.extend(split_inline_atoms(&formula.source, face, href, title));
                     }
                 }
@@ -955,7 +960,7 @@ impl<'a> PageBuilder<'a> {
     fn emit_math(&mut self, formula: &document_ir::MathFormula, indent: f64, preceding_line_right: Option<f64>) {
         let size = self.body_size();
         if !is_tex_formula(formula) {
-            self.diagnostics.push(unsupported_math_language_diagnostic(formula.language.as_deref().unwrap_or_default()));
+            self.diagnostics.push(unsupported_math_language_diagnostic(formula));
             self.emit_math_text_fallback(&formula.source, indent);
             return;
         }
