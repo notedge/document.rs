@@ -50,12 +50,84 @@ fn markdown_import_language() -> MarkdownLanguage {
 /// Import Markdown text into `notedown-ir` via `oak-markdown`.
 pub fn import_markdown_bytes(label: &str, text: &str) -> Result<DocumentGraph, FormatError> {
     let language = markdown_import_language();
+    let masked = mask_fenced_code_angles(text);
+    let lex_source = SourceText::new(masked.as_str());
     let source = SourceText::new(text);
     let mut cache = ParseSession::<MarkdownLanguage>::default();
     let parser = MarkdownParser::new(&language);
-    let parsed = parser.parse(&source, &[], &mut cache);
+    let parsed = parser.parse(&lex_source, &[], &mut cache);
     let green_tree = parsed.result.map_err(|error| FormatError::parse("markdown", error.to_string()))?;
     lower_markdown_tree(label, green_tree, &source)
+}
+
+/// Hide `<` inside fenced code bodies from the lexer.
+///
+/// `oak-markdown` re-lexes a fenced body as ordinary Markdown, and its HTML tag
+/// scanner (`lexer::MarkdownLexer::lex_any_tag`) searches for the closing `>`
+/// without stopping at a line break. A single comparison in code — `if n <= 1:`
+/// is enough — therefore swallows every token up to the next `>` anywhere later
+/// in the document, including the fence that should close its own block. The
+/// parser then builds one `CodeBlock` that runs to EOF, so every heading, list
+/// and table after the fence silently disappears while the conversion still
+/// reports success.
+///
+/// The lexer is context-free, so the parse input has to be masked instead of
+/// taught about fences. This returns a byte-for-byte copy of `text` with `<`
+/// replaced by `x` inside fenced bodies: every span keeps its offset, and the
+/// lowering still slices payloads out of the untouched original source.
+fn mask_fenced_code_angles(text: &str) -> String {
+    let mut masked = String::with_capacity(text.len());
+    let mut in_fence = false;
+    let length = text.len();
+    let mut offset = 0;
+    loop {
+        let rest = &text[offset..];
+        let line_end = rest.find(['\r', '\n']).map(|index| offset + index).unwrap_or(length);
+        let line = &text[offset..line_end];
+        if is_fence_line(line) {
+            in_fence = !in_fence;
+            masked.push_str(line);
+        }
+        else if in_fence {
+            for character in line.chars() {
+                masked.push(if character == '<' { 'x' } else { character });
+            }
+        }
+        else {
+            masked.push_str(line);
+        }
+        if line_end >= length {
+            break;
+        }
+        if rest[line_end - offset..].starts_with("\r\n") {
+            masked.push_str("\r\n");
+            offset = line_end + 2;
+        }
+        else {
+            masked.push(rest[line_end - offset..].chars().next().unwrap_or('\n'));
+            offset = line_end + 1;
+        }
+    }
+    masked
+}
+
+/// Mirror the lexer's own fence test: at most three leading blanks followed by
+/// a run of at least three `` ` `` or `~`. `oak-markdown` closes a block at the
+/// next fence of either character, so the same predicate ends the masked
+/// region.
+fn is_fence_line(line: &str) -> bool {
+    let indent = line.chars().take_while(|character| *character == ' ' || *character == '\t').count();
+    if indent > 3 {
+        return false;
+    }
+    let rest = &line[indent..];
+    let Some(character) = rest.chars().next() else {
+        return false;
+    };
+    if character != '`' && character != '~' {
+        return false;
+    }
+    rest.chars().take_while(|item| *item == character).count() >= 3
 }
 
 fn lower_markdown_tree(
