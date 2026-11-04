@@ -86,9 +86,9 @@ impl std::error::Error for TypstError {}
 /// Import Typst source into a Notedown document graph with a conversion report.
 ///
 /// The report and diagnostics never abort the document for a construct that
-/// stays opaque. A dynamic construct whose group continues past its first line
-/// is refused, because the current lowering would otherwise turn the rest of the
-/// group into page text.
+/// stays opaque. A dynamic construct whose bracket group the source never
+/// closes is refused, because the lowering cannot delimit where the construct
+/// ends.
 pub fn import_source(label: &str, source: &str) -> Result<TypstDocument, TypstError> {
     let graph = document_formats::import::typst::import_typst_bytes(label, source)
         .map_err(|error| TypstError::import_failed(error.to_string()))?;

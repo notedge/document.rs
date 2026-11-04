@@ -16,7 +16,7 @@ pub const IMPORT_FAILED: &str = "vutex.input.typst.import_failed";
 /// Report code for math kept as source because no semantic lowering exists.
 pub const MATH_SOURCE_PRESERVED: &str = "import.typst.math.source_preserved";
 
-/// Diagnostic code for a dynamic construct that continues past its first line.
+/// Diagnostic code for a dynamic construct whose group the source never closes.
 pub const UNTERMINATED_GROUP: &str = "vutex.input.typst.unterminated_dynamic_group";
 
 /// Loss codes that summarize the whole import instead of one source construct.
@@ -64,20 +64,28 @@ pub(crate) fn build_report(graph: &DocumentGraph) -> ConversionReport {
 /// Build one diagnostic per construct-level loss plus a fallback per opaque
 /// block the lowering never reported.
 ///
-/// The lowering records loss without source spans, so spans are recovered from
-/// the payload text in source order. Document-level summaries stay unpositioned.
+/// A loss that recorded its own source range keeps that span. Otherwise the span
+/// is recovered from the payload text in source order. An opaque block covered
+/// by a recorded loss is already explained, so no fallback is added for it even
+/// when its payload differs from the payload named by the loss message.
+/// Document-level summaries stay unpositioned.
 pub(crate) fn build_diagnostics(graph: &DocumentGraph, source: &str) -> Vec<Diagnostic> {
     let mut locator = Locator::new(source);
     let mut diagnostics = Vec::new();
     let mut located_payloads = Vec::new();
+    let mut located_spans = Vec::new();
 
-    for marker in &graph.coverage.loss {
+    for (index, marker) in graph.coverage.loss.iter().enumerate() {
         if is_summary(&marker.code) {
             continue;
         }
         let payload = payload_after_colon(&marker.message).filter(|text| !text.is_empty());
-        let span = payload.and_then(|text| locator.locate(text));
-        if span.is_some() {
+        let span = graph
+            .loss_span(index)
+            .map(|span| SourceSpan { start: span.start, end: span.end })
+            .or_else(|| payload.and_then(|text| locator.locate(text)));
+        if let Some(span) = span {
+            located_spans.push(span);
             if let Some(text) = payload {
                 located_payloads.push(text.to_string());
             }
@@ -100,11 +108,15 @@ pub(crate) fn build_diagnostics(graph: &DocumentGraph, source: &str) -> Vec<Diag
         if located_payloads.contains(&payload.to_string()) {
             continue;
         }
+        let span = graph.block_span(node.id).map(|span| SourceSpan { start: span.start, end: span.end });
+        if span.is_some_and(|span| located_spans.contains(&span)) {
+            continue;
+        }
         diagnostics.push(Diagnostic {
             code: kind.clone(),
             severity: severity(*status),
             message: format!("Typst construct kept opaque without a lowering loss record: {payload}"),
-            span: opaque_locator.locate(payload),
+            span: span.or_else(|| opaque_locator.locate(payload)),
         });
     }
 
@@ -115,12 +127,12 @@ fn is_summary(code: &str) -> bool {
     SUMMARY_LOSS_CODES.contains(&code)
 }
 
-/// Find a dynamic construct whose group continues past the line the lowering
-/// kept opaque.
+/// Find a dynamic construct whose bracket group the source never closes.
 ///
-/// The current Notedown lowering retains only the first line of a dynamic
-/// expression, so the rest of a multi-line group would be lowered as page text.
-/// That is an approximation this adapter refuses instead of rendering.
+/// A balanced group is retained as one opaque block by the lowering. An
+/// unbalanced one leaves a construct the lowering cannot delimit, so the
+/// adapter refuses it instead of rendering a document built from the remainder
+/// of the region.
 pub(crate) fn unterminated_group(graph: &DocumentGraph, source: &str) -> Option<Diagnostic> {
     let mut locator = Locator::new(source);
     for node in &graph.blocks {
