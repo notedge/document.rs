@@ -87,4 +87,9 @@ pub mod input {
     pub mod plantuml {
         pub use plotter_input_plantuml::*;
     }
+
+    /// TikZ `tikzpicture` 子集，直接降到 scene。
+    pub mod tikz {
+        pub use plotter_input_tikz::*;
+    }
 }

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "Plotter — stable public Rust facade over plotter-* crates"
+readme = "readme.md"
 publish = false
 
 [features]
@@ -31,6 +32,7 @@ plotter-motion = { workspace = true }
 plotter-input-mermaid = { workspace = true }
 plotter-input-dot = { workspace = true }
 plotter-input-plantuml = { workspace = true }
+plotter-input-tikz = { path = "../plotter.input.tikz" }
 
 [dev-dependencies]
 plotter-data = { workspace = true }
