@@ -1,7 +1,7 @@
 //! 冒烟断言：注释、转义与行内 markup 不留下冒充正文的 text 节点。
 
 use document_compose::Severity;
-use document_input_typst::{ESCAPE_UNSUPPORTED, import_source};
+use document_input_typst::import_source;
 use document_ir::{Block, Inline};
 
 fn collect_text(block: &Block, texts: &mut Vec<String>) {
@@ -113,13 +113,36 @@ Before /* COMMENT_BLOCK_MUST_VANISH */ after.
 }
 
 #[test]
-fn escape_sequences_are_rejected_before_any_fake_text() {
-    let source = "Before \\* after.\n";
-    let error = import_source("virtual://escape.typ", source).expect_err("the frontend cannot delimit escapes faithfully");
+fn escapes_keep_literal_text_and_do_not_shift_following_spans() {
+    for (source, expected) in [
+        ("\\*a\n\n#set page(width: 1cm)\n", "*a"),
+        ("\\*中文后文\n\n#set page(width: 1cm)\n", "*中文后文"),
+    ] {
+        let imported = import_source("virtual://escape.typ", source).expect("escapes must import");
 
-    assert_eq!(error.code(), ESCAPE_UNSUPPORTED);
-    assert_eq!(error.diagnostic.severity, Severity::Error);
-    assert_eq!(error.message(), "Typst escape sequence cannot be imported faithfully: \\*");
-    let span = error.diagnostic.span.expect("the rejected escape must keep its authored range");
-    assert_eq!(&source[span.start as usize..span.end as usize], "\\*");
+        let mut texts = Vec::new();
+        for node in &imported.graph.blocks {
+            collect_text(&node.block, &mut texts);
+        }
+        let joined = texts.join("");
+        assert!(joined.contains(expected), "{source:?} must keep {expected:?}: {texts:#?}");
+        assert!(!joined.contains('\\'), "no lone backslash may reach the ir: {texts:#?}");
+        assert!(
+            imported.diagnostics.iter().all(|diagnostic| diagnostic.code != "import.typst.escape_unsupported"),
+            "the escape rejection must be gone: {:#?}",
+            imported.diagnostics
+        );
+
+        let dynamic = imported
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "import.typst.dynamic_content")
+            .expect("the dynamic line must be reported");
+        let span = dynamic.span.expect("the dynamic line must keep its authored range");
+        let authored = &source[span.start as usize..span.end as usize];
+        assert!(
+            authored.starts_with("#set page(width: 1cm)"),
+            "{source:?} shifted the following span: {authored:?}"
+        );
+    }
 }
