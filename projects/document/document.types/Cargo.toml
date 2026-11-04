@@ -18,7 +18,6 @@ doctest = false
 boost-diagnostic = { workspace = true }
 document-ir = { workspace = true }
 url = { workspace = true }
-source-map = { workspace = true }
 byteorder = { workspace = true }
 serde = { workspace = true }
 
