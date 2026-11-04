@@ -12,9 +12,11 @@ pub fn write_document_pdf(graph: &DocumentGraph) -> Result<Vec<u8>> {
     let (plan, _diagnostics) =
         document_layout::document::layout_with_diagnostics(graph, &LayoutHint::a4(), &Diagrams::default());
     let presentation = build_display_presentation(&plan);
+    // A delivered PDF must not depend on the faces the reader happens to have
+    // installed, so every run embeds a bundled body face here.
     let outcome = render_pdf_with_resources_and_diagnostics(
         &presentation,
-        &PdfFontPolicy::Discover,
+        &PdfFontPolicy::Bundled,
         &PdfResources::default(),
     )
     .map_err(map_render_diagnostic)?;
