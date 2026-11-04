@@ -3,9 +3,17 @@
 
 use document_compose::Severity;
 use document_input_tex::{import_source, render_svg};
+use document_text::math::{MathFontFamily, install_math_font};
+
+/// The MATH font payload is a test asset, so the suite never depends on
+/// `E:\文档研究\VuTeX` existing on the machine.
+fn install_test_math_font() {
+    install_math_font(MathFontFamily::LmMath, include_bytes!("../../../test-assets/fonts/LatinModernMath-Regular.otf"));
+}
 
 #[test]
 fn structures_reach_the_rendered_svg() {
+    install_test_math_font();
     let source = r"\begin{document}
 \section{Structures}
 
@@ -29,7 +37,12 @@ See equation \ref{eq:energy}.
     let rendered = render_svg("virtual://tex-structures.tex", source).expect("the structures must render");
 
     assert!(rendered.svg.contains("Alpha") && rendered.svg.contains("Gamma"), "table cells must reach the svg");
-    assert!(rendered.svg.contains("E = mc^2"), "the formula source must reach the svg");
+    assert!(
+        !rendered.diagnostics.iter().any(|diagnostic| diagnostic.code == "vutex.layout.math.not_typeset"),
+        "the embedded math font must typeset the display formula: {:#?}",
+        rendered.diagnostics
+    );
+    assert!(rendered.svg.contains("<path"), "the display formula must be painted as outlines");
     assert!(!rendered.svg.contains("(1)"), "an unnumbered display must not grow a number in the svg");
     assert!(rendered.svg.contains("Footnote body"), "the footnote body must reach the svg");
     assert!(rendered.svg.contains("[@smith2020]"), "the citation marker must reach the svg");
@@ -43,6 +56,7 @@ See equation \ref{eq:energy}.
 
 #[test]
 fn minimal_source_reaches_the_rendered_svg() {
+    install_test_math_font();
     let source = "\\begin{document}\n\\section{TeX to SVG}\nHello $x^2$.\n\\end{document}\n";
     let rendered = render_svg("virtual://tex-smoke.tex", source).expect("minimal TeX must render");
 

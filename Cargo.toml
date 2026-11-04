@@ -20,6 +20,7 @@ default-members = [
 ]
 exclude = [
     "projects/.DS_Store",
+    "projects/document/test-assets",
 ]
 
 [workspace.package]

@@ -14,3 +14,6 @@ document-compose = { workspace = true }
 document-layout = { workspace = true }
 document-presentation = { workspace = true }
 document-renderer-svg = { workspace = true }
+
+[dev-dependencies]
+document-text = { workspace = true }

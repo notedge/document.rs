@@ -2,6 +2,13 @@ use document_compose::Severity;
 use document_input_markdown::{codes, import_source, render_svg};
 use document_ir::{Block, Inline, RelationEndpoint};
 use document_layout::Diagrams;
+use document_text::math::{MathFontFamily, install_math_font};
+
+/// The MATH font payload is a test asset, so the suite never depends on
+/// `E:\文档研究\VuTeX` existing on the machine.
+fn install_test_math_font() {
+    install_math_font(MathFontFamily::LmMath, include_bytes!("../../../test-assets/fonts/LatinModernMath-Regular.otf"));
+}
 
 const SOURCE: &str = "\
 # Markdown to SVG
@@ -39,6 +46,7 @@ fn diagram_scenes(imported: &document_input_markdown::MarkdownDocument) -> Diagr
 
 #[test]
 fn markdown_reaches_the_rendered_svg() {
+    install_test_math_font();
     let imported = import_source("virtual://markdown-to-svg.md", SOURCE).expect("fixture must import");
     assert!(imported.report.unsupported.is_empty(), "{:?}", imported.report.unsupported);
     assert!(imported.report.lossy.is_empty(), "{:?}", imported.report.lossy);

@@ -16,5 +16,6 @@ document-renderer-svg = { workspace = true }
 document-compose = { workspace = true }
 
 [dev-dependencies]
+document-text = { workspace = true }
 plotter-diagram = { workspace = true }
 plotter-input-mermaid = { workspace = true }

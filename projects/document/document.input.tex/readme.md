@@ -24,6 +24,11 @@ A source above `MAX_SOURCE_BYTES` (8 MiB) is rejected with
 `vutex.input.tex.source_too_large` before the frontend starts reading. An empty
 source imports as a documented lossy document instead of a failure.
 
+数学用例通过 `include_bytes!` 内嵌
+`projects/document/test-assets/fonts/LatinModernMath-Regular.otf`（GUST 许可，
+同目录附许可文件），并在渲染前 `install_math_font`，因此 CI 不依赖本机字体或
+`VuTeX` 仓存在。
+
 ## Acceptance map
 
 `21-TeX输入适配合同` 的每条验收都由一个能真跑的用例固定。

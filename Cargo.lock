@@ -668,6 +668,7 @@ dependencies = [
  "document-layout",
  "document-presentation",
  "document-renderer-svg",
+ "document-text",
  "plotter-diagram",
  "plotter-input-mermaid",
 ]
@@ -682,6 +683,7 @@ dependencies = [
  "document-layout",
  "document-presentation",
  "document-renderer-svg",
+ "document-text",
 ]
 
 [[package]]
