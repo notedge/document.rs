@@ -690,6 +690,7 @@ version = "0.1.0"
 dependencies = [
  "document-compose",
  "document-formats",
+ "document-input-markdown",
  "document-ir",
  "document-layout",
  "document-presentation",

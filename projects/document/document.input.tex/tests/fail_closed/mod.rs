@@ -118,6 +118,24 @@ fn empty_source_keeps_document_level_losses_unpositioned() {
 }
 
 #[test]
+fn renderer_rejection_keeps_its_own_diagnostic_code() {
+    // The SVG renderer only rejects a graphic whose canvas size is non-positive,
+    // and a TeX source cannot carry a host-registered scene into this entry
+    // point. The adapter's only job on that path is passing the renderer
+    // diagnostic through unchanged, which this unit-level check pins.
+    let diagnostic = document_compose::Diagnostic {
+        code: "vutex.render.svg.diagram-invalid".to_string(),
+        severity: Severity::Error,
+        message: "diagram has a non-positive canvas size".to_string(),
+        span: None,
+    };
+    let error = document_input_tex::TexInputError::from(diagnostic);
+    assert_eq!(error.code(), "vutex.render.svg.diagram-invalid");
+    assert_eq!(error.diagnostic.severity, Severity::Error);
+    assert!(error.message().contains("non-positive canvas size"));
+}
+
+#[test]
 fn file_import_reads_the_same_source() {
     let path = std::env::temp_dir().join("vutex-input-tex-file.tex");
     std::fs::write(&path, "Text $x^2$ in a file.\n").expect("the fixture must be written");

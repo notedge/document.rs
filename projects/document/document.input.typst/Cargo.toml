@@ -16,4 +16,5 @@ document-presentation = { workspace = true }
 document-renderer-svg = { workspace = true }
 
 [dev-dependencies]
+document-input-markdown = { workspace = true }
 serde_json = { workspace = true }

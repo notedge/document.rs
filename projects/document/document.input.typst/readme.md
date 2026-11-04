@@ -12,3 +12,15 @@ typesetting kernel.
 let rendered = document_input_typst::render_svg("main.typ", "= Title\n\nHello *world*.\n")?;
 println!("{}", rendered.svg);
 ```
+
+## Acceptance map
+
+`19-Typst输入适配合同` 的每条验收都由一个能真跑的用例固定。
+
+| 合同验收 | 用例 |
+|---|---|
+| 1 最小子集经 `render_svg` 产出对应文本 | `tests/render_smoke/mod.rs` · `minimal_source_reaches_the_rendered_svg` |
+| 2 单行动态构造不进 SVG，报告与诊断带精确 `span` | `tests/render_smoke/mod.rs` · `single_line_dynamic_construct_keeps_its_exact_span` |
+| 3 Typst 数学进 `report.preserved`，layout 诊断出现 | `tests/render_smoke/mod.rs` · `typst_math_is_preserved_and_layout_reports_the_language_gap` |
+| 4 与 Markdown 语义子集的 block 结构可比 | `tests/render_smoke/mod.rs` · `typst_and_markdown_agree_on_the_shared_semantic_subset` |
+| 5 平衡多行组一条诊断且前后正文存活，未闭合组拒绝 | `tests/render_smoke/mod.rs` · `balanced_multiline_group_stays_one_opaque_construct`、`unclosed_group_is_rejected` |

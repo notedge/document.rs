@@ -78,6 +78,109 @@ fn lossy_markdown_is_reported_with_a_structured_code() {
 }
 
 #[test]
+fn table_quote_nested_list_and_task_list_reach_the_rendered_svg() {
+    let source = "\
+## Structures
+
+> quoted text
+
+| Name | Value |
+| --- | --- |
+| A | 1 |
+
+- outer
+  - inner
+
+- [x] done
+- [ ] todo
+";
+    let imported = import_source("virtual://structures.md", source).expect("the structures must import");
+
+    assert!(matches!(imported.graph.blocks[0].block, Block::Section { .. }), "{:#?}", imported.graph.blocks);
+    assert!(
+        imported.graph.blocks.iter().any(|node| matches!(node.block, Block::Quote { .. })),
+        "a blockquote must lower to a quote block: {:#?}",
+        imported.graph.blocks
+    );
+    let table = imported
+        .graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { rows, .. } => Some(rows),
+            _ => None,
+        })
+        .expect("a GFM table must lower to a table block");
+    assert_eq!(table.len(), 2, "one header row and one body row: {table:#?}");
+    assert!(table[0].is_header);
+
+    let lists: Vec<_> = imported
+        .graph
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::List { items, .. } => Some(items),
+            _ => None,
+        })
+        .collect();
+    let has_item = |needle: &str| {
+        lists
+            .iter()
+            .any(|items| items.iter().any(|item| item.content.iter().any(|inline| inline.plain_text().contains(needle))))
+    };
+    assert!(has_item("outer"), "the outer item must lower to a list block: {lists:#?}");
+    assert!(has_item("inner"), "the nested item must not be dropped: {lists:#?}");
+
+    let tasks = imported
+        .graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::List { items, .. } if items.iter().any(|item| item.is_task) => Some(items),
+            _ => None,
+        })
+        .expect("a task list must keep its checkbox state");
+    assert_eq!(tasks.len(), 2, "{tasks:#?}");
+    assert!(tasks[0].is_checked == Some(true));
+    assert!(tasks[1].is_checked == Some(false));
+
+    let rendered = render_svg("virtual://structures.md", source, &Diagrams::new()).expect("the structures must render");
+    assert!(rendered.svg.contains("quoted text"), "quote text must reach the svg");
+    assert!(rendered.svg.contains("Name") && rendered.svg.contains("Value"), "table cells must reach the svg");
+    assert!(rendered.svg.contains("outer") && rendered.svg.contains("inner"), "nested list text must reach the svg");
+    assert!(rendered.svg.contains("done") && rendered.svg.contains("todo"), "task list text must reach the svg");
+}
+
+#[test]
+fn aligned_table_only_warns_and_still_renders() {
+    let source = "| Left | Right |\n|:--|--:|\n| a | b |\n";
+    let imported = import_source("virtual://aligned-table.md", source).expect("alignment is a downgrade, not a rejection");
+
+    let lossy = imported
+        .report
+        .lossy
+        .iter()
+        .find(|item| item.code == "import.markdown.table_alignment")
+        .unwrap_or_else(|| panic!("alignment markers must be reported: {:#?}", imported.report));
+    assert!(!lossy.detail.is_empty());
+    assert!(
+        imported.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "import.markdown.table_alignment" && diagnostic.severity == Severity::Warning
+        }),
+        "{:#?}",
+        imported.diagnostics
+    );
+    assert!(
+        imported.diagnostics.iter().all(|diagnostic| diagnostic.severity != Severity::Error),
+        "{:#?}",
+        imported.diagnostics
+    );
+
+    let rendered = render_svg("virtual://aligned-table.md", source, &Diagrams::new()).expect("the table must render");
+    assert!(rendered.svg.contains("Left") && rendered.svg.contains("Right"), "cells must reach the svg");
+}
+
+#[test]
 fn opaque_blocks_are_reported_instead_of_dropped() {
     let source = "Above\n\n---\n\nBelow\n";
     let imported = import_source("virtual://thematic-break.md", source).expect("thematic breaks are not fatal");
