@@ -413,6 +413,12 @@ fn flowchart_spec(flowchart: &Flowchart, source: &str) -> Result<DiagramSpec, Di
         ))
         .with_span(range));
     }
+    if let Some((range, line)) = locate_flowchart_conjunction(source) {
+        return Err(DiagramError::unsupported(format!(
+            "flowchart edge conjunction `&` is not lowered, the diagram falls back to its source: `{line}`"
+        ))
+        .with_span(range));
+    }
     if let Some((range, shape)) = locate_unsupported_shape(source) {
         return Err(DiagramError::unsupported(format!(
             "flowchart node shape `{shape}` is not lowered, the diagram falls back to its source"
@@ -1062,6 +1068,56 @@ fn locate_unsupported_shape(source: &str) -> Option<(std::ops::Range<usize>, &'s
         }
     }
     None
+}
+
+/// The first authored flowchart line that uses the `&` edge conjunction.
+///
+/// `oak-mermaid` keeps only the final operand of `A --> B & C` and drops the
+/// rest without a diagnostic, so the AST alone cannot represent the authored
+/// edges. The guard refuses the line and lets the diagram fall back to its
+/// source instead of silently losing nodes and edges.
+fn locate_flowchart_conjunction(source: &str) -> Option<(std::ops::Range<usize>, String)> {
+    for (range, line) in trimmed_lines(source) {
+        if sanitized_flow_line(line).contains('&') {
+            return Some((range, line.to_string()));
+        }
+    }
+    None
+}
+
+/// Strip bracketed node text, quoted text, and pipe-delimited edge labels from
+/// one flowchart line so an `&` inside an author label is not mistaken for the
+/// edge conjunction.
+fn sanitized_flow_line(line: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut piped = false;
+    for ch in line.chars() {
+        if ch == '"' {
+            quoted = !quoted;
+            continue;
+        }
+        if quoted {
+            continue;
+        }
+        if depth == 0 {
+            if ch == '|' {
+                piped = !piped;
+                continue;
+            }
+            if piped {
+                continue;
+            }
+        }
+        match ch {
+            '[' | '(' | '{' => depth += 1,
+            ']' | ')' | '}' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => out.push(ch),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// The first authored statement that the frontend parses and then discards.
