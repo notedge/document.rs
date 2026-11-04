@@ -74,7 +74,9 @@ fn composite_state_region_keeps_its_own_initial_state() {
 
 #[test]
 fn state_note_is_refused_with_its_authored_line() {
-    let source = "stateDiagram-v2\n    [*] --> Idle\n    note right of Idle: waiting\n";
+    // Byte-for-byte the `diagram-mermaid-state-note` corpus case, so the
+    // asserted slice is the same string the harness compares against.
+    let source = "stateDiagram-v2\n  [*] --> Idle\n  note right of Idle: waiting\n";
     let error = mermaid_to_scene(source).expect_err("a note has no Oak AST carrier");
 
     assert_eq!(error.code(), codes::UNSUPPORTED);
