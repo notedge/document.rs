@@ -54,6 +54,47 @@ const DROPPED_CLASS_STATEMENTS: &[&str] = &[
     "link",
 ];
 
+/// Sequence statements that `oak-mermaid` parses and then discards.
+///
+/// The guard names them before the arrow test: a skipped statement may carry
+/// `->` inside its payload (a note that mentions an arrow, a title that spells
+/// one out), and the arrow test would otherwise accept the line while the AST
+/// dropped the whole statement. `activate` and `deactivate` are listed here as
+/// well, the activation shorthand on a message is caught separately.
+const DROPPED_SEQUENCE_STATEMENTS: &[&str] = &[
+    "title",
+    "acctitle",
+    "accTitle",
+    "accDescr",
+    "note",
+    "Note",
+    "loop",
+    "alt",
+    "else",
+    "opt",
+    "par",
+    "critical",
+    "break",
+    "rect",
+    "end",
+    "activate",
+    "deactivate",
+    "autonumber",
+    "box",
+    "create",
+    "destroy",
+    "link",
+    "linkStyle",
+];
+
+/// Diagram families `oak-mermaid` reports no AST for.
+///
+/// Only flowchart, sequence, and class are built into `MermaidRoot::diagrams`.
+/// The other headers parse without an error but contribute nothing, so an empty
+/// tree would surface as a whole-body `ast-unavailable`. Naming the authored
+/// family header keeps the refusal precise and locatable.
+const SUPPORTED_FAMILIES: &[&str] = &["flowchart", "graph", "classDiagram", "sequenceDiagram"];
+
 struct NodeSeed {
     id: String,
     label: Option<String>,
@@ -240,6 +281,12 @@ pub fn mermaid_to_spec(source: &str) -> Result<DiagramSpec, DiagramError> {
 /// Unsupported sequence statements fail before compilation so the host keeps
 /// the authored source visible instead of dropping the diagram silently.
 pub fn mermaid_to_scene(source: &str) -> Result<LoweredDiagram, DiagramError> {
+    if let Some((range, header)) = locate_unsupported_family(source) {
+        return Err(DiagramError::unsupported(format!(
+            "Mermaid diagram family `{header}` is not lowered, the diagram falls back to its source"
+        ))
+        .with_span(range));
+    }
     let root = parse_mermaid(source)?;
     match single_diagram(&root, source)? {
         MermaidDiagram::Flowchart(flowchart) => lower_graph(flowchart_spec(flowchart, source)?),
@@ -588,7 +635,25 @@ const DIAGRAM_HEADERS: &[&str] = &[
     "block-beta",
     "C4Context",
     "zenuml",
+    "sequenceDiagram",
 ];
+
+/// The header line of the first diagram family that has no Oak AST.
+///
+/// Only the first header decides the family, a later header belongs to the
+/// multi-diagram refusal. The returned header is always the authored spelling,
+/// so the message names what the author wrote.
+fn locate_unsupported_family(source: &str) -> Option<(std::ops::Range<usize>, &'static str)> {
+    for (range, line) in trimmed_lines(source) {
+        let found = DIAGRAM_HEADERS.iter().find(|header| starts_with_keyword(line, header));
+        let Some(header) = found else { continue };
+        if SUPPORTED_FAMILIES.contains(header) {
+            return None;
+        }
+        return Some((range, *header));
+    }
+    None
+}
 
 /// The authored arrow that carries a `+` or `-` activation shorthand.
 ///
@@ -627,6 +692,13 @@ fn validate_sequence_source(source: &str) -> Result<(), DiagramError> {
         if starts_with_keyword(line, "participant") || starts_with_keyword(line, "actor") {
             continue;
         }
+        let keyword = line.split_whitespace().next().unwrap_or(line).trim_end_matches(':');
+        if DROPPED_SEQUENCE_STATEMENTS.contains(&keyword) {
+            return Err(DiagramError::unsupported(format!(
+                "sequence statement `{keyword}` is not lowered, the diagram falls back to its source"
+            ))
+            .with_span(range));
+        }
         if let Some(keyword) = activation_suffix(line) {
             return Err(DiagramError::unsupported(format!(
                 "sequence activation shorthand `{keyword}` is not lowered, the diagram falls back to its source"
@@ -636,7 +708,6 @@ fn validate_sequence_source(source: &str) -> Result<(), DiagramError> {
         if line.contains("-->>") || line.contains("->>") || line.contains("-->") || line.contains("->") {
             continue;
         }
-        let keyword = line.split_whitespace().next().unwrap_or(line);
         return Err(DiagramError::unsupported(format!(
             "sequence statement `{keyword}` is not lowered, the diagram falls back to its source"
         ))
