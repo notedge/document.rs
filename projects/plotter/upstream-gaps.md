@@ -9,20 +9,19 @@
 | 前端 | 枚举覆盖 | 被忽略的字段 | 结论 |
 |---|---|---|---|
 | `plotter.input.dot` | `Statement` 五变体、`EdgeOperand` 两变体、`AttributeTarget` 三变体、`Compass` 九变体全部有分支 | `Graph.id` | 图名只用于命名，不进入场景，属显式 no-op。`digraph pipeline` 的正例已固化 |
-| `plotter.input.mermaid` | `MermaidDiagram` 三变体、`FlowElement` 三变体、`NodeShape` 七变体、`EdgeStyle` 四变体、`ParticipantKind` 两变体、`MessageArrow` 四变体、`RelationKind` 五变体全部有分支 | `oak_uml::Member.kind` | 方法身份由成员文本里的 `(` 携带，`kind` 是派生值。`class_method_members_keep_their_parentheses` 钉住这一点 |
+| `plotter.input.mermaid` | `MermaidDiagram` 五变体、`FlowElement` 三变体、`NodeShape` 七变体、`EdgeStyle` 四变体、`ParticipantKind` 两变体、`MessageArrow` 四变体、`RelationKind` 五变体、`StateElement` 两变体、`StateKind` 六变体、`StateEndpoint` 三变体、`ErKey` 两变体、`ErCardinality` 四变体全部有分支 | `oak_uml::Member.kind` | 方法身份由成员文本里的 `(` 携带，`kind` 是派生值。`class_method_members_keep_their_parentheses` 钉住这一点 |
 | `plotter.input.plantuml` | `PlantUmlDiagram` 两变体、`ClassKeyword` 四变体、`MemberVisibility` 四变体、`ClassRelationKind` 六变体、`MessageArrow` 四变体、`ParticipantKind` 两变体全部有分支 | `ClassMember.is_method` | 同 Mermaid，方法身份由文本的 `(` 携带，`is_method` 是派生值 |
 
-审计中修掉的两处真实沉默缺口：
+审计中修掉的三处真实沉默缺口：
 
 1. `plotter.input.mermaid` 的 sequence 守卫原先先判箭头再判语句关键字，一行 `Note over A,B: click -> here` 因为正文含 `->` 被判成消息，而 `oak-mermaid` 会丢弃整条 note，结果是「AST 有、我们丢内容、还报成功」。现在先按 `DROPPED_SEQUENCE_STATEMENTS` 判语句起始，再判箭头，拒绝时带整行字节范围。
-2. 非 flowchart/sequence/class 的 Mermaid 家族原先落到 `ast-unavailable`（整个正文范围，无法定位）。现在在解析前按 `MermaidRoot` 首个家族头判族，返回 `davinci.diagram.unsupported` 并指向该头所在行。
+2. 没有 AST 的 Mermaid 家族原先落到 `ast-unavailable`（整个正文范围，无法定位）。现在在解析前按 `MermaidRoot` 首个家族头判族，返回 `davinci.diagram.unsupported` 并指向该头所在行。
+3. state 与 ER 的 styling、注释与无障碍元数据会被 `oak-mermaid` 整行丢弃。现在按 `DROPPED_STATE_STATEMENTS` / `DROPPED_ER_STATEMENTS` 判语句起始，丢弃语句一律拒绝并带整行字节范围，避免「上游丢内容、本层报成功」。
 
 ## 二、上游 AST 缺口（需要 `oak-*` 扩节点模型）
 
 | 输入 | 构造 | 现状 | 缺什么节点模型 | 需要什么语义 |
 |---|---|---|---|---|
-| `oak-mermaid` | `stateDiagram` / `stateDiagram-v2` | 拒绝于族头 | 状态节点、复合状态与并发区域、`[*]` 起止伪状态 | 状态集合、迁移源与目标、迁移标签、进入与退出动作、区域层级 |
-| `oak-mermaid` | `erDiagram` | 拒绝于族头 | 实体、属性（类型与主键/外键标记）、关系基数（`||`、`o{` 等 Crow's Foot 记号） | 实体属性表、两端基数、识别与非识别关系、关系标签 |
 | `oak-mermaid` | `classDiagram` 的 `<<interface>>` 与 `<<abstract>>` 原型 | 降成普通类 | `oak-uml::Class` 无原型字段，`ClassDiagram::from` 把接口的成员搬进类后丢弃身份 | 保留原型标记，类名与原型分开存放 |
 | `oak-mermaid` | `classDiagram` 关系两端的多重性（`A "1" --> "many" B`） | 上游未建模 | `oak-uml::Relation` 无多重性字段 | 两端各一个可选的多重性文本 |
 | `oak-mermaid` | `sequenceDiagram` 的 `activate` / `deactivate` 与 `+` / `-` 简写 | 拒绝于语句行 | `SequenceDiagram` 无激活区间，PlantUML 的同名字段可参照 | 激活所属 participant、起始与结束消息序号 |

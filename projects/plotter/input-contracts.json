@@ -51,7 +51,7 @@
     },
     {
       "language": "mermaid",
-      "entry": ["flowchart", "graph", "classDiagram", "sequenceDiagram"],
+      "entry": ["flowchart", "graph", "classDiagram", "sequenceDiagram", "stateDiagram-v2", "stateDiagram", "erDiagram"],
       "supported": [
         {"construct": "flowchart / graph with TD / TB / BT / LR / RL", "sample": "flowchart TD\n  A[Start] --> B[Stop]\n"},
         {"construct": "node shapes Box / Round / Stadium / Subroutine / Cylinder / Circle / Rhombus"},
@@ -60,15 +60,17 @@
         {"construct": "classDiagram class bodies with fields and methods", "sample": "classDiagram\n  class Hub {\n    +run()\n  }\n"},
         {"construct": "classDiagram relations inheritance / composition / aggregation / association / dependency"},
         {"construct": "sequenceDiagram participant / actor declarations"},
-        {"construct": "sequenceDiagram messages with solid / dotted / solid-arrow / dotted-arrow", "sample": "sequenceDiagram\n  participant A\n  participant B\n  A->>B: hello\n  B-->>A: world\n"}
+        {"construct": "sequenceDiagram messages with solid / dotted / solid-arrow / dotted-arrow", "sample": "sequenceDiagram\n  participant A\n  participant B\n  A->>B: hello\n  B-->>A: world\n"},
+        {"construct": "stateDiagram / stateDiagram-v2 states, composite states, transitions, and [*] pseudo states", "sample": "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy: start\n  Busy --> [*]\n"},
+        {"construct": "erDiagram entities, attributes with PK / FK keys, and crow's foot cardinality on both ends", "sample": "erDiagram\n  CUSTOMER ||--o{ ORDER : places\n"}
       ],
       "approximated": [
         {"construct": "dotted edge style", "code": "davinci.diagram.approximated", "loss": "drawn as a dashed line"},
-        {"construct": "nested subgraph", "code": "davinci.diagram.approximated", "loss": "inner clusters flatten into the outer frame"}
+        {"construct": "nested subgraph", "code": "davinci.diagram.approximated", "loss": "inner clusters flatten into the outer frame"},
+        {"construct": "composite state regions", "code": "davinci.diagram.approximated", "loss": "each region becomes one flat frame and nested states join every ancestor frame"},
+        {"construct": "erDiagram non-identifying relation", "code": "davinci.diagram.approximated", "loss": "drawn as a dashed line"}
       ],
       "refused": [
-        {"construct": "stateDiagram / stateDiagram-v2", "code": "davinci.diagram.unsupported", "gap": "oak-mermaid builds no state nodes", "span": "family header line"},
-        {"construct": "erDiagram", "code": "davinci.diagram.unsupported", "gap": "oak-mermaid builds no entity nodes", "span": "family header line"},
         {"construct": "gantt / pie / journey / gitGraph / mindmap / timeline / requirementDiagram / quadrantChart / xychart-beta / sankey-beta / block-beta / C4Context / zenuml", "code": "davinci.diagram.unsupported", "span": "family header line"},
         {"construct": "second diagram header", "code": "davinci.diagram.unsupported"},
         {"construct": "orientation outside TD / TB / BT / LR / RL", "code": "davinci.diagram.unsupported"},
@@ -76,6 +78,8 @@
         {"construct": "flowchart discarded statements style / classDef / class / linkStyle / click / direction / accTitle / accDescr", "code": "davinci.diagram.unsupported"},
         {"construct": "class discarded statements direction / note / style / cssClass / linkStyle / namespace / click / acctitle / accTitle / accDescr / callback / link", "code": "davinci.diagram.unsupported"},
         {"construct": "sequence discarded statements title / accTitle / accDescr / note / loop / alt / else / opt / par / critical / break / rect / end / activate / deactivate / autonumber / box / create / destroy / link / linkStyle", "code": "davinci.diagram.unsupported"},
+        {"construct": "state discarded statements direction / note / style / classDef / class / click / linkStyle / title / acctitle / accTitle / accDescr", "code": "davinci.diagram.unsupported"},
+        {"construct": "entity relationship discarded statements title / acctitle / accTitle / accDescr / direction / style / classDef / click / linkStyle / note", "code": "davinci.diagram.unsupported"},
         {"construct": "sequence activation shorthand + / -", "code": "davinci.diagram.unsupported", "gap": "oak-mermaid keeps no activation spans"},
         {"construct": "flowchart with no nodes and no edges", "code": "davinci.diagram.empty-diagram"},
         {"construct": "source the parser refuses", "code": "davinci.diagram.unsupported"}
@@ -138,6 +142,8 @@
     {"id": "diagram-mermaid-flowchart", "language": "mermaid", "classification": "accept", "source": "flowchart TD\n  A[Start] --> B{Ready?}\n  B -->|yes| C[Stop]\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
     {"id": "diagram-mermaid-class-method", "language": "mermaid", "classification": "accept", "source": "classDiagram\n  class Hub {\n    +run()\n  }\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
     {"id": "diagram-mermaid-sequence", "language": "mermaid", "classification": "accept", "source": "sequenceDiagram\n  participant A\n  participant B\n  A->>B: hello\n  B-->>A: world\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+    {"id": "diagram-mermaid-state", "language": "mermaid", "classification": "accept", "source": "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Busy: start\n  Busy --> [*]\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
+    {"id": "diagram-mermaid-er", "language": "mermaid", "classification": "accept", "source": "erDiagram\n  CUSTOMER {\n    string id PK\n  }\n  ORDER {\n    int id PK\n  }\n  CUSTOMER ||--o{ ORDER : places\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
     {"id": "diagram-plantuml-class", "language": "plantuml", "classification": "accept", "source": "@startuml\nclass Order {\n  +id : String\n}\n@enduml\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
     {"id": "diagram-plantuml-sequence", "language": "plantuml", "classification": "accept", "source": "@startuml\nAlice -> Bob: hello\n@enduml\n", "expect": {"lower": "spec", "render": "svg", "deterministic": true}},
     {"id": "diagram-tikz-polyline", "language": "tikz", "classification": "accept", "source": "\\begin{tikzpicture}\n\\draw (0,0) -- (2,1);\n\\end{tikzpicture}\n", "expect": {"lower": "scene", "deterministic": true}},
@@ -147,7 +153,7 @@
   "rejections": [
     {"id": "diagram-mermaid-note-with-arrow-text", "language": "mermaid", "source": "sequenceDiagram\n  participant Alice\n  participant Bob\n  Note over Alice,Bob: click -> here\n  Alice->>Bob: Hello\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "Note over Alice,Bob: click -> here"},
     {"id": "diagram-mermaid-note-over", "language": "mermaid", "source": "sequenceDiagram\n  participant Alice\n  participant Bob\n  Note over Alice,Bob: shared\n  Alice->>Bob: Hello\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "Note over Alice,Bob: shared"},
-    {"id": "diagram-mermaid-state-family", "language": "mermaid", "source": "stateDiagram-v2\n  [*] --> Still\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "stateDiagram-v2"},
+    {"id": "diagram-mermaid-state-note", "language": "mermaid", "source": "stateDiagram-v2\n  [*] --> Idle\n  note right of Idle: waiting\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "note right of Idle: waiting"},
     {"id": "diagram-mermaid-second-header", "language": "mermaid", "source": "graph LR\n    A --> B\ngraph LR\n    C --> D\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "graph LR"},
     {"id": "diagram-mermaid-parallelogram", "language": "mermaid", "source": "flowchart TD\n  A[/Slant/]\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "A[/Slant/]"},
     {"id": "diagram-dot-html-label", "language": "dot", "source": "digraph {\n  a [label=<b>bold</b>]\n}\n", "code": "davinci.diagram.unsupported", "severity": "error", "spanText": "<b>bold</b>"},
