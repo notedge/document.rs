@@ -7,8 +7,9 @@ use oak_core::{Builder, SourceText, errors::OakError, parser::session::ParseSess
 use oak_mermaid::{
     MermaidBuilder, MermaidLanguage,
     ast::{
-        ClassDiagram, EdgeStyle as MermaidEdgeStyle, FlowElement, Flowchart, MermaidDiagram, MermaidRoot, MessageArrow,
-        NodeShape as MermaidNodeShape, ParticipantKind, SequenceDiagram,
+        ClassDiagram, EdgeStyle as MermaidEdgeStyle, ErCardinality, ErDiagram, ErEntity, ErKey, ErRelation, FlowElement,
+        Flowchart, MermaidDiagram, MermaidRoot, MessageArrow, NodeShape as MermaidNodeShape, ParticipantKind, SequenceDiagram,
+        StateDiagram, StateElement, StateEndpoint, StateKind,
     },
 };
 use oak_uml::model::{Class, RelationKind};
@@ -87,13 +88,54 @@ const DROPPED_SEQUENCE_STATEMENTS: &[&str] = &[
     "linkStyle",
 ];
 
+/// State-diagram statements that `oak-mermaid` parses and then discards.
+///
+/// Styling, notes, and accessibility metadata never reach the AST, so lowering
+/// the rest of the diagram would drop authored meaning. The guard refuses the
+/// statement instead and keeps the source visible.
+const DROPPED_STATE_STATEMENTS: &[&str] = &[
+    "direction",
+    "note",
+    "Note",
+    "style",
+    "classDef",
+    "class",
+    "click",
+    "linkStyle",
+    "title",
+    "acctitle",
+    "accTitle",
+    "accDescr",
+];
+
+/// Entity-relationship statements that `oak-mermaid` parses and then discards.
+///
+/// The ER parser treats every non-relationship line as an entity, so a styling
+/// or accessibility statement would become a phantom entity. The guard names
+/// them before that happens.
+const DROPPED_ER_STATEMENTS: &[&str] = &[
+    "title",
+    "acctitle",
+    "accTitle",
+    "accDescr",
+    "direction",
+    "style",
+    "classDef",
+    "click",
+    "linkStyle",
+    "note",
+    "Note",
+];
+
 /// Diagram families `oak-mermaid` reports no AST for.
 ///
-/// Only flowchart, sequence, and class are built into `MermaidRoot::diagrams`.
-/// The other headers parse without an error but contribute nothing, so an empty
-/// tree would surface as a whole-body `ast-unavailable`. Naming the authored
-/// family header keeps the refusal precise and locatable.
-const SUPPORTED_FAMILIES: &[&str] = &["flowchart", "graph", "classDiagram", "sequenceDiagram"];
+/// Flowchart, sequence, class, state, and entity-relationship diagrams are
+/// built into `MermaidRoot::diagrams`. The other headers parse without an error
+/// but contribute nothing, so an empty tree would surface as a whole-body
+/// `ast-unavailable`. Naming the authored family header keeps the refusal
+/// precise and locatable.
+const SUPPORTED_FAMILIES: &[&str] =
+    &["flowchart", "graph", "classDiagram", "sequenceDiagram", "stateDiagram-v2", "stateDiagram", "erDiagram"];
 
 struct NodeSeed {
     id: String,
@@ -144,6 +186,56 @@ impl Collector {
             }
         }
         Ok(())
+    }
+
+    /// Walk one state-diagram scope. `ancestors` holds the enclosing region
+    /// frames and `scope` names the region that owns its `[*]` pseudo states,
+    /// so each concurrent region keeps its own initial and final node.
+    fn collect_states(&mut self, elements: &[StateElement], ancestors: &[String], scope: &str) -> Result<(), DiagramError> {
+        for element in elements {
+            match element {
+                StateElement::State(state) => {
+                    let id = require_id(&state.id)?;
+                    let label = state.text.as_deref().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string);
+                    self.upsert_node(&id, label, Some(state_shape(state.kind)), ancestors);
+                    for (index, region) in state.regions.iter().enumerate() {
+                        let frame = self.register_cluster(Some(&format!("{id}:region{index}")), "");
+                        let mut nested = ancestors.to_vec();
+                        nested.push(frame.clone());
+                        self.collect_states(&region.elements, &nested, &frame)?;
+                    }
+                }
+                StateElement::Transition(transition) => {
+                    let from = self.state_endpoint(&transition.from, ancestors, scope)?;
+                    let to = self.state_endpoint(&transition.to, ancestors, scope)?;
+                    self.edges.push(DiagramEdge {
+                        from: Endpoint { node: from, port: None },
+                        to: Endpoint { node: to, port: None },
+                        label: transition.label.as_deref().map(str::trim).filter(|label| !label.is_empty()).map(str::to_string),
+                        style: EdgeStyle::Arrow,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve one transition endpoint. A state that only appears in a
+    /// transition becomes an implicit node, matching Mermaid.
+    fn state_endpoint(&mut self, endpoint: &StateEndpoint, ancestors: &[String], scope: &str) -> Result<String, DiagramError> {
+        match endpoint {
+            StateEndpoint::State(id) => {
+                let id = require_id(id)?;
+                self.upsert_node(&id, None, None, ancestors);
+                Ok(id)
+            }
+            StateEndpoint::Start | StateEndpoint::End => {
+                let role = if matches!(endpoint, StateEndpoint::Start) { "start" } else { "end" };
+                let id = if scope.is_empty() { format!("[*]:{role}") } else { format!("[*]:{scope}:{role}") };
+                self.upsert_node(&id, Some("[*]".to_string()), Some(NodeShape::Circle), ancestors);
+                Ok(id)
+            }
+        }
     }
 
     fn upsert_node(&mut self, id: &str, label: Option<String>, shape: Option<NodeShape>, ancestors: &[String]) {
@@ -213,9 +305,9 @@ impl Collector {
 
 /// Parse Mermaid source through the `oak-mermaid` frontend.
 ///
-/// The frontend recognises `graph`/`flowchart`, `sequenceDiagram`, and
-/// `classDiagram` sections. Source without any diagram header produces an empty
-/// root. This function rejects an empty AST with an explicit
+/// The frontend recognises `graph`/`flowchart`, `sequenceDiagram`,
+/// `classDiagram`, `stateDiagram`, and `erDiagram` sections. Source without any
+/// diagram header produces an empty root. This function rejects an empty AST with an explicit
 /// `davinci.diagram.ast-unavailable` diagnostic instead of reporting a
 /// successful parse with no semantics. Family-specific lowering rules live in
 /// the functions below.
@@ -259,19 +351,19 @@ fn spanned_parse_error(source: &str, error: &OakError) -> DiagramError {
 /// flattened: a node joins every ancestor cluster of the block that declares
 /// it, so an outer frame still contains nested members.
 ///
-/// Flowcharts and class diagrams lower to a layered graph spec. Sequence
-/// diagrams lower to a [`LayoutModel::TimeOrdered`] spec whose participant
-/// axis, message order, and activation spans are declared explicitly, so every
-/// frontend family rebuilds its scene with the ordinary `compile` pass.
+/// Flowcharts, class, state, and entity-relationship diagrams lower to a
+/// layered graph spec. Sequence diagrams lower to a
+/// [`LayoutModel::TimeOrdered`] spec whose participant axis, message order, and
+/// activation spans are declared explicitly, so every frontend family rebuilds
+/// its scene with the ordinary `compile` pass.
 pub fn mermaid_to_spec(source: &str) -> Result<DiagramSpec, DiagramError> {
     let root = parse_mermaid(source)?;
     match single_diagram(&root, source)? {
         MermaidDiagram::Flowchart(flowchart) => flowchart_spec(flowchart, source),
         MermaidDiagram::Class(class) => class_spec(class, source),
         MermaidDiagram::Sequence(sequence) => sequence_spec(sequence),
-        MermaidDiagram::State(_) | MermaidDiagram::EntityRelationship(_) => Err(DiagramError::unsupported(
-            "Mermaid diagram family `stateDiagram` / `erDiagram` is not lowered, the diagram falls back to its source",
-        )),
+        MermaidDiagram::State(state) => state_spec(state, source),
+        MermaidDiagram::EntityRelationship(er) => er_spec(er, source),
     }
 }
 
@@ -298,9 +390,8 @@ pub fn mermaid_to_scene(source: &str) -> Result<LoweredDiagram, DiagramError> {
             lower_graph(sequence_spec(sequence)?)
         }
         MermaidDiagram::Class(class) => lower_graph(class_spec(class, source)?),
-        MermaidDiagram::State(_) | MermaidDiagram::EntityRelationship(_) => Err(DiagramError::unsupported(
-            "Mermaid diagram family `stateDiagram` / `erDiagram` is not lowered, the diagram falls back to its source",
-        )),
+        MermaidDiagram::State(state) => lower_graph(state_spec(state, source)?),
+        MermaidDiagram::EntityRelationship(er) => lower_graph(er_spec(er, source)?),
     }
 }
 
@@ -539,6 +630,167 @@ fn class_edge_style(kind: &RelationKind) -> EdgeStyle {
         RelationKind::Composition => EdgeStyle::FilledDiamond,
         RelationKind::Aggregation => EdgeStyle::HollowDiamond,
         RelationKind::Dependency => EdgeStyle::DottedArrow,
+    }
+}
+
+/// Lower one `stateDiagram` AST into the graph spec used by layered layout.
+///
+/// A state becomes a node whose outline follows its stereotype, and a
+/// transition becomes a directed edge carrying its event/guard text. `[*]` is
+/// drawn as a circle labelled with the authored token, once per scope: a top
+/// level diagram and every concurrent region keep their own initial and final
+/// pseudo state, because `[*]` is relative to its region.
+///
+/// A composite state stays a node and each of its regions becomes a cluster
+/// frame. Nested states join every enclosing frame, the same flattening rule as
+/// nested flowchart subgraphs.
+fn state_spec(diagram: &StateDiagram, source: &str) -> Result<DiagramSpec, DiagramError> {
+    if let Some((range, keyword)) = locate_dropped_statement(source, DROPPED_STATE_STATEMENTS, false) {
+        return Err(DiagramError::unsupported(format!(
+            "state statement `{keyword}` is not lowered, the diagram falls back to its source"
+        ))
+        .with_span(range));
+    }
+
+    let mut collector = Collector::default();
+    collector.collect_states(&diagram.elements, &[], "")?;
+    if collector.nodes.is_empty() {
+        return Err(DiagramError::empty_diagram("state diagram contains no states or transitions"));
+    }
+
+    let mut spec = DiagramSpec::new(Direction::TopDown);
+    let (nodes, edges, clusters) = collector.into_parts();
+    spec.nodes = nodes;
+    spec.edges = edges;
+    spec.clusters = clusters;
+    Ok(spec)
+}
+
+fn state_shape(kind: StateKind) -> NodeShape {
+    match kind {
+        StateKind::Normal => NodeShape::Round,
+        StateKind::Fork | StateKind::Join => NodeShape::Box,
+        StateKind::Choice => NodeShape::Rhombus,
+        StateKind::EntryPoint | StateKind::ExitPoint => NodeShape::Circle,
+    }
+}
+
+/// Lower one `erDiagram` AST into the graph spec used by layered layout.
+///
+/// An entity becomes a `Box` node whose label starts with the entity name
+/// followed by one line per attribute, so attributes and their key markers
+/// render without a new scene primitive. A relationship becomes a plain line
+/// carrying both crow's foot cardinalities in its label, left end first. An
+/// identifying relationship keeps a solid line and a non-identifying one uses
+/// the dotted style, which the layout reports as an approximation.
+fn er_spec(diagram: &ErDiagram, source: &str) -> Result<DiagramSpec, DiagramError> {
+    if let Some((range, keyword)) = locate_dropped_statement(source, DROPPED_ER_STATEMENTS, true) {
+        return Err(DiagramError::unsupported(format!(
+            "entity relationship statement `{keyword}` is not lowered, the diagram falls back to its source"
+        ))
+        .with_span(range));
+    }
+
+    let mut spec = DiagramSpec::new(Direction::TopDown);
+    let mut known: BTreeSet<String> = BTreeSet::new();
+
+    for entity in &diagram.entities {
+        let name = require_id(&entity.name)?;
+        spec.nodes.push(DiagramNode {
+            id: name.clone(),
+            label: Some(er_label(entity)),
+            shape: NodeShape::Box,
+            ports: Vec::new(),
+            cluster: None,
+        });
+        known.insert(name);
+    }
+
+    for relation in &diagram.relations {
+        let left = require_id(&relation.left)?;
+        let right = require_id(&relation.right)?;
+        for name in [&left, &right] {
+            if known.insert(name.clone()) {
+                spec.nodes.push(DiagramNode {
+                    id: name.clone(),
+                    label: None,
+                    shape: NodeShape::Box,
+                    ports: Vec::new(),
+                    cluster: None,
+                });
+            }
+        }
+        spec.edges.push(DiagramEdge {
+            from: Endpoint { node: left, port: None },
+            to: Endpoint { node: right, port: None },
+            label: Some(er_edge_label(relation)),
+            style: if relation.identifying { EdgeStyle::Line } else { EdgeStyle::DottedLine },
+        });
+    }
+
+    if spec.nodes.is_empty() {
+        return Err(DiagramError::empty_diagram("entity relationship diagram contains no entities or relations"));
+    }
+    Ok(spec)
+}
+
+fn er_label(entity: &ErEntity) -> String {
+    let mut label = entity.name.trim().to_string();
+    for attribute in &entity.attributes {
+        let mut line = String::new();
+        append_word(&mut line, attribute.type_name.trim());
+        append_word(&mut line, attribute.name.trim());
+        for key in &attribute.keys {
+            append_word(
+                &mut line,
+                match key {
+                    ErKey::Primary => "PK",
+                    ErKey::Foreign => "FK",
+                },
+            );
+        }
+        if let Some(comment) = attribute.comment.as_deref().map(str::trim).filter(|comment| !comment.is_empty()) {
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push('"');
+            line.push_str(comment);
+            line.push('"');
+        }
+        if !line.is_empty() {
+            label.push('\n');
+            label.push_str(&line);
+        }
+    }
+    label
+}
+
+fn append_word(line: &mut String, word: &str) {
+    if word.is_empty() {
+        return;
+    }
+    if !line.is_empty() {
+        line.push(' ');
+    }
+    line.push_str(word);
+}
+
+/// A relation label that keeps both authored crow's foot cardinalities.
+fn er_edge_label(relation: &ErRelation) -> String {
+    let left = cardinality_token(relation.left_cardinality);
+    let right = cardinality_token(relation.right_cardinality);
+    match relation.label.as_deref().map(str::trim).filter(|label| !label.is_empty()) {
+        Some(label) => format!("{left} {label} {right}"),
+        None => format!("{left} {right}"),
+    }
+}
+
+fn cardinality_token(cardinality: ErCardinality) -> &'static str {
+    match cardinality {
+        ErCardinality::One => "||",
+        ErCardinality::ZeroOrOne => "o|",
+        ErCardinality::OneOrMore => "|{",
+        ErCardinality::ZeroOrMore => "o{",
     }
 }
 
@@ -865,7 +1117,7 @@ fn starts_with_keyword(line: &str, keyword: &str) -> bool {
 fn require_id(id: &str) -> Result<String, DiagramError> {
     let trimmed = id.trim();
     if trimmed.is_empty() {
-        return Err(DiagramError::unsupported("flowchart contains a node or edge endpoint with an empty id"));
+        return Err(DiagramError::unsupported("diagram contains a node or edge endpoint with an empty id"));
     }
     Ok(trimmed.to_string())
 }

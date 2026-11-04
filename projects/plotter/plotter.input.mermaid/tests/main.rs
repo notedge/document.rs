@@ -41,12 +41,58 @@ fn skipped_sequence_statement_with_arrow_text_is_refused() {
 
 #[test]
 fn diagram_family_without_an_ast_is_refused_at_its_header() {
-    let source = "stateDiagram-v2\n  [*] --> Still\n";
-    let error = mermaid_to_scene(source).expect_err("state diagrams have no Oak AST");
+    let source = "gantt\n  title Plan\n  section Work\n  Task :a1, 2024-01-01, 30d\n";
+    let error = mermaid_to_scene(source).expect_err("gantt diagrams have no Oak AST");
 
     assert_eq!(error.code(), codes::UNSUPPORTED);
     let span = error.span().expect("the refusal names the header");
-    assert_eq!(&source[span], "stateDiagram-v2");
+    assert_eq!(&source[span], "gantt");
+}
+
+#[test]
+fn state_diagram_lowers_states_and_transitions() {
+    let source = "stateDiagram-v2\n    [*] --> Idle\n    Idle --> Busy: start\n    Busy --> [*]\n";
+    let lowered = mermaid_to_scene(source).expect("a state diagram should lower");
+
+    assert_eq!(lowered.plan.nodes.len(), 4);
+    assert_eq!(lowered.plan.edges.len(), 3);
+    assert_eq!(lowered.plan.node("Idle").expect("Idle").shape, NodeShape::Round);
+    assert_eq!(lowered.plan.node("[*]:start").expect("initial state").label, "[*]");
+    assert_eq!(lowered.plan.edges[1].label.as_deref(), Some("start"));
+    assert!(lowered.diagnostics.is_empty(), "a clean state diagram must not report loss");
+}
+
+#[test]
+fn composite_state_region_keeps_its_own_initial_state() {
+    let source = "stateDiagram-v2\n    state Active {\n        [*] --> Running\n        Running --> Paused: pause\n    }\n";
+    let lowered = mermaid_to_scene(source).expect("a composite state should lower");
+
+    assert_eq!(lowered.plan.clusters.len(), 1, "one region becomes one frame");
+    assert_eq!(lowered.plan.node("[*]:Active:region0:start").expect("region initial state").label, "[*]");
+    assert_eq!(lowered.plan.node("Running").expect("Running").cluster.as_deref(), Some("Active:region0"));
+}
+
+#[test]
+fn state_note_is_refused_with_its_authored_line() {
+    let source = "stateDiagram-v2\n    [*] --> Idle\n    note right of Idle: waiting\n";
+    let error = mermaid_to_scene(source).expect_err("a note has no Oak AST carrier");
+
+    assert_eq!(error.code(), codes::UNSUPPORTED);
+    let span = error.span().expect("the refusal names the note");
+    assert_eq!(&source[span], "note right of Idle: waiting");
+}
+
+#[test]
+fn entity_relationship_diagram_lowers_entities_and_cardinality() {
+    let source = "erDiagram\n    CUSTOMER {\n        string id PK\n        string name\n    }\n    ORDER {\n        int id PK\n    }\n    CUSTOMER ||--o{ ORDER : places\n";
+    let lowered = mermaid_to_scene(source).expect("an entity relationship diagram should lower");
+
+    let customer = lowered.plan.node("CUSTOMER").expect("CUSTOMER");
+    assert!(customer.label.contains("string id PK"), "got {}", customer.label);
+    assert!(customer.label.contains("string name"), "got {}", customer.label);
+    assert_eq!(lowered.plan.edges.len(), 1);
+    assert_eq!(lowered.plan.edges[0].label.as_deref(), Some("|| places o{"));
+    assert_eq!(lowered.plan.edges[0].style, plotter_diagram::spec::EdgeStyle::Line);
 }
 
 #[test]
