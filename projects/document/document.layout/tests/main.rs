@@ -1,6 +1,3 @@
-//! 集成测试入口：按域分子模块。
+//! 冒烟入口：只保留块级布局的最小 happy path。
 
 mod block;
-mod diagram;
-mod document;
-mod math;

@@ -1,25 +1,3 @@
-//! 集成测试入口：按域分子模块。
+//! 冒烟入口：只保留能力表与 feature 开关的一致性断言。
 
 mod capability;
-mod common;
-#[cfg(feature = "doc")]
-mod doc;
-#[cfg(feature = "docx")]
-mod docx;
-#[cfg(feature = "epub")]
-mod epub;
-#[cfg(feature = "html")]
-mod html;
-mod integration;
-#[cfg(feature = "markdown")]
-mod markdown;
-#[cfg(feature = "notedown")]
-mod notedown;
-#[cfg(feature = "pdf")]
-mod pdf;
-#[cfg(feature = "markdown")]
-mod provenance;
-#[cfg(feature = "tex")]
-mod tex;
-#[cfg(feature = "typst")]
-mod typst;

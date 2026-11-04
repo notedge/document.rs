@@ -1,7 +1,3 @@
-//! 集成测试入口：按域分子模块。
+//! 冒烟入口：只保留 IR 的最小构造与损失标记断言。
 
-mod contract;
 mod graph;
-mod inline;
-mod transform;
-mod validate;

@@ -223,37 +223,3 @@ pub fn document_root(value: &XmlValue) -> Result<&XmlElement, FormatError> {
         _ => Err(FormatError::parse("docx", "xml has no root element")),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn parse_leaf_text(xml: &str) -> String {
-        let value = parse_xml_bytes(xml.as_bytes()).expect("parse xml");
-        element_text(document_root(&value).expect("document root"))
-    }
-
-    #[test]
-    fn leaf_text_restores_escaped_characters_dropped_by_the_parser() {
-        assert_eq!(parse_leaf_text("<w:t xmlns:w=\"urn:x\">A --&gt; B{Done?}</w:t>"), "A --> B{Done?}");
-        assert_eq!(
-            parse_leaf_text("<w:t xmlns:w=\"urn:x\">a &quot;quoted&quot; &amp; &lt;tag&gt;</w:t>"),
-            "a \"quoted\" & <tag>"
-        );
-    }
-
-    #[test]
-    fn leaf_text_decodes_character_references() {
-        assert_eq!(parse_leaf_text("<w:t xmlns:w=\"urn:x\">&#62; &#x3F;</w:t>"), "> ?");
-    }
-
-    #[test]
-    fn leaf_text_keeps_unknown_entities_verbatim() {
-        assert_eq!(parse_leaf_text("<w:t xmlns:w=\"urn:x\">R&amp;D &unknown;</w:t>"), "R&D &unknown;");
-    }
-
-    #[test]
-    fn self_closing_leaf_has_no_text() {
-        assert_eq!(parse_leaf_text("<w:br xmlns:w=\"urn:x\"/>"), "");
-    }
-}

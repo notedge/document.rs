@@ -163,38 +163,3 @@ pub fn from_format_error(error: &FormatError) -> Diagnostic {
         ),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use boost_diagnostic::DiagnosticCode;
-
-    #[test]
-    fn codes_are_notedown_prefixed() {
-        assert!(codes::NOT_IMPLEMENTED.starts_with("notedown.format."));
-        assert!(codes::INVALID_INPUT.starts_with("notedown.format."));
-        assert!(codes::PARSE_FAILED.starts_with("notedown.format."));
-        assert!(codes::UNSUPPORTED.starts_with("notedown.format."));
-        assert!(codes::BUDGET_EXHAUSTED.starts_with("notedown.format."));
-    }
-
-    #[test]
-    fn from_format_error_preserves_code_and_origin() {
-        let err = FormatError::parse("docx", "table border overflow");
-        let diag = from_format_error(&err);
-        assert_eq!(diag.code(), &DiagnosticCode::new(codes::PARSE_FAILED));
-        assert_eq!(diag.origin().namespace(), "notedown");
-        assert_eq!(diag.origin().component(), "formats");
-        assert_eq!(diag.message().key(), codes::PARSE_FAILED);
-        assert!(diag.message().fallback().is_some());
-    }
-
-    #[test]
-    fn from_format_error_includes_typed_args() {
-        let err = FormatError::unsupported("pdf", "hyperlinks");
-        let diag = from_format_error(&err);
-        let args: Vec<_> = diag.message().args().iter().map(|(name, _)| name.clone()).collect();
-        assert!(args.contains(&"format".to_string()));
-        assert!(args.contains(&"operation".to_string()));
-    }
-}

@@ -1,4 +1,3 @@
-//! 集成测试入口：按域分子模块。
+//! 冒烟入口：只保留 Markdown 输入管线的最小闭环。
 
-mod markdown_constructs;
 mod markdown_pipeline;

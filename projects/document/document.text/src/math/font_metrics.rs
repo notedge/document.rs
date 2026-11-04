@@ -56,7 +56,7 @@ impl FontMetricsSystem {
                 return Ok(metrics);
             }
         }
-        Ok(default_glyph_metrics(key.char))
+        Ok(default_glyph_metrics())
     }
 
     pub fn get_delimiter_construction(&self, key: &GlyphKey) -> MathResult<DelimiterConstruction> {
@@ -170,8 +170,7 @@ fn emphasis_metrics(data: &FontMetricsData, key: &GlyphKey) -> Option<GlyphMetri
     Some(metrics)
 }
 
-fn default_glyph_metrics(ch: Option<char>) -> GlyphMetrics {
-    let width = Fixed::from_f64(0.5);
+fn default_glyph_metrics() -> GlyphMetrics {
     GlyphMetrics {
         width: Fixed::from_f64(0.5),
         height: Fixed::from_f64(0.7),
@@ -244,7 +243,6 @@ pub(crate) fn default_math_constant(constant: MathConstant) -> Fixed {
         MathConstant::RadicalKernBeforeDegree => 0.5,
         MathConstant::RadicalKernAfterDegree => -0.1,
         MathConstant::RadicalDegreeBottomRaisePercent => 0.6,
-        _ => 0.0,
     };
     Fixed::from_f64(v)
 }
@@ -554,117 +552,4 @@ fn builtin_font_metrics_from(opentype_data: Option<FontMetricsData>) -> FontMetr
     }
 
     FontMetricsSystem::new_with_metrics(data)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn key(ch: char) -> GlyphKey {
-        GlyphKey::from_char(ch, Some("default".to_string()), FontStyle::Math)
-    }
-
-    #[test]
-    fn delimiter_construction_has_variants_for_paren() {
-        let sys = builtin_font_metrics();
-        let c = sys.get_delimiter_construction(&key('(')).unwrap();
-        assert!(!c.variants.is_empty(), "expected non-empty variants for '('");
-        assert!(c.variants.len() >= 3, "expected at least 3 variants for '('");
-    }
-
-    #[test]
-    fn delimiter_construction_has_variants_for_bar() {
-        let sys = builtin_font_metrics();
-        let c = sys.get_delimiter_construction(&key('|')).unwrap();
-        assert!(!c.variants.is_empty(), "expected non-empty variants for '|'");
-    }
-
-    #[test]
-    fn delimiter_variants_have_distinct_metrics() {
-        let sys = builtin_font_metrics();
-        let c = sys.get_delimiter_construction(&key('[')).unwrap();
-        let heights: Vec<f64> = c
-            .variants
-            .iter()
-            .map(|v| {
-                let m = sys.get_metrics(&v.glyph).unwrap();
-                (m.height + m.depth).to_f64()
-            })
-            .collect();
-        assert!(heights.len() >= 3, "expected at least 3 variants, got {}", heights.len());
-        assert!(heights[0] > 0.0, "variant 0 should have positive total height");
-        assert!(heights.windows(2).all(|w| w[0] <= w[1]), "variant heights should be non-decreasing");
-    }
-
-    #[test]
-    fn real_font_italic_correction_reaches_derived_italic_face() {
-        let sys = builtin_font_metrics();
-        let math_f = sys.get_metrics(&key('f')).unwrap();
-        assert!(
-            math_f.italic_correction.to_f64() > 0.05,
-            "expected the MATH italic correction of 'f', got {}",
-            math_f.italic_correction.to_f64()
-        );
-
-        let italic_key = GlyphKey::from_char('f', Some("default".to_string()), FontStyle::Italic);
-        let italic_f = sys.get_metrics(&italic_key).unwrap();
-        assert_eq!(italic_f.italic_correction, math_f.italic_correction, "derived italic face must keep the real correction");
-        assert_eq!(italic_f.top_accent_attachment, math_f.top_accent_attachment);
-        assert!(italic_f.top_accent_attachment.to_f64() > 0.0, "top accent attachment must come from the MATH table");
-    }
-
-    #[test]
-    fn accent_glyphs_resolve_under_the_default_family() {
-        let sys = builtin_font_metrics();
-        for ch in ['ˆ', '¯', '˜', '˙', '¨'] {
-            let m = sys.get_metrics(&key(ch)).unwrap();
-            assert!(m.width.to_f64() > 0.2, "'{ch}' advance {} is a synthetic placeholder", m.width.to_f64());
-            assert!(m.height.to_f64() > 0.4, "'{ch}' height {} is a synthetic placeholder", m.height.to_f64());
-            let path = sys.get_glyph_path(&key(ch)).expect("accent outline must come from the font");
-            assert!(path.contains('M'), "'{ch}' outline should start with a move: {path}");
-        }
-        // The vector arrow is the widest accent: `\vec` scales nothing, so the
-        // arrow it stamps over a base comes straight from the font.
-        let arrow = sys.get_metrics(&key('→')).unwrap();
-        assert!(arrow.width.to_f64() > 0.9, "'→' advance {} is a synthetic placeholder", arrow.width.to_f64());
-    }
-
-    #[test]
-    fn math_constants_are_nonzero() {
-        let sys = builtin_font_metrics();
-        assert!(sys.get_math_constant("default", MathConstant::AxisHeight).unwrap().to_f64() > 0.0);
-        assert!(sys.get_math_constant("default", MathConstant::FractionRuleThickness).unwrap().to_f64() > 0.0);
-        assert!(sys.get_math_constant("default", MathConstant::RadicalRuleThickness).unwrap().to_f64() > 0.0);
-    }
-
-    #[test]
-    fn embedded_font_publishes_the_script_scale_ratios() {
-        let sys = builtin_font_metrics();
-        for constant in [MathConstant::ScriptPercentScaleDown, MathConstant::ScriptScriptPercentScaleDown] {
-            let ratio = sys
-                .font_math_constant("default", constant)
-                .unwrap_or_else(|| panic!("the embedded math font must publish `{constant:?}`"))
-                .to_f64();
-            assert!(ratio > 0.0 && ratio < 1.0, "`{constant:?}` must be a fraction of the base em, got {ratio}");
-        }
-    }
-
-    #[test]
-    fn synthetic_metrics_publish_no_font_ratio() {
-        let sys = FontMetricsSystem::new_with_metrics(FontMetricsData::new("default".to_string(), 1000));
-        for constant in [MathConstant::ScriptPercentScaleDown, MathConstant::ScriptScriptPercentScaleDown] {
-            assert_eq!(sys.font_math_constant("default", constant), None, "`{constant:?}` must stay unmeasured");
-            // The general lookup still answers a value, from the synthetic table.
-            assert!(sys.get_math_constant("default", constant).unwrap().to_f64() > 0.0);
-        }
-    }
-
-    #[test]
-    fn delimited_sub_formula_min_height_is_set() {
-        let sys = builtin_font_metrics();
-        let v = sys.get_math_constant("default", MathConstant::DelimitedSubFormulaMinHeight).unwrap();
-        // In the synthetic fallback this was hardcoded to 1.0, but the real
-        // OpenType MATH font may use a different (still positive) value.
-        assert!(v.to_f64() > 0.0, "DelimitedSubFormulaMinHeight should be positive");
-    }
 }

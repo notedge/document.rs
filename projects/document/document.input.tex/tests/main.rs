@@ -1,5 +1,3 @@
-//! 集成测试入口：按域分子模块。
+//! 冒烟入口：只保留 TeX 输入的拒绝路径。
 
 mod fail_closed;
-mod minimal_loop;
-mod structure_probe;

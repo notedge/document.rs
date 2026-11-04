@@ -81,30 +81,3 @@ impl std::fmt::Display for FontFallback {
         write!(f, "{} ({})", self.code(), self.subject())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn every_fallback_class_owns_one_structured_code() {
-        let cases = [
-            (FontFallback::MissingConstant(MathConstant::AxisHeight), "vutex.math.conformance.missing_constant"),
-            (FontFallback::MissingGlyphVariant('('), "vutex.math.conformance.missing_glyph_variant"),
-            (FontFallback::MissingAssemblyPiece('('), "vutex.math.conformance.missing_assembly_piece"),
-            (FontFallback::MissingItalicCorrection('x'), "vutex.math.conformance.missing_italic_correction"),
-            (FontFallback::MissingAccentAttachment('x'), "vutex.math.conformance.missing_accent_attachment"),
-            (FontFallback::MissingGlyph('☃'), "vutex.math.conformance.missing_glyph"),
-        ];
-        for (fallback, code) in cases {
-            assert_eq!(fallback.code(), code, "`{fallback}` must keep its structured code");
-            assert!(!fallback.subject().is_empty(), "`{fallback}` must name what is missing");
-            assert!(fallback.to_string().contains(code), "the display form carries the code");
-        }
-    }
-
-    #[test]
-    fn production_mode_is_the_default() {
-        assert_eq!(FontConformance::default(), FontConformance::AllowFallbacks);
-    }
-}

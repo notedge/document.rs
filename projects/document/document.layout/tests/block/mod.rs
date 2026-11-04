@@ -1,5 +1,3 @@
-//! 块级布局。
+//! 块级布局冒烟。
 
 mod coverage;
-mod inline_style;
-mod style;

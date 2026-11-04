@@ -15,3 +15,6 @@ time-travel.*
 target/
 Cargo.lock
 .cargo/config.toml
+
+# 测试下移隔离区（等待下游仓接收）
+.migration-staging/

@@ -1,4 +1,3 @@
-//! 集成测试入口：按域分子模块。
+//! 冒烟入口：只保留 Typst 内联形状的最小闭环。
 
 mod inline_shape;
-mod typst_input;

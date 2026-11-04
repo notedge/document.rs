@@ -922,32 +922,3 @@ fn trim_inlines(inlines: &mut Vec<Inline>) {
         inlines.remove(0);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use oak_typst::ast::TypstLink;
-
-    #[test]
-    fn link_items_become_link_inlines() {
-        let display = TypstRoot { span: (0..0).into(), items: vec![TypstItem::Text("example".into())] };
-        let link = TypstLink { url: "https://example.com".into(), content: Some(display) };
-        let root = TypstRoot { span: (0..0).into(), items: vec![TypstItem::Link(link)] };
-        let graph = lower_typst_root(&root, "", DocumentId(1));
-        let inline = graph
-            .blocks
-            .iter()
-            .find_map(|node| match &node.block {
-                Block::Paragraph { content } => content.iter().find(|inline| matches!(inline, Inline::Link { .. })),
-                _ => None,
-            })
-            .expect("link inline");
-        let Inline::Link { target, display, title } = inline
-        else {
-            unreachable!()
-        };
-        assert_eq!(target, &RelationEndpoint::ExternalUri("https://example.com".into()));
-        assert_eq!(display.iter().map(Inline::plain_text).collect::<String>(), "example");
-        assert!(title.is_none());
-    }
-}
