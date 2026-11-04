@@ -181,6 +181,29 @@ fn aligned_table_only_warns_and_still_renders() {
 }
 
 #[test]
+fn construct_losses_keep_their_own_spans() {
+    let source = "Term\n: definition\n\n| Left | Right |\n|:--|--:|\n| a | b |\n";
+    let imported = import_source("virtual://loss-spans.md", source).expect("both constructs are downgrades, not failures");
+
+    let definition = imported
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "import.markdown.definition_list")
+        .expect("the definition list loss must be diagnosed");
+    let definition_span = definition.span.expect("a construct-level loss must keep its range");
+    let slice = &source[definition_span.start as usize..definition_span.end as usize];
+    assert!(slice.contains("definition"), "{definition:?} slice={slice:?}");
+
+    let alignment = imported
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "import.markdown.table_alignment")
+        .expect("the alignment loss must be diagnosed");
+    let alignment_span = alignment.span.expect("a construct-level loss must keep its range");
+    assert!(source[alignment_span.start as usize..alignment_span.end as usize].contains(":--"), "{alignment:?}");
+}
+
+#[test]
 fn opaque_blocks_are_reported_instead_of_dropped() {
     let source = "Above\n\n---\n\nBelow\n";
     let imported = import_source("virtual://thematic-break.md", source).expect("thematic breaks are not fatal");

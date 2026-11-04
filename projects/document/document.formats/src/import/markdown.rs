@@ -160,13 +160,17 @@ fn lower_markdown_tree(
             // The IR has no definition list node. The term stays a paragraph and
             // each description becomes a paragraph of its own, and the downgrade
             // is recorded so it is never mistaken for a faithful definition list.
-            graph.push_loss(LossMarker {
-                code: "import.markdown.definition_list".into(),
-                message:
-                    "definition list is lowered to term and description paragraphs because the IR has no definition list node"
-                        .into(),
-                status: SemanticStatus::Partial,
-            });
+            let span = node.span();
+            graph.push_loss_at(
+                LossMarker {
+                    code: "import.markdown.definition_list".into(),
+                    message:
+                        "definition list is lowered to term and description paragraphs because the IR has no definition list node"
+                            .into(),
+                    status: SemanticStatus::Partial,
+                },
+                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+            );
             let content = definition_description_inlines(node, source, &mut context);
             if !content.is_empty() {
                 graph.push_block(Block::Paragraph { content });
@@ -179,14 +183,15 @@ fn lower_markdown_tree(
                 graph.push_block(block);
             }
             BlockOutcome::Loss(marker) => {
-                graph.push_loss(marker);
+                let span = node.span();
+                graph.push_loss_at(marker, Some(SourceSpan { start: span.start as u32, end: span.end as u32 }));
             }
             BlockOutcome::Skip => {}
         }
     }
 
-    for loss in context.losses {
-        graph.push_loss(loss);
+    for (marker, span) in context.losses {
+        graph.push_loss_at(marker, span);
     }
 
     register_image_assets(&mut graph);
@@ -210,7 +215,7 @@ enum BlockOutcome {
 #[derive(Default)]
 struct LinkContext {
     definitions: HashMap<String, LinkDefinition>,
-    losses: Vec<LossMarker>,
+    losses: Vec<(LossMarker, Option<SourceSpan>)>,
 }
 
 struct LinkDefinition {
@@ -277,11 +282,15 @@ fn register_link_definition_node(node: RedNode<MarkdownLanguage>, source: &Sourc
         return;
     }
     if raw.starts_with('[') && raw.contains("]:") {
-        context.losses.push(LossMarker {
-            code: "import.markdown.invalid_link_definition".into(),
-            message: format!("unsupported or invalid link definition: {}", raw),
-            status: SemanticStatus::Partial,
-        });
+        let span = node.span();
+        context.losses.push((
+            LossMarker {
+                code: "import.markdown.invalid_link_definition".into(),
+                message: format!("unsupported or invalid link definition: {}", raw),
+                status: SemanticStatus::Partial,
+            },
+            Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+        ));
     }
 }
 
@@ -590,11 +599,14 @@ fn resolve_link_destination(raw: &str, context: &mut LinkContext) -> Option<(Str
             return Some((text, definition.destination.clone(), definition.title.clone()));
         }
         if explicit {
-            context.losses.push(LossMarker {
-                code: "import.markdown.unresolved_reference_link".into(),
-                message: format!("unresolved reference link label: {label}"),
-                status: SemanticStatus::Unresolved,
-            });
+            context.losses.push((
+                LossMarker {
+                    code: "import.markdown.unresolved_reference_link".into(),
+                    message: format!("unresolved reference link label: {label}"),
+                    status: SemanticStatus::Unresolved,
+                },
+                None,
+            ));
         }
     }
     None
@@ -1280,13 +1292,17 @@ fn extract_table(node: RedNode<MarkdownLanguage>, source: &SourceText, context: 
         }
         if cells.is_empty() || is_table_separator_row(&cells) {
             if cells.iter().any(|cell| inline_text(&cell.content).contains(':')) {
-                context.losses.push(LossMarker {
-                    code: "import.markdown.table_alignment".into(),
-                    message:
-                        "GFM column alignment is not represented in the table IR, so the reopened table uses default alignment"
-                            .into(),
-                    status: SemanticStatus::Partial,
-                });
+                let span = row_node.span();
+                context.losses.push((
+                    LossMarker {
+                        code: "import.markdown.table_alignment".into(),
+                        message:
+                            "GFM column alignment is not represented in the table IR, so the reopened table uses default alignment"
+                                .into(),
+                        status: SemanticStatus::Partial,
+                    },
+                    Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+                ));
             }
             continue;
         }

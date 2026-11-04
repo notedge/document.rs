@@ -137,6 +137,28 @@ fn renderer_rejection_keeps_its_own_diagnostic_code() {
 }
 
 #[test]
+fn repeated_constructs_keep_their_own_spans() {
+    let source = r"\begin{document}
+\begin{figure}One\end{figure}
+\begin{figure}Two\end{figure}
+\end{document}
+";
+    let imported = import_source("repeated.tex", source).expect("unknown environments are construct-level losses");
+
+    let mut spans: Vec<_> = imported
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code == "import.tex.unknown_environment")
+        .map(|diagnostic| diagnostic.span.expect("each construct must keep its own range"))
+        .collect();
+    assert_eq!(spans.len(), 2, "{:#?}", imported.diagnostics);
+    spans.sort_by_key(|span| span.start);
+    assert!(spans[0].end < spans[1].start, "the two ranges must not collapse onto the first occurrence: {spans:?}");
+    assert!(source[spans[0].start as usize..spans[0].end as usize].contains("One"), "{spans:?}");
+    assert!(source[spans[1].start as usize..spans[1].end as usize].contains("Two"), "{spans:?}");
+}
+
+#[test]
 fn unreadable_file_fails_closed() {
     let path = std::env::temp_dir().join("vutex-input-tex-missing.tex");
     let _ = std::fs::remove_file(&path);

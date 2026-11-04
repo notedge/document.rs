@@ -356,10 +356,12 @@ impl<'a> TypstLowerer<'a> {
         let line_end = raw.find('\n').unwrap_or(raw.len());
         let line = raw[..line_end].trim();
         let kind = expression_kind(line);
-        self.loss(
+        let line_span = SourceSpan::new(span.start, span.start + line_end);
+        self.loss_at(
             "import.typst.dynamic_content",
             format!("Typst dynamic expression kept opaque: {line}"),
             SemanticStatus::Unsupported,
+            line_span,
         );
         self.push_block(sink, Block::Opaque { kind, payload_hint: line.to_string(), status: SemanticStatus::Partial });
         self.line_breaks = 0;
@@ -441,7 +443,12 @@ impl<'a> TypstLowerer<'a> {
         }
         let Ok(root) = parse_typst("<tail>", tail)
         else {
-            self.loss("import.typst.fragment_parse_failed", "reparsed Typst tail could not be parsed", SemanticStatus::Partial);
+            self.loss_at(
+                "import.typst.fragment_parse_failed",
+                "reparsed Typst tail could not be parsed",
+                SemanticStatus::Partial,
+                SourceSpan::new(start, end),
+            );
             return;
         };
         let mut inner = TypstLowerer {

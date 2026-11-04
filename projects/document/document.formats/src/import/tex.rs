@@ -46,7 +46,8 @@ use std::{
 
 use document_ir::{
     AttributePair, Attributes, Block, DocumentGraph, DocumentId, DocumentMetadata, Inline, LinkId, ListItem, LossMarker,
-    MathDisplay, NodeId, Relation, RelationEndpoint, RelationKind, SemanticStatus, SourceKind, SourceRef, TableCell, TableRow,
+    MathDisplay, NodeId, Relation, RelationEndpoint, RelationKind, SemanticStatus, SourceKind, SourceRef, SourceSpan,
+    TableCell, TableRow,
 };
 use oak_core::{Builder, SourceText, parser::session::ParseSession};
 use oak_tex::{
@@ -71,11 +72,19 @@ pub fn import_tex(path: impl AsRef<Path>) -> Result<DocumentGraph, FormatError> 
 /// Import TeX source text into `notedown-ir`.
 pub fn import_tex_bytes(label: &str, text: &str) -> Result<DocumentGraph, FormatError> {
     let root = parse_tex(label, text)?;
-    let mut lowerer =
-        TexLowerer { graph: DocumentGraph::new(document_id_for(label)), source: text, state: TexDocState::default() };
+    let mut lowerer = TexLowerer {
+        graph: DocumentGraph::new(document_id_for(label)),
+        source: text,
+        state: TexDocState::default(),
+        loss_span: None,
+        track_spans: true,
+    };
     let mut sink = Sink::document();
     lowerer.lower_root(&root.items, 0, text.len(), &mut sink);
     sink.flush(&mut lowerer.graph);
+    // Summary losses describe the whole import, not one construct, so they must
+    // not inherit the last construct's range.
+    lowerer.loss_span = None;
 
     for label in resolve_pending_references(&mut lowerer.graph, &lowerer.state.labels) {
         lowerer.loss(
@@ -165,6 +174,12 @@ struct TexLowerer<'a> {
     graph: DocumentGraph,
     source: &'a str,
     state: TexDocState,
+    /// Authored range of the construct currently being lowered, attached to
+    /// construct-level losses. Document-level losses run with it cleared.
+    loss_span: Option<SourceSpan>,
+    /// Fragment lowerers parse a slice whose offsets do not address the document
+    /// source, so they must not attach ranges to losses.
+    track_spans: bool,
 }
 
 /// Document-level lowering state shared by the whole TeX import: metadata,
@@ -204,7 +219,8 @@ impl<'a> TexLowerer<'a> {
     }
 
     fn loss(&mut self, code: &str, message: impl Into<String>, status: SemanticStatus) {
-        self.graph.push_loss(LossMarker { code: code.into(), message: message.into(), status });
+        let span = self.loss_span;
+        self.graph.push_loss_at(LossMarker { code: code.into(), message: message.into(), status }, span);
     }
 
     fn push_block(&mut self, sink: &mut Sink, block: Block) -> NodeId {
@@ -244,8 +260,14 @@ impl<'a> TexLowerer<'a> {
             if start < skip_until {
                 continue;
             }
+            if self.track_spans {
+                self.loss_span = SourceSpan::new(cursor, start);
+            }
             if !self.lower_gap(cursor, start, sink, after_comment) {
                 self.lower_dropped_regions(cursor, start, sink);
+            }
+            if self.track_spans {
+                self.loss_span = SourceSpan::new(start, end);
             }
             after_comment = matches!(item, TexItem::Comment { .. });
             if let TexItem::Command(command) = item {
@@ -1085,6 +1107,8 @@ impl<'a> TexLowerer<'a> {
             graph: std::mem::replace(&mut self.graph, DocumentGraph::new(DocumentId(0))),
             source: fragment,
             state: std::mem::take(&mut self.state),
+            loss_span: None,
+            track_spans: false,
         };
         inner.lower_root(&root.items, 0, fragment.len(), sink);
         self.graph = inner.graph;
@@ -1101,6 +1125,8 @@ impl<'a> TexLowerer<'a> {
             graph: std::mem::replace(&mut self.graph, DocumentGraph::new(DocumentId(0))),
             source: fragment,
             state: std::mem::take(&mut self.state),
+            loss_span: None,
+            track_spans: false,
         };
         let mut inlines = inner.collect_inlines(&root.items, 0, fragment.len(), false);
         trim_inlines(&mut inlines);
@@ -1122,8 +1148,14 @@ impl<'a> TexLowerer<'a> {
             if start < skip_until {
                 continue;
             }
+            if self.track_spans {
+                self.loss_span = SourceSpan::new(cursor, start);
+            }
             if !self.push_gap_space(cursor, start, &mut inlines, after_comment, math) {
                 self.record_dropped_regions_loss(cursor, start);
+            }
+            if self.track_spans {
+                self.loss_span = SourceSpan::new(start, end);
             }
             after_comment = matches!(item, TexItem::Comment { .. });
             match item {
