@@ -7,8 +7,8 @@
 use std::collections::HashSet;
 
 use document_compose::{
-    Diagnostic, Severity,
-    math::{FontStyle, GlyphKey},
+    Diagnostic, Severity, SourceSpan,
+    math::{FontStyle, GlyphKey, MathError},
 };
 use document_ir::{Block, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
 use document_text::math::{FontMetricsSystem, builtin_font_metrics};
@@ -142,6 +142,22 @@ fn unsupported_math_language_diagnostic(language: &str) -> Diagnostic {
         severity: Severity::Warning,
         message: format!("math language `{language}` has no lowering in the TeX formula engine, the source was kept as text"),
         span: None,
+    }
+}
+
+/// The loss reported when the formula engine cannot typeset a formula.
+///
+/// A host without a math font gets [`MathError`] from the layout pipeline; the
+/// authored source is still painted so the page keeps the formula visible, but
+/// nothing on it is typeset math. That is a loss, not a clean conversion, so it
+/// carries `Error` severity and a span over the whole formula source instead of
+/// disappearing from the diagnostic list.
+fn math_not_typeset_diagnostic(formula: &document_ir::MathFormula, error: &MathError) -> Diagnostic {
+    Diagnostic {
+        code: "vutex.layout.math.not_typeset".to_string(),
+        severity: Severity::Error,
+        message: format!("math was not typeset ({error}); the source was kept as text `{}`", formula.source),
+        span: Some(SourceSpan { start: 0, end: formula.source.len() as u32 }),
     }
 }
 
@@ -573,7 +589,14 @@ impl<'a> PageBuilder<'a> {
                                     (metrics.width.to_f64(), metrics.height.to_f64(), metrics.depth.to_f64());
                                 flow.atoms.push(InlineAtom::Math(MathAtom { result, width, height, depth }));
                             }
-                            Err(_) => flow.atoms.extend(split_inline_atoms(&formula.source, face, href, title)),
+                            Err(error) => {
+                                // No math font means no typeset formula: the
+                                // source still reaches the page as text, but the
+                                // degradation must be reported instead of
+                                // silently passing as a clean layout.
+                                self.diagnostics.push(math_not_typeset_diagnostic(formula, &error));
+                                flow.atoms.extend(split_inline_atoms(&formula.source, face, href, title));
+                            }
                         }
                     }
                     else {
@@ -926,8 +949,9 @@ impl<'a> PageBuilder<'a> {
     /// display skips: `\abovedisplayskip` above and `\belowdisplayskip` below,
     /// or the short forms when the preceding line ends at least two quads before
     /// the centred formula starts. When the math engine cannot parse or lay out
-    /// the source, the raw TeX is rendered as text: a documented degradation that
-    /// keeps the formula visible instead of dropping it.
+    /// the source, the raw TeX is rendered as text with an `Error` diagnostic
+    /// (`vutex.layout.math.not_typeset`): the formula stays visible, but the
+    /// degradation is never reported as a clean layout.
     fn emit_math(&mut self, formula: &document_ir::MathFormula, indent: f64, preceding_line_right: Option<f64>) {
         let size = self.body_size();
         if !is_tex_formula(formula) {
@@ -955,7 +979,10 @@ impl<'a> PageBuilder<'a> {
                 self.cursor = baseline + depth;
                 self.pad(below_space);
             }
-            Err(_) => self.emit_math_text_fallback(&formula.source, indent),
+            Err(error) => {
+                self.diagnostics.push(math_not_typeset_diagnostic(formula, &error));
+                self.emit_math_text_fallback(&formula.source, indent);
+            }
         }
     }
 
