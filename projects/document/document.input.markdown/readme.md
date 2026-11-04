@@ -1,7 +1,7 @@
 # `document.input.markdown`
 
 Markdown input adapter. It selects the `document.formats` Markdown import
-profile, returns the resulting `notedown-ir::DocumentGraph`, and normalizes the
+profile, returns the resulting `document.ir::DocumentGraph`, and normalizes the
 import loss into VuTeX's shared conversion report and diagnostics.
 
 The crate owns no Markdown parser and no document schema of its own. Parsing and

@@ -1,3 +1,3 @@
-//! 冒烟入口：只保留 Typst 内联形状的最小闭环。
+//! 冒烟入口：最小渲染、多行动态组与未闭合拒绝路径。
 
-mod inline_shape;
+mod render_smoke;

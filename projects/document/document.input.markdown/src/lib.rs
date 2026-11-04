@@ -1,6 +1,6 @@
 #![deny(missing_debug_implementations)]
 #![warn(missing_docs, rustdoc::missing_crate_level_docs)]
-#![doc = include_str!("../readme.md")]
+#![doc = include_str!("readme.md")]
 
 use std::{
     error::Error,
@@ -251,4 +251,42 @@ fn analyze(graph: &DocumentGraph) -> (ConversionReport, Vec<Diagnostic>) {
         lossy,
     };
     (report, diagnostics)
+}
+
+#[cfg(test)]
+mod tests {
+    use document_ir::{Block, DocumentGraph, DocumentId, LossMarker, SemanticStatus};
+
+    use super::{Severity, codes, finish};
+
+    #[test]
+    fn unsupported_opaque_block_fails_closed() {
+        let mut graph = DocumentGraph::new(DocumentId(11));
+        graph.push_block(Block::Opaque {
+            kind: "front_matter".into(),
+            payload_hint: "---\ntitle: ignored\n---".into(),
+            status: SemanticStatus::Unsupported,
+        });
+
+        let error = finish(graph).expect_err("an unsupported opaque block must not yield a document");
+        assert_eq!(error.code(), codes::OPAQUE_BLOCK);
+        assert!(error.diagnostics().iter().any(|diagnostic| diagnostic.severity == Severity::Error));
+    }
+
+    #[test]
+    fn unsupported_loss_fails_closed() {
+        let mut graph = DocumentGraph::new(DocumentId(12));
+        graph.push_loss_at(
+            LossMarker {
+                code: "import.markdown.unsupported_block".into(),
+                message: "unsupported markdown block".into(),
+                status: SemanticStatus::Unsupported,
+            },
+            None,
+        );
+
+        let error = finish(graph).expect_err("an unsupported loss must not yield a document");
+        assert_eq!(error.code(), "import.markdown.unsupported_block");
+        assert_eq!(error.diagnostics().len(), 1);
+    }
 }

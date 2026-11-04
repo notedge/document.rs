@@ -108,6 +108,16 @@ fn tex_math_without_a_language_tag_stays_accepted() {
 }
 
 #[test]
+fn empty_source_keeps_document_level_losses_unpositioned() {
+    let document = import_source("empty.tex", "").expect("an empty source still imports as an empty document");
+
+    assert_eq!(document.report.parsed.considered, 0);
+    assert_eq!(document.report.parsed.handled, 0);
+    assert!(document.report.lossy.iter().any(|item| item.code == "import.tex.empty_document"), "{:#?}", document.report.lossy);
+    assert!(document.diagnostics.is_empty(), "document-level summaries have no source range: {:#?}", document.diagnostics);
+}
+
+#[test]
 fn file_import_reads_the_same_source() {
     let path = std::env::temp_dir().join("vutex-input-tex-file.tex");
     std::fs::write(&path, "Text $x^2$ in a file.\n").expect("the fixture must be written");
