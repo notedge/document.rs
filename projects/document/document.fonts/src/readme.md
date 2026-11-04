@@ -24,9 +24,9 @@ and lose inter-word spacing.
 
 | face | family | style | file | bytes | license |
 | --- | --- | --- | --- | --- | --- |
-| `Tinos-Regular.ttf` | Tinos | regular | Latin | 103,160 | `fonts/Tinos.OFL.md` |
-| `Tinos-Bold.ttf` | Tinos | bold | Latin | 114,212 | `fonts/Tinos.OFL.md` |
-| `Tinos-Italic.ttf` | Tinos | italic | Latin | 107,112 | `fonts/Tinos.OFL.md` |
+| `Tinos-Regular.ttf` | Tinos | regular | Latin | 102,236 | `fonts/Tinos.OFL.md` |
+| `Tinos-Bold.ttf` | Tinos | bold | Latin | 113,272 | `fonts/Tinos.OFL.md` |
+| `Tinos-Italic.ttf` | Tinos | italic | Latin | 106,160 | `fonts/Tinos.OFL.md` |
 | `NotoSerifSC-Regular.ttf` | Noto Serif SC | regular | Han | 3,094,248 | `fonts/NotoSerifSC.OFL.md` |
 | `NotoSerifSC-Bold.ttf` | Noto Serif SC | bold | Han | 3,094,120 | `fonts/NotoSerifSC.OFL.md` |
 | `NotoSansMono-Regular.ttf` | Noto Sans Mono | regular | Latin | 53,348 | `fonts/NotoSansMono.OFL.md` |
@@ -47,8 +47,13 @@ The shipped files are not the upstream releases:
 
 - The Latin faces are subset to ASCII, Latin-1, Latin Extended-A/B, general
   punctuation, currency signs, and the arithmetic relations a sentence may
-  quote — 718 code points. The upstream Tinos file is 0.5–0.6 MB per face, the
+  quote — 716 code points. The upstream Tinos file is 0.5–0.6 MB per face, the
   subset 0.1 MB.
+- The Latin subsets keep the `kern` layout feature, so the `GPOS` `PairPos`
+  format 1 pairs that carry inter-letter spacing survive as 113 / 117 / 112
+  pairs for Regular / Bold / Italic. Everything else in `GPOS` and all of
+  `GSUB` is dropped, so the faces carry no `liga` substitution. The pairs cost
+  +652 / +668 / +660 bytes against the same subset without layout features.
 - The Han faces are instances of the 25 MB `NotoSerifSC[wght].ttf` variable
   font at weights 400 and 700, then subset to GB 2312 (6,763 hanzi, all of
   0xA1–0xF7 lead rows), CJK punctuation, and full-width forms. A GB 2312
@@ -57,7 +62,9 @@ The shipped files are not the upstream releases:
   instead of drawing a blank.
 - Every subset keeps the original copyright and licence strings in its `name`
   table and is renamed only to the upstream PostScript name, so the subset is
-  identifiable in the PDF. No face declares a Reserved Font Name.
+  identifiable in the PDF. No face declares a Reserved Font Name. The shipped
+  binaries are modified (subsetted) versions redistributed under the SIL Open
+  Font License, Version 1.1, whose text stays unmodified in `fonts/Tinos.OFL.md`.
 
 Insets and outlines are untouched, so a subset glyph is byte-identical to its
 upstream counterpart. Total asset weight is about 6.6 MB, of which the two Han
