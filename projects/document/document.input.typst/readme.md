@@ -13,6 +13,10 @@ let rendered = document_input_typst::render_svg("main.typ", "= Title\n\nHello *w
 println!("{}", rendered.svg);
 ```
 
+A source above `MAX_SOURCE_BYTES` (8 MiB) is rejected with
+`vutex.input.typst.source_too_large` before parsing. An empty source imports as
+a documented lossy document instead of a failure.
+
 ## Acceptance map
 
 `19-Typst输入适配合同` 的每条验收都由一个能真跑的用例固定。

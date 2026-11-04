@@ -23,6 +23,8 @@ pub mod codes {
     pub const PARSE_FAILED: &str = "vutex.input.markdown.parse_failed";
     /// The source file could not be read.
     pub const FILE_READ_FAILED: &str = "vutex.input.markdown.file_read_failed";
+    /// The source is larger than the profile's byte budget.
+    pub const SOURCE_TOO_LARGE: &str = "vutex.input.markdown.source_too_large";
     /// The imported graph violates a `notedown-ir` structural invariant.
     pub const INVALID_GRAPH: &str = "vutex.input.markdown.invalid_graph";
     /// A block was retained as an opaque boundary instead of being lowered.
@@ -30,6 +32,14 @@ pub mod codes {
     /// A raw HTML block was preserved verbatim instead of being semanticized.
     pub const PRESERVED_RAW_HTML: &str = "vutex.input.markdown.preserved_raw_html";
 }
+
+/// Largest source, in bytes, this profile accepts.
+///
+/// The same budget is used by the TeX and Typst profiles so a host can enforce
+/// one input limit across every entry point. A source above it is rejected
+/// before parsing, because the frontend has no streaming mode that could stop
+/// halfway.
+pub const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Outcome of a Markdown import: the document graph, its conversion report, and
 /// the diagnostics the lowering produced.
@@ -110,6 +120,7 @@ impl Error for MarkdownInputError {}
 /// reports as unsupported fails closed instead of yielding a graph whose
 /// content would be dropped later in the pipeline without a diagnostic.
 pub fn import_source(label: &str, source: &str) -> Result<MarkdownDocument, MarkdownInputError> {
+    ensure_source_budget(source)?;
     let graph = import_markdown_bytes(label, source).map_err(|error| {
         MarkdownInputError::from(Diagnostic {
             code: codes::PARSE_FAILED.to_owned(),
@@ -149,6 +160,18 @@ pub fn render_svg(label: &str, source: &str, diagrams: &Diagrams) -> Result<Mark
     let items = display.pages.iter().map(|page| page.items.len()).sum();
     let svg = render_display_svg(&display).map_err(MarkdownInputError::from)?;
     Ok(MarkdownRender { svg, report, diagnostics, pages, items })
+}
+
+fn ensure_source_budget(source: &str) -> Result<(), MarkdownInputError> {
+    if source.len() <= MAX_SOURCE_BYTES {
+        return Ok(());
+    }
+    Err(MarkdownInputError::from(Diagnostic {
+        code: codes::SOURCE_TOO_LARGE.to_owned(),
+        severity: Severity::Error,
+        message: format!("source is {} bytes, above the {MAX_SOURCE_BYTES} byte budget", source.len()),
+        span: None,
+    }))
 }
 
 fn finish(graph: DocumentGraph) -> Result<MarkdownDocument, MarkdownInputError> {

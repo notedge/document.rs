@@ -19,6 +19,16 @@ pub const MATH_SOURCE_PRESERVED: &str = "import.typst.math.source_preserved";
 /// Diagnostic code for a dynamic construct whose group the source never closes.
 pub const UNTERMINATED_GROUP: &str = "vutex.input.typst.unterminated_dynamic_group";
 
+/// Diagnostic code for a source larger than the profile's byte budget.
+pub const SOURCE_TOO_LARGE: &str = "vutex.input.typst.source_too_large";
+
+/// Largest source, in bytes, this profile accepts.
+///
+/// The same budget is used by the Markdown and TeX profiles so a host can
+/// enforce one input limit across every entry point. A source above it is
+/// rejected before parsing.
+pub const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
+
 /// Loss codes that summarize the whole import instead of one source construct.
 const SUMMARY_LOSS_CODES: [&str; 2] = ["import.typst.partial_coverage", "import.typst.empty_document"];
 

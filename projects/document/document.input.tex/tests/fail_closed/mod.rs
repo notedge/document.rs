@@ -3,7 +3,8 @@
 
 use document_compose::Severity;
 use document_input_tex::{
-    INVALID_GRAPH, MATH_LANGUAGE, PARSE_FAILED, conversion_report, import_file, import_source, validate_graph,
+    INVALID_GRAPH, IO_FAILED, MATH_LANGUAGE, MAX_SOURCE_BYTES, PARSE_FAILED, SOURCE_TOO_LARGE, conversion_report, import_file,
+    import_source, render_svg, validate_graph,
 };
 use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, MathDisplay, MathFormula};
 
@@ -133,6 +134,47 @@ fn renderer_rejection_keeps_its_own_diagnostic_code() {
     assert_eq!(error.code(), "vutex.render.svg.diagram-invalid");
     assert_eq!(error.diagnostic.severity, Severity::Error);
     assert!(error.message().contains("non-positive canvas size"));
+}
+
+#[test]
+fn unreadable_file_fails_closed() {
+    let path = std::env::temp_dir().join("vutex-input-tex-missing.tex");
+    let _ = std::fs::remove_file(&path);
+    let error = import_file(&path).expect_err("a missing source must not import as an empty document");
+
+    assert_eq!(error.code(), IO_FAILED);
+    assert!(error.message().contains("failed to read"), "{}", error.message());
+}
+
+#[test]
+fn source_over_budget_is_rejected_before_parsing() {
+    let source = "x".repeat(MAX_SOURCE_BYTES + 1);
+    let error = import_source("too-large.tex", &source).expect_err("the byte budget must fail closed");
+
+    assert_eq!(error.code(), SOURCE_TOO_LARGE);
+    assert!(error.message().contains(&MAX_SOURCE_BYTES.to_string()), "{}", error.message());
+}
+
+#[test]
+fn opaque_construct_does_not_stop_the_closed_loop() {
+    let source = r"\begin{document}
+Body text.
+
+\begin{figure}
+\includegraphics{plot.pdf}
+\end{figure}
+\end{document}
+";
+    let rendered = render_svg("figure.tex", source).expect("a construct-level loss must not stop render_svg");
+
+    assert_eq!(rendered.report.opaque.len(), 1, "{:#?}", rendered.report.opaque);
+    assert!(
+        rendered.report.unsupported.iter().any(|item| item.code == "import.tex.unknown_environment"),
+        "the loss must stay in the report: {:#?}",
+        rendered.report.unsupported
+    );
+    assert!(rendered.diagnostics.iter().all(|diagnostic| diagnostic.code != PARSE_FAILED), "{:#?}", rendered.diagnostics);
+    assert!(rendered.svg.contains("Body text"), "the rest of the document must still render");
 }
 
 #[test]

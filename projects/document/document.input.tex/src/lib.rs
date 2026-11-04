@@ -39,6 +39,8 @@ pub const PROFILE_ID: &str = "latex";
 pub const PARSE_FAILED: &str = "vutex.input.tex.parse_failed";
 /// Code recorded when a source file cannot be read.
 pub const IO_FAILED: &str = "vutex.input.tex.io_failed";
+/// Code recorded when the source is larger than the profile's byte budget.
+pub const SOURCE_TOO_LARGE: &str = "vutex.input.tex.source_too_large";
 /// Code recorded when the lowered graph violates a document-model invariant.
 pub const INVALID_GRAPH: &str = "vutex.input.tex.invalid_graph";
 /// Code recorded for math whose language tag the TeX formula pipeline cannot
@@ -47,6 +49,13 @@ pub const MATH_LANGUAGE: &str = "vutex.input.tex.math_language";
 /// Code recorded for an inline command that leaked into text instead of being
 /// lowered.
 pub const LEAKED_COMMAND: &str = "vutex.input.tex.leaked_command";
+
+/// Largest source, in bytes, this profile accepts.
+///
+/// The same budget is used by the Markdown and Typst profiles so a host can
+/// enforce one input limit across every entry point. A source above it is
+/// rejected before the frontend starts reading.
+pub const MAX_SOURCE_BYTES: usize = 8 * 1024 * 1024;
 
 /// Loss codes that summarize the whole import instead of one source construct.
 const SUMMARY_LOSS_CODES: [&str; 2] = ["import.tex.partial_coverage", "import.tex.empty_document"];
@@ -129,6 +138,7 @@ impl From<Diagnostic> for TexInputError {
 /// breaks a document-model invariant is rejected for the same reason: layout
 /// trusts those invariants and cannot detect the violation on its own.
 pub fn import_source(label: &str, source: &str) -> Result<TexDocument, TexInputError> {
+    ensure_source_budget(source)?;
     let graph = import_tex_bytes(label, source).map_err(parse_failure)?;
     validate_graph(&graph)?;
     let report = conversion_report(&graph);
@@ -509,6 +519,17 @@ fn unique_payload_span(source: &str, payload_hint: &str) -> Option<SourceSpan> {
         return None;
     }
     Some(SourceSpan { start: first.0 as u32, end: (first.0 + needle.len()) as u32 })
+}
+
+/// Reject a source that exceeds the profile's byte budget.
+fn ensure_source_budget(source: &str) -> Result<(), TexInputError> {
+    if source.len() <= MAX_SOURCE_BYTES {
+        return Ok(());
+    }
+    Err(TexInputError::new(
+        SOURCE_TOO_LARGE,
+        format!("source is {} bytes, above the {MAX_SOURCE_BYTES} byte budget", source.len()),
+    ))
 }
 
 /// Turn a frontend rejection into the profile's structured error.

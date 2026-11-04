@@ -20,6 +20,10 @@ let rendered = document_input_tex::render_svg(
 println!("{}", rendered.svg);
 ```
 
+A source above `MAX_SOURCE_BYTES` (8 MiB) is rejected with
+`vutex.input.tex.source_too_large` before the frontend starts reading. An empty
+source imports as a documented lossy document instead of a failure.
+
 ## Acceptance map
 
 `21-TeX输入适配合同` 的每条验收都由一个能真跑的用例固定。

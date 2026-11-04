@@ -10,7 +10,7 @@ use document_ir::DocumentGraph;
 use document_layout::{Diagrams, LayoutHint, document::layout_with_diagnostics};
 use document_presentation::build_display_presentation;
 
-use crate::report::{IMPORT_FAILED, build_diagnostics, build_report, unterminated_group};
+use crate::report::{IMPORT_FAILED, MAX_SOURCE_BYTES, SOURCE_TOO_LARGE, build_diagnostics, build_report, unterminated_group};
 
 /// Outcome of a Typst import: the document graph, its conversion report, and
 /// the diagnostics the lowering produced.
@@ -90,6 +90,7 @@ impl std::error::Error for TypstError {}
 /// closes is refused, because the lowering cannot delimit where the construct
 /// ends.
 pub fn import_source(label: &str, source: &str) -> Result<TypstDocument, TypstError> {
+    ensure_source_budget(source)?;
     let graph = document_formats::import::typst::import_typst_bytes(label, source)
         .map_err(|error| TypstError::import_failed(error.to_string()))?;
     if let Some(diagnostic) = unterminated_group(&graph, source) {
@@ -106,6 +107,18 @@ pub fn import_path(path: impl AsRef<Path>) -> Result<TypstDocument, TypstError> 
     let source = std::fs::read_to_string(path)
         .map_err(|error| TypstError::import_failed(format!("failed to read {}: {error}", path.display())))?;
     import_source(&path.display().to_string(), &source)
+}
+
+fn ensure_source_budget(source: &str) -> Result<(), TypstError> {
+    if source.len() <= MAX_SOURCE_BYTES {
+        return Ok(());
+    }
+    Err(TypstError::from(Diagnostic {
+        code: SOURCE_TOO_LARGE.to_string(),
+        severity: Severity::Error,
+        message: format!("source is {} bytes, above the {MAX_SOURCE_BYTES} byte budget", source.len()),
+        span: None,
+    }))
 }
 
 /// Import Typst source and run it through layout, presentation, and SVG output.
