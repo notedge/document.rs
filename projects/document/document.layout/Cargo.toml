@@ -10,7 +10,7 @@ readme = "readme.md"
 [dependencies]
 serde = { workspace = true, features = ["derive"] }
 document-ir = { workspace = true }
-document-formats = { workspace = true }
+document-formats = { workspace = true, features = ["tex"] }
 plotter-scene = { workspace = true }
 document-compose = { workspace = true, features = ["serde"] }
 document-text = { workspace = true }
