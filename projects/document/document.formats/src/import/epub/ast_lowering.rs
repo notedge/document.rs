@@ -234,11 +234,16 @@ fn is_footnote_aside(element: &Element) -> bool {
 
 /// Lower `<aside epub:type="footnote">` to the opaque authored payload shape.
 ///
-/// Footnote bodies are opaque IR payloads, so the aside must not leak its
-/// paragraph structure. The label follows the HTML endnotes path:
-/// `data-footnote-label` wins, otherwise the `id` drops an `fn` prefix and an
-/// optional `-`. A missing label records an explicit loss so the body stays as
-/// ordinary content instead of becoming an unusable definition.
+/// A GFM definition body is single-paragraph unless it continues with a blank
+/// line and four-space indentation, so every authored block after the first
+/// becomes a continuation instead of being joined into the first sentence.
+/// Inline markup is flattened to text and recorded as a loss because the
+/// payload carries text, not an inline tree.
+///
+/// The label follows the HTML endnotes path: `data-footnote-label` wins,
+/// otherwise the `id` drops an `fn` prefix and an optional `-`. A missing label
+/// records an explicit loss so the body stays as ordinary content instead of
+/// becoming an unusable definition.
 fn lower_footnote_definition(element: &Element, losses: &mut Vec<LossMarker>) -> Option<Block> {
     let label = attribute_value(element, "data-footnote-label")
         .or_else(|| attribute_value(element, "id").and_then(|id| footnote_label(&id)))
@@ -254,7 +259,16 @@ fn lower_footnote_definition(element: &Element, losses: &mut Vec<LossMarker>) ->
         });
         return None;
     };
-    let body = footnote_body_text(element);
+    let (paragraphs, flattened_markup) = footnote_body_paragraphs(element);
+    if flattened_markup {
+        losses.push(LossMarker {
+            code: "import.epub.footnote_inline_markup_flattened".into(),
+            message: "`<aside epub:type=\"footnote\">` inline markup is flattened to plain text in the definition payload"
+                .into(),
+            status: SemanticStatus::Partial,
+        });
+    }
+    let body = paragraphs.join("\n\n    ");
     Some(Block::Opaque {
         kind: "footnote_definition".into(),
         payload_hint: format!("[^{label}]: {body}"),
@@ -262,22 +276,115 @@ fn lower_footnote_definition(element: &Element, losses: &mut Vec<LossMarker>) ->
     })
 }
 
-/// Text authored inside a footnote definition without its return link.
-fn footnote_body_text(element: &Element) -> String {
-    let mut text = String::new();
-    collect_footnote_body(element, &mut text);
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+/// Collect the definition body paragraph by paragraph without its return link.
+///
+/// Block children start a new paragraph while inline children stay in the
+/// current one. Any authored inline markup sets the flattening flag so the
+/// caller can record that the payload carries plain text only.
+fn footnote_body_paragraphs(element: &Element) -> (Vec<String>, bool) {
+    let mut paragraphs = Vec::new();
+    let mut current = String::new();
+    let mut flattened_markup = false;
+    collect_footnote_paragraphs(element, &mut paragraphs, &mut current, &mut flattened_markup);
+    push_footnote_paragraph(&mut paragraphs, &mut current);
+    (paragraphs, flattened_markup)
 }
 
-fn collect_footnote_body(element: &Element, out: &mut String) {
+fn collect_footnote_paragraphs(
+    element: &Element,
+    paragraphs: &mut Vec<String>,
+    current: &mut String,
+    flattened_markup: &mut bool,
+) {
     for child in &element.children {
         match child {
-            HtmlNode::Text(text) => out.push_str(&text.content),
+            HtmlNode::Text(text) => current.push_str(&text.content),
             HtmlNode::Element(child) if is_footnote_backlink(child) => {}
-            HtmlNode::Element(child) => collect_footnote_body(child, out),
             HtmlNode::Comment(_) => {}
+            HtmlNode::Element(child) => {
+                let tag = child.tag_name.to_ascii_lowercase();
+                if is_footnote_body_block(&tag) {
+                    push_footnote_paragraph(paragraphs, current);
+                    collect_footnote_paragraphs(child, paragraphs, current, flattened_markup);
+                    push_footnote_paragraph(paragraphs, current);
+                }
+                else {
+                    if is_footnote_markup_tag(&tag) {
+                        *flattened_markup = true;
+                    }
+                    collect_footnote_paragraphs(child, paragraphs, current, flattened_markup);
+                }
+            }
         }
     }
+}
+
+fn push_footnote_paragraph(paragraphs: &mut Vec<String>, current: &mut String) {
+    let text = current.split_whitespace().collect::<Vec<_>>().join(" ");
+    current.clear();
+    if !text.is_empty() {
+        paragraphs.push(text);
+    }
+}
+
+/// Block tags that start a new definition paragraph.
+fn is_footnote_body_block(tag: &str) -> bool {
+    matches!(
+        tag,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "dd"
+            | "div"
+            | "dl"
+            | "dt"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hr"
+            | "li"
+            | "ol"
+            | "p"
+            | "pre"
+            | "section"
+            | "table"
+            | "ul"
+    )
+}
+
+/// Inline tags whose semantics the text payload cannot keep.
+fn is_footnote_markup_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "a" | "b"
+            | "big"
+            | "cite"
+            | "code"
+            | "dfn"
+            | "em"
+            | "font"
+            | "i"
+            | "kbd"
+            | "mark"
+            | "q"
+            | "s"
+            | "samp"
+            | "small"
+            | "span"
+            | "strong"
+            | "sub"
+            | "sup"
+            | "u"
+            | "var"
+    )
 }
 
 /// Whether an anchor inside a footnote definition returns to the reference.
@@ -431,14 +538,8 @@ fn lower_list_item(
                     "ul" | "ol" => {
                         let nested_ordered = tag == "ol";
                         let nested_start = nested_ordered.then(|| ordered_list_start(child_element));
-                        let nested = collect_list_items(
-                            child_element,
-                            nested_ordered,
-                            nested_start,
-                            graph,
-                            member_path,
-                            losses,
-                        );
+                        let nested =
+                            collect_list_items(child_element, nested_ordered, nested_start, graph, member_path, losses);
                         if !nested.is_empty() {
                             let id = graph.push_block(Block::List { ordered: nested_ordered, items: nested });
                             children.push(id);

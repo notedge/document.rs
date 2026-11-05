@@ -52,6 +52,19 @@ fn footnote_definitions(graph: &DocumentGraph) -> Vec<&str> {
         .collect()
 }
 
+/// Paragraph count of each authored definition body. The payload keeps later
+/// paragraphs as GFM continuation lines, so a blank line plus four spaces is a
+/// paragraph boundary.
+fn footnote_paragraph_counts(graph: &DocumentGraph) -> Vec<usize> {
+    footnote_definitions(graph)
+        .into_iter()
+        .map(|payload| {
+            let body = payload.split_once("]:").map(|(_, body)| body.trim()).unwrap_or_default();
+            if body.is_empty() { 0 } else { body.matches("\n\n    ").count() + 1 }
+        })
+        .collect()
+}
+
 fn note_labels(graph: &DocumentGraph) -> Vec<String> {
     fn scan(inlines: &[Inline], labels: &mut Vec<String>) {
         for inline in inlines {
@@ -124,7 +137,8 @@ fn ordered_list_starting_with<'a>(graph: &'a DocumentGraph, marker: &str) -> &'a
 }
 
 fn item_numbers(list: &Block) -> Vec<Option<u32>> {
-    let Block::List { items, .. } = list else {
+    let Block::List { items, .. } = list
+    else {
         panic!("not a list: {list:?}")
     };
     items.iter().map(|item| item.number).collect()
@@ -147,9 +161,10 @@ fn html_table_lowers_to_a_structured_table() {
     assert!(rows[1].is_header);
     assert!(rows.iter().all(|row| row.cells.iter().all(|cell| cell.colspan == 1 && cell.rowspan == 1)));
     assert_eq!(loss(&graph, "import.html.table_spans"), SemanticStatus::Partial, "{:?}", loss_codes(&graph));
-    let raw_tables: Vec<&Block> = collect_blocks(&graph, &|block| {
-        matches!(block, Block::RawHtml { html } if html.to_ascii_lowercase().contains("<table"))
-    });
+    let raw_tables: Vec<&Block> = collect_blocks(
+        &graph,
+        &|block| matches!(block, Block::RawHtml { html } if html.to_ascii_lowercase().contains("<table")),
+    );
     assert!(raw_tables.is_empty(), "table stayed raw: {raw_tables:?}");
     let markdown = export_markdown(&graph).expect("markdown export");
     assert!(!markdown.contains("<table"), "markdown kept a raw table: {markdown}");
@@ -229,8 +244,7 @@ fn html_image_size_is_a_recorded_loss() {
 fn epub_ordered_list_items_carry_numbers() {
     let graph = import_epub_bytes("ordered-list.epub", &read_fixture("epub/ordered-list.epub")).expect("epub import");
     assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
-    let lists: Vec<&Block> =
-        collect_blocks(&graph, &|block| matches!(block, Block::List { ordered: true, .. }));
+    let lists: Vec<&Block> = collect_blocks(&graph, &|block| matches!(block, Block::List { ordered: true, .. }));
     let main = lists
         .iter()
         .find(|block| {
@@ -292,8 +306,8 @@ fn epub_css_stylesheets_stay_fail_closed_with_diagnostics() {
 /// and record an explicit loss.
 #[test]
 fn epub_list_value_and_reversed_are_explicit() {
-    let graph = import_epub_bytes("list-value-reversed.epub", &read_fixture("epub/list-value-reversed.epub"))
-        .expect("epub import");
+    let graph =
+        import_epub_bytes("list-value-reversed.epub", &read_fixture("epub/list-value-reversed.epub")).expect("epub import");
     assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
 
     let shifted = ordered_list_starting_with(&graph, "two");
@@ -318,15 +332,32 @@ fn epub_structural_footnotes_become_notes_and_definitions() {
     let graph = import_epub_bytes("footnotes.epub", &read_fixture("epub/footnotes.epub")).expect("epub import");
     assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
     assert_eq!(note_labels(&graph), vec!["1".to_string(), "2".to_string(), "3".to_string()], "{:?}", graph.blocks);
-    assert_eq!(footnote_definitions(&graph), vec!["[^1]: Note one.", "[^2]: Note two.", "[^3]: Note three."]);
+    assert_eq!(
+        footnote_definitions(&graph),
+        vec![
+            "[^1]: Single paragraph note.",
+            "[^2]: First paragraph.\n\n    Second paragraph.",
+            "[^3]: Inline bold, code, and link.",
+        ]
+    );
+    assert_eq!(footnote_paragraph_counts(&graph), vec![1, 2, 1], "{:?}", footnote_definitions(&graph));
+    assert_eq!(
+        loss(&graph, "import.epub.footnote_inline_markup_flattened"),
+        SemanticStatus::Partial,
+        "{:?}",
+        loss_codes(&graph)
+    );
     assert!(!loss_codes(&graph).iter().any(|code| code == "import.epub.unsupported_xhtml_block"), "{:?}", loss_codes(&graph));
     let markdown = export_markdown(&graph).expect("markdown export");
-    assert!(markdown.contains("Body with one note[^1] and another[^2] and a third[^3]."), "{markdown}");
+    assert!(
+        markdown.contains("Body with a single note[^1], a note with two paragraphs[^2], and a note with inline markup[^3]."),
+        "{markdown}"
+    );
     assert!(!markdown.contains('↩'), "return glyph leaked into the definitions: {markdown}");
-    assert!(!markdown.contains("Note three.return"), "return copy leaked into the definitions: {markdown}");
-    assert!(markdown.contains("[^1]: Note one."), "{markdown}");
-    assert!(markdown.contains("[^2]: Note two."), "{markdown}");
-    assert!(markdown.contains("[^3]: Note three."), "{markdown}");
+    assert!(!markdown.contains("link.return"), "return copy leaked into the definitions: {markdown}");
+    assert!(markdown.contains("[^1]: Single paragraph note."), "{markdown}");
+    assert!(markdown.contains("[^2]: First paragraph.\n\n    Second paragraph."), "{markdown}");
+    assert!(markdown.contains("[^3]: Inline bold, code, and link."), "{markdown}");
 }
 
 /// A reference without a definition keeps its note label. Duplicate asides
