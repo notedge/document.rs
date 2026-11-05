@@ -16,9 +16,9 @@ use acorn_docx::{OpcPackage, OpcRelationship};
 use oak_xml::ast::XmlElement;
 
 use super::model::{
-    BodyProperties, ChartRef, Fill, IssueStatus, Line, Paragraph, PlaceholderKind, PlaceholderRef, PptxIssue, PptxPresentation,
-    PptxStats, PptxTable, PptxTableCell, PptxTableRow, Run, Shape, ShapeKind, Slide, SlideImage, SlideSize, TextFrame,
-    TextStyle, Transform, codes,
+    BodyProperties, ChartRef, ChartSeries, Fill, IssueStatus, Line, Paragraph, PlaceholderKind, PlaceholderRef, PptxIssue,
+    PptxPresentation, PptxStats, PptxTable, PptxTableCell, PptxTableRow, Run, Shape, ShapeKind, Slide, SlideImage, SlideSize,
+    TextFrame, TextStyle, Transform, codes,
 };
 use crate::{
     FormatError,
@@ -934,11 +934,14 @@ fn parse_graphic_frame(
             .and_then(|relationship| rels.get(&relationship))
             .map(|relationship| resolve_target(owner, &relationship.target));
         if let Some(part) = part.as_deref() {
-            let (kind, series_count) = read_chart_metadata(package, ledger, part);
+            let chart = read_chart_ref(package, ledger, part);
             issues.push(issue(
                 codes::CHART,
-                format!("slide {slide} chart `{id}` of type `{}` is refused", kind.as_deref().unwrap_or("unknown")),
-                IssueStatus::Unsupported,
+                format!(
+                    "slide {slide} chart `{id}` of type `{}` keeps cached categories and values only, the canvas refuses its visual style",
+                    chart.kind.as_deref().unwrap_or("unknown")
+                ),
+                IssueStatus::Partial,
                 Some(slide),
                 Some(id),
             ));
@@ -955,7 +958,7 @@ fn parse_graphic_frame(
                 text: None,
                 image: None,
                 table: None,
-                chart: Some(ChartRef { part: part.to_owned(), kind, series_count }),
+                chart: Some(chart),
             }];
         }
     }
@@ -1124,17 +1127,18 @@ fn run_style(
     }
 }
 
-fn read_chart_metadata(package: &OpcPackage, ledger: &mut BudgetTracker, part: &str) -> (Option<String>, u32) {
+fn read_chart_ref(package: &OpcPackage, ledger: &mut BudgetTracker, part: &str) -> ChartRef {
+    let mut reference =
+        ChartRef { part: part.to_owned(), kind: None, series_count: 0, categories: Vec::new(), series: Vec::new() };
     let Some(value) = parse_part(package, ledger, part)
     else {
-        return (None, 0);
+        return reference;
     };
     let Ok(root) = document_root(&value, "pptx")
     else {
-        return (None, 0);
+        return reference;
     };
-    let plot_area = descendants_named(root, "plotArea").first().copied();
-    let kind = plot_area.and_then(|plot| {
+    reference.kind = descendants_named(root, "plotArea").first().copied().and_then(|plot| {
         plot.children
             .iter()
             .filter_map(|child| child.as_element())
@@ -1142,8 +1146,31 @@ fn read_chart_metadata(package: &OpcPackage, ledger: &mut BudgetTracker, part: &
             .find(|name| name.ends_with("Chart"))
             .map(|name| name.to_owned())
     });
-    let series_count = descendants_named(root, "ser").len() as u32;
-    (kind, series_count)
+    let series = descendants_named(root, "ser");
+    reference.series_count = series.len() as u32;
+    for entry in &series {
+        let name = child_named(entry, "tx").and_then(|tx| descendants_named(tx, "v").first().copied()).map(element_text);
+        let values = child_named(entry, "val")
+            .map(|points| {
+                descendants_named(points, "pt")
+                    .iter()
+                    .filter_map(|point| {
+                        child_named(point, "v").map(element_text).and_then(|text| text.trim().parse::<f64>().ok())
+                    })
+                    .collect::<Vec<f64>>()
+            })
+            .unwrap_or_default();
+        if reference.categories.is_empty() {
+            if let Some(categories) = child_named(entry, "cat") {
+                reference.categories = descendants_named(categories, "pt")
+                    .iter()
+                    .filter_map(|point| child_named(point, "v").map(element_text))
+                    .collect();
+            }
+        }
+        reference.series.push(ChartSeries { name, values });
+    }
+    reference
 }
 
 fn read_notes(

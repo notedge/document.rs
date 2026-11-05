@@ -9,6 +9,26 @@
 use super::model::{Fill, IssueStatus, Paragraph, PptxIssue, PptxPresentation, Shape, ShapeKind, TextFrame, codes, emu_to_px};
 use crate::import::office::escape;
 
+/// Horizontal text metrics injected into the canvas.
+///
+/// The estimated implementation charges one em per wide character and 0.55 em
+/// per narrow character. Callers that own real font tables inject an `hmtx`
+/// backed implementation so wrapping happens at the same places as the font.
+pub trait TextMeasurer {
+    /// Advance width of one character in CSS pixels at `font_px`.
+    fn advance(&self, character: char, font_px: f64) -> f64;
+}
+
+/// Estimation used when no font table is injected.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EstimatedMetrics;
+
+impl TextMeasurer for EstimatedMetrics {
+    fn advance(&self, character: char, font_px: f64) -> f64 {
+        if is_wide(character) { font_px } else { font_px * 0.55 }
+    }
+}
+
 /// Options for the slide canvas view.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RenderOptions {
@@ -65,8 +85,40 @@ pub struct PptxRender {
     pub issues: Vec<PptxIssue>,
 }
 
+/// One paragraph wrapped by the given measurer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextWrapProbe {
+    /// One-based slide number.
+    pub slide: u32,
+    /// Shape id the paragraph belongs to.
+    pub shape_id: u32,
+    /// Shape name.
+    pub shape_name: String,
+    /// Zero-based paragraph index inside the shape.
+    pub paragraph: u32,
+    /// Declared or inherited font size in points.
+    pub font_size_pt: f64,
+    /// Available text width in CSS pixels after insets.
+    pub width_px: f64,
+    /// Painted lines.
+    pub lines: Vec<String>,
+}
+
 /// Renders every slide into a fixed canvas and a self-contained HTML document.
 pub fn render_presentation(presentation: &PptxPresentation, options: &RenderOptions) -> PptxRender {
+    render_presentation_with(presentation, options, &EstimatedMetrics, &[])
+}
+
+/// Renders with injected metrics and optional chart fragments.
+///
+/// Chart fragments are `(slide, shape, svg)` triples already positioned in
+/// slide pixels. They replace the refusal placeholder for that chart frame.
+pub fn render_presentation_with(
+    presentation: &PptxPresentation,
+    options: &RenderOptions,
+    measurer: &dyn TextMeasurer,
+    charts: &[(u32, u32, String)],
+) -> PptxRender {
     let mut views = Vec::new();
     let mut issues = Vec::new();
     for slide in &presentation.slides {
@@ -86,7 +138,11 @@ pub fn render_presentation(presentation: &PptxPresentation, options: &RenderOpti
         svg.push_str(&format!("<rect x=\"0\" y=\"0\" width=\"{width:.1}\" height=\"{height:.1}\" fill=\"{background}\"/>"));
         let mut deviations = Vec::new();
         for shape in &slide.shapes {
-            paint_shape(shape, slide.index, &mut svg, &mut issues, &mut deviations);
+            let fragment = charts
+                .iter()
+                .find(|(chart_slide, chart_shape, _)| *chart_slide == slide.index && *chart_shape == shape.id)
+                .map(|(_, _, svg)| svg.as_str());
+            paint_shape(shape, slide.index, fragment, measurer, &mut svg, &mut issues, &mut deviations);
         }
         svg.push_str("</svg>");
         views.push(SlideView { index: slide.index, width_px: width, height_px: height, svg, deviations });
@@ -95,7 +151,48 @@ pub fn render_presentation(presentation: &PptxPresentation, options: &RenderOpti
     PptxRender { views, html, issues }
 }
 
-fn paint_shape(shape: &Shape, slide: u32, svg: &mut String, issues: &mut Vec<PptxIssue>, deviations: &mut Vec<ShapeDeviation>) {
+/// Wraps every authored text paragraph with the given measurer.
+pub fn text_wrap_probe(presentation: &PptxPresentation, measurer: &dyn TextMeasurer) -> Vec<TextWrapProbe> {
+    let mut probes = Vec::new();
+    for slide in &presentation.slides {
+        for shape in &slide.shapes {
+            let (Some(text), Some(transform)) = (shape.text.as_ref(), shape.transform)
+            else {
+                continue;
+            };
+            if text.is_empty() {
+                continue;
+            }
+            let width = emu_to_px(transform.cx).max(1.0);
+            let available_width = (width - emu_to_px(91440) * 2.0).max(1.0);
+            for (paragraph_index, paragraph) in text.paragraphs.iter().enumerate() {
+                let size_pt = paragraph_size(paragraph);
+                let font_px = size_pt * 96.0 / 72.0;
+                let lines = wrap_paragraph(paragraph, text.body.wrap, font_px, available_width, measurer);
+                probes.push(TextWrapProbe {
+                    slide: slide.index,
+                    shape_id: shape.id,
+                    shape_name: shape.name.clone(),
+                    paragraph: paragraph_index as u32,
+                    font_size_pt: size_pt,
+                    width_px: available_width,
+                    lines,
+                });
+            }
+        }
+    }
+    probes
+}
+
+fn paint_shape(
+    shape: &Shape,
+    slide: u32,
+    chart_fragment: Option<&str>,
+    measurer: &dyn TextMeasurer,
+    svg: &mut String,
+    issues: &mut Vec<PptxIssue>,
+    deviations: &mut Vec<ShapeDeviation>,
+) {
     let Some(transform) = shape.transform
     else {
         issues.push(PptxIssue {
@@ -119,25 +216,30 @@ fn paint_shape(shape: &Shape, slide: u32, svg: &mut String, issues: &mut Vec<Ppt
     }
     match shape.kind {
         ShapeKind::Picture => paint_picture(shape, slide, x, y, width, height, svg, issues),
-        ShapeKind::Table => paint_table(shape, slide, x, y, width, height, svg, issues),
+        ShapeKind::Table => paint_table(shape, slide, x, y, width, height, measurer, svg, issues),
         ShapeKind::Chart => {
-            svg.push_str(&format!(
-                "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{width:.1}\" height=\"{height:.1}\" fill=\"#f2f2f2\" stroke=\"#9a9a9a\" stroke-dasharray=\"6 4\"/>"
-            ));
-            let label = shape.chart.as_ref().map(|chart| chart.kind.as_deref().unwrap_or("chart")).unwrap_or("chart");
-            svg.push_str(&format!(
-                "<text x=\"{:.1}\" y=\"{:.1}\" font-family=\"sans-serif\" font-size=\"12\" fill=\"#666\">chart refused: {}</text>",
-                x + 8.0,
-                y + 20.0,
-                escape(label)
-            ));
-            issues.push(PptxIssue {
-                code: codes::VIEW_CHART_PLACEHOLDER.to_owned(),
-                message: format!("slide {slide} chart `{}` is painted as a refusal placeholder", shape.id),
-                status: IssueStatus::Unsupported,
-                slide: Some(slide),
-                shape: Some(shape.id),
-            });
+            if let Some(fragment) = chart_fragment {
+                svg.push_str(fragment);
+            }
+            else {
+                svg.push_str(&format!(
+                    "<rect x=\"{x:.1}\" y=\"{y:.1}\" width=\"{width:.1}\" height=\"{height:.1}\" fill=\"#f2f2f2\" stroke=\"#9a9a9a\" stroke-dasharray=\"6 4\"/>"
+                ));
+                let label = shape.chart.as_ref().map(|chart| chart.kind.as_deref().unwrap_or("chart")).unwrap_or("chart");
+                svg.push_str(&format!(
+                    "<text x=\"{:.1}\" y=\"{:.1}\" font-family=\"sans-serif\" font-size=\"12\" fill=\"#666\">chart refused: {}</text>",
+                    x + 8.0,
+                    y + 20.0,
+                    escape(label)
+                ));
+                issues.push(PptxIssue {
+                    code: codes::VIEW_CHART_PLACEHOLDER.to_owned(),
+                    message: format!("slide {slide} chart `{}` is painted as a refusal placeholder", shape.id),
+                    status: IssueStatus::Unsupported,
+                    slide: Some(slide),
+                    shape: Some(shape.id),
+                });
+            }
         }
         ShapeKind::Group | ShapeKind::Other => {
             svg.push_str(&format!(
@@ -150,7 +252,7 @@ fn paint_shape(shape: &Shape, slide: u32, svg: &mut String, issues: &mut Vec<Ppt
                 escape(&shape.name)
             ));
         }
-        ShapeKind::Shape => paint_autoshape(shape, slide, x, y, width, height, svg, issues, deviations),
+        ShapeKind::Shape => paint_autoshape(shape, slide, x, y, width, height, measurer, svg, issues, deviations),
     }
     if rotated {
         svg.push_str("</g>");
@@ -164,6 +266,7 @@ fn paint_autoshape(
     y: f64,
     width: f64,
     height: f64,
+    measurer: &dyn TextMeasurer,
     svg: &mut String,
     issues: &mut Vec<PptxIssue>,
     deviations: &mut Vec<ShapeDeviation>,
@@ -215,7 +318,7 @@ fn paint_autoshape(
     for paragraph in &text.paragraphs {
         let size_pt = paragraph_size(paragraph);
         let font_px = size_pt * 96.0 / 72.0;
-        let wrapped = wrap_paragraph(paragraph, text.body.wrap, font_px, available_width);
+        let wrapped = wrap_paragraph(paragraph, text.body.wrap, font_px, available_width, measurer);
         for line in wrapped {
             lines.push(PaintedLine { text: line, size_pt: size_pt, align: paragraph.align.clone(), level: paragraph.level });
         }
@@ -322,6 +425,7 @@ fn paint_table(
     y: f64,
     width: f64,
     height: f64,
+    measurer: &dyn TextMeasurer,
     svg: &mut String,
     issues: &mut Vec<PptxIssue>,
 ) {
@@ -352,7 +456,7 @@ fn paint_table(
             let font_px = size_pt * 96.0 / 72.0;
             let line = cell.text.paragraphs.iter().map(Paragraph::text).collect::<Vec<_>>().join(" ");
             if !line.is_empty() {
-                let lines = wrap_plain(&line, font_px, cell_width - 10.0);
+                let lines = wrap_plain(&line, font_px, cell_width - 10.0, measurer);
                 let mut line_y = cursor_y + 4.0 + font_px;
                 for text_line in lines.iter().take(((row_height - 4.0) / (font_px * 1.15)).max(1.0) as usize) {
                     svg.push_str(&format!(
@@ -403,21 +507,21 @@ fn average_size(text: &TextFrame) -> f64 {
     if count > 0.0 { total / count } else { 18.0 }
 }
 
-fn wrap_paragraph(paragraph: &Paragraph, wrap: bool, font_px: f64, width: f64) -> Vec<String> {
+fn wrap_paragraph(paragraph: &Paragraph, wrap: bool, font_px: f64, width: f64, measurer: &dyn TextMeasurer) -> Vec<String> {
     let text = paragraph.text();
     if !wrap {
         return text.split('\n').map(|line| line.to_owned()).collect();
     }
-    wrap_plain(&text, font_px, width)
+    wrap_plain(&text, font_px, width, measurer)
 }
 
-fn wrap_plain(text: &str, font_px: f64, width: f64) -> Vec<String> {
+fn wrap_plain(text: &str, font_px: f64, width: f64, measurer: &dyn TextMeasurer) -> Vec<String> {
     let mut lines = Vec::new();
     for source_line in text.split('\n') {
         let mut current = String::new();
         let mut used = 0.0;
         for character in source_line.chars() {
-            let advance = if is_wide(character) { font_px } else { font_px * 0.55 };
+            let advance = measurer.advance(character, font_px);
             if used + advance > width && !current.is_empty() {
                 lines.push(current);
                 current = String::new();

@@ -146,11 +146,26 @@ pub fn presentation_to_graph(presentation: &PptxPresentation, options: &GraphOpt
                 ShapeKind::Chart => {
                     if let Some(chart) = &shape.chart {
                         let kind = chart.kind.as_deref().unwrap_or("chart");
+                        let values = chart.series.iter().map(|entry| entry.values.len()).sum::<usize>();
                         children.push(graph.push_block(Block::Paragraph {
                             content: vec![Inline::Text {
-                                text: format!("[{} chart refused: {} series]", kind, chart.series_count),
+                                text: format!(
+                                    "[{kind} chart: {} categories, {} series, {values} values]",
+                                    chart.categories.len(),
+                                    chart.series_count
+                                ),
                             }],
                         }));
+                        if !chart.categories.is_empty() || !chart.series.is_empty() {
+                            graph.push_loss(LossMarker {
+                                code: codes::CHART.into(),
+                                message: format!(
+                                    "slide {} chart `{}` is projected as text and loses its plot geometry",
+                                    slide.index, shape.name
+                                ),
+                                status: SemanticStatus::Partial,
+                            });
+                        }
                     }
                 }
                 ShapeKind::Group | ShapeKind::Other => {}
@@ -170,7 +185,7 @@ pub fn presentation_to_graph(presentation: &PptxPresentation, options: &GraphOpt
 
     graph.push_loss(LossMarker {
         code: "import.pptx.partial-coverage".into(),
-        message: "PPTX import maps slides, layouts, masters, placeholder inheritance, text, shapes, fills, lines, pictures, tables and notes. Charts, SmartArt, OLE objects, media and group shapes stay refused or projected without their presentation geometry".into(),
+        message: "PPTX import maps slides, layouts, masters, placeholder inheritance, text, shapes, fills, lines, pictures, tables, chart data and notes. Chart visuals, SmartArt, OLE objects, media and group shapes stay refused or projected without their presentation geometry".into(),
         status: SemanticStatus::Partial,
     });
     graph

@@ -7,10 +7,10 @@
 use std::{fs, path::PathBuf};
 
 use document_formats::import::pptx::{
-    Fill, GraphOptions, PlaceholderKind, RenderOptions, ShapeKind, import_pptx_bytes, presentation_to_graph,
-    render_presentation,
+    EstimatedMetrics, Fill, GraphOptions, PlaceholderKind, RenderOptions, ShapeKind, TextMeasurer, import_pptx_bytes,
+    presentation_to_graph, render_presentation, render_presentation_with, text_wrap_probe,
 };
-use document_ir::{Block, Inline, SemanticStatus, TableCell};
+use document_ir::{Block, Inline, TableCell};
 
 fn presentation() -> document_formats::import::pptx::PptxPresentation {
     let bytes = sample_package();
@@ -113,6 +113,9 @@ fn tables_charts_and_notes_are_read() {
     let chart = chart_shape.chart.as_ref().unwrap();
     assert_eq!(chart.kind.as_deref(), Some("barChart"));
     assert_eq!(chart.series_count, 1);
+    assert_eq!(chart.categories, vec!["North".to_owned(), "South".to_owned(), "East".to_owned()]);
+    assert_eq!(chart.series[0].name.as_deref(), Some("Revenue"));
+    assert_eq!(chart.series[0].values, vec![42.0, 31.0, 27.0]);
 
     assert_eq!(presentation.slide(1).unwrap().notes.as_deref(), Some("Speaker notes: mention the five capability states."));
 }
@@ -127,7 +130,7 @@ fn refused_constructs_carry_structured_codes() {
     assert!(codes("import.pptx.notes") >= 1);
     assert!(codes("import.pptx.master-shape") >= 1);
     let chart = presentation.issues.iter().find(|issue| issue.code == "import.pptx.chart").unwrap();
-    assert_eq!(chart.status, document_formats::import::pptx::IssueStatus::Unsupported);
+    assert_eq!(chart.status, document_formats::import::pptx::IssueStatus::Partial);
     assert_eq!(chart.slide, Some(2));
     assert!(presentation.issues.iter().all(|issue| !issue.code.is_empty()));
 }
@@ -174,17 +177,57 @@ fn ir_projection_keeps_slide_sections_tables_and_refusals() {
         .join("\n");
     assert!(body.contains("Revenue grew in every region."), "{body}");
     assert!(body.contains("Notes: Speaker notes"), "{body}");
-    assert!(body.contains("chart refused"), "{body}");
+    assert!(body.contains("[barChart chart: 3 categories, 1 series, 3 values]"), "{body}");
 
     let loss_codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
     assert!(loss_codes.contains(&"import.pptx.chart"), "{loss_codes:?}");
     assert!(loss_codes.contains(&"import.pptx.rotation"), "{loss_codes:?}");
-    assert!(graph.coverage.loss.iter().any(|loss| loss.status == SemanticStatus::Unsupported));
     let sized = graph.blocks.iter().any(|node| match &node.block {
         Block::Paragraph { content } => content.iter().any(|inline| matches!(inline, Inline::Attributed { attributes, .. } if attributes.pairs.iter().any(|pair| pair.key == "pptx.font-size"))),
         _ => false,
     });
     assert!(sized, "run sizes survive the projection");
+}
+
+/// A measurer that charges 1.5 em per character, so it wraps earlier than the
+/// estimate and proves the canvas accepts injected metrics.
+struct WideMetrics;
+
+impl TextMeasurer for WideMetrics {
+    fn advance(&self, _: char, font_px: f64) -> f64 {
+        font_px * 1.5
+    }
+}
+
+#[test]
+fn injected_metrics_wrap_earlier_and_chart_fragments_replace_the_placeholder() {
+    let presentation = presentation();
+    let estimated = text_wrap_probe(&presentation, &EstimatedMetrics);
+    let measured = text_wrap_probe(&presentation, &WideMetrics);
+    assert_eq!(estimated.len(), measured.len());
+    assert!(
+        estimated.iter().zip(&measured).any(|(left, right)| right.lines.len() > left.lines.len()),
+        "{estimated:?} {measured:?}"
+    );
+
+    let chart = presentation
+        .slide(2)
+        .expect("slide 2")
+        .shapes
+        .iter()
+        .find(|shape| shape.kind == ShapeKind::Chart)
+        .expect("chart shape");
+    let fragment = "<rect x=\"0\" y=\"0\" width=\"10\" height=\"10\" fill=\"#336699\"/>";
+    let render =
+        render_presentation_with(&presentation, &RenderOptions::default(), &WideMetrics, &[(2, chart.id, fragment.to_owned())]);
+    let slide = render.views.iter().find(|view| view.index == 2).expect("slide view 2");
+    assert!(slide.svg.contains(fragment), "{}", slide.svg);
+    assert!(!slide.svg.contains("chart refused"), "{}", slide.svg);
+    assert!(
+        !render.issues.iter().any(|issue| issue.code == "render.pptx.chart-placeholder" && issue.shape == Some(chart.id)),
+        "{:?}",
+        render.issues
+    );
 }
 
 /// Collects the text of an inline tree, descending through style wrappers.
@@ -360,7 +403,7 @@ const NOTES_ONE: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><p:notes xmln
 
 const NOTES_TWO: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><p:notes xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Notes\"/><p:cNvSpPr/><p:nvPr><p:ph type=\"body\" idx=\"1\"/></p:nvPr></p:nvSpPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>Second notes page.</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>";
 
-const CHART: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:plotArea><c:barChart><c:barDir val=\"col\"/><c:ser><c:idx val=\"0\"/><c:val><c:numRef><c:f>Sheet1!$B$2:$B$4</c:f></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>";
+const CHART: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:plotArea><c:barChart><c:barDir val=\"col\"/><c:ser><c:idx val=\"0\"/><c:tx><c:strRef><c:f>Sheet1!$B$1</c:f><c:strCache><c:pt idx=\"0\"><c:v>Revenue</c:v></c:pt></c:strCache></c:strRef></c:tx><c:cat><c:strRef><c:f>Sheet1!$A$2:$A$4</c:f><c:strCache><c:pt idx=\"0\"><c:v>North</c:v></c:pt><c:pt idx=\"1\"><c:v>South</c:v></c:pt><c:pt idx=\"2\"><c:v>East</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:f>Sheet1!$B$2:$B$4</c:f><c:numCache><c:pt idx=\"0\"><c:v>42</c:v></c:pt><c:pt idx=\"1\"><c:v>31</c:v></c:pt><c:pt idx=\"2\"><c:v>27</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>";
 
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01,

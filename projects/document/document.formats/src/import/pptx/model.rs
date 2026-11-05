@@ -319,8 +319,17 @@ pub struct SlideImage {
     pub bytes: Option<Vec<u8>>,
 }
 
+/// One chart series with its cached values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartSeries {
+    /// Series name when the chart part carries one.
+    pub name: Option<String>,
+    /// Cached numeric values in plotting order.
+    pub values: Vec<f64>,
+}
+
 /// Chart reference kept next to its frame.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChartRef {
     /// Package part path.
     pub part: String,
@@ -328,6 +337,10 @@ pub struct ChartRef {
     pub kind: Option<String>,
     /// Declared series count.
     pub series_count: u32,
+    /// Cached category labels.
+    pub categories: Vec<String>,
+    /// Series with cached values.
+    pub series: Vec<ChartSeries>,
 }
 
 /// Shape family declared by the `p:spTree` child.
