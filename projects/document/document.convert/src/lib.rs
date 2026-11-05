@@ -20,7 +20,7 @@ use std::{fs, path::Path};
 use document_diagnostic::diagnostics_from_graph;
 use document_formats::import::{
     doc::import_doc_bytes, docx::import_docx_bytes, epub::import_epub_bytes, html::import_html_bytes, pdf::import_pdf_bytes,
-    xlsx::import_xlsx_graph_bytes,
+    pptx::import_pptx_graph_bytes, xlsx::import_xlsx_graph_bytes,
 };
 use document_formats::{FormatDirection, FormatStatus, capabilities};
 use document_ir::DocumentGraph;
@@ -59,7 +59,7 @@ pub use writers::{
 /// This list only says a reader implementation exists. It does not by itself
 /// make a route available — [`supports_route`] also requires the `Import`
 /// capability in `document_formats::capabilities()` to be routable.
-pub const READERS: &[&str] = &["docx", "doc", "pdf", "epub", "html", "markdown", "notedown", "tex", "typst", "xlsx"];
+pub const READERS: &[&str] = &["docx", "doc", "pdf", "epub", "html", "markdown", "notedown", "tex", "typst", "xlsx", "pptx"];
 
 /// Writer handlers wired into this build (lowercase).
 ///
@@ -438,6 +438,7 @@ fn read_source(from: &str, label: &str, bytes: Vec<u8>) -> Result<DocumentGraph>
         "pdf" => import_pdf_bytes(label, &bytes).map_err(crate::format_error::map_format_error),
         "epub" => import_epub_bytes(label, &bytes).map_err(crate::format_error::map_format_error),
         "xlsx" => import_xlsx_graph_bytes(label, &bytes).map_err(crate::format_error::map_format_error),
+        "pptx" => import_pptx_graph_bytes(label, &bytes).map_err(crate::format_error::map_format_error),
         "html" => import_html_bytes(label, &bytes).map_err(crate::format_error::map_format_error),
         "markdown" => {
             let text = match String::from_utf8(bytes) {

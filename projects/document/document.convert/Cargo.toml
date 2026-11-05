@@ -21,7 +21,7 @@ document-types = { workspace = true }
 document-diagnostic = { workspace = true }
 
 document-ir = { workspace = true }
-document-formats = { workspace = true, features = ["markdown", "notedown", "docx", "doc", "html", "pdf", "epub", "tex", "typst", "xlsx"] }
+document-formats = { workspace = true, features = ["markdown", "notedown", "docx", "doc", "html", "pdf", "epub", "tex", "typst", "xlsx", "pptx"] }
 document-compose = { workspace = true }
 document-layout = { workspace = true }
 document-presentation = { workspace = true }
