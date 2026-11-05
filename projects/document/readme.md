@@ -53,9 +53,10 @@ flowchart TB
     IM[document.input.markdown]
     IT[document.input.tex]
     IY[document.input.typst]
+    IF[document.input.formats]
   end
 
-  F --> IR & FMT & TYP & DIA & CVT & CMP & STY & TXT & PRE & LAY & R & IM & IT & IY
+  F --> IR & FMT & TYP & DIA & CVT & CMP & STY & TXT & PRE & LAY & R & IM & IT & IY & IF
   FMT --> IR
   CVT --> IR & FMT & DIA & TYP
   DIA --> TYP
@@ -82,7 +83,7 @@ flowchart TB
 | `document.presentation` | `document-presentation`                      | 展示 / 流式 presentation IR                  |
 | `document.layout`       | `document-layout`                            | 分页与块 / 数学布局                          |
 | `document.renderer*`    | `document-renderer{-svg,-pdf,-html,-raster}` | 后端合同与具体输出                           |
-| `document.input.*`      | `document-input-{markdown,tex,typst}`        | 语言入口适配，收敛到 IR                      |
+| `document.input.*`      | `document-input-{markdown,tex,typst,formats}` | 输入适配，收敛到 IR（`formats` 面向 HTML / DOCX / EPUB / PDF / DOC） |
 
 ## 2. 两条主链
 

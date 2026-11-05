@@ -113,4 +113,10 @@ pub mod input {
     pub mod typst {
         pub use document_input_typst::*;
     }
+
+    /// 容器文档输入（HTML / DOCX / EPUB / PDF / DOC）。
+    #[cfg(feature = "input-formats")]
+    pub mod formats {
+        pub use document_input_formats::*;
+    }
 }

@@ -29,6 +29,7 @@ document-renderer-raster = { workspace = true, optional = true }
 document-input-markdown = { workspace = true, optional = true }
 document-input-tex = { workspace = true, optional = true }
 document-input-typst = { workspace = true, optional = true }
+document-input-formats = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -51,6 +52,7 @@ renderer-raster = ["renderer", "dep:document-renderer-raster"]
 input-markdown = ["dep:document-input-markdown"]
 input-tex = ["dep:document-input-tex"]
 input-typst = ["dep:document-input-typst"]
+input-formats = ["dep:document-input-formats"]
 # 格式语言 feature（转发到 document-formats）
 markdown = ["formats", "document-formats/markdown"]
 notedown = ["formats", "document-formats/notedown"]
