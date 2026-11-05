@@ -730,4 +730,121 @@ fn imports_flate_images_with_all_png_predictor_filters() {
         );
     }
 }
+/// One page with a fixed-metric font, so every glyph advances a quarter em.
+fn quarter_em_font(objects: &mut String, font_id: u32) {
+    let descriptor_id = font_id + 1;
+    objects.push_str(&format!(
+        "{font_id} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /TestFont /Encoding /WinAnsiEncoding /FontDescriptor {descriptor_id} 0 R >>\nendobj\n{descriptor_id} 0 obj\n<< /Type /FontDescriptor /FontName /TestFont /Flags 4 /FontBBox [0 0 1000 1000] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /MissingWidth 250 >>\nendobj\n"
+    ));
+}
+
+fn text_page_pdf(media_box: &str, font_id: u32, content_id: u32, body: &str) -> Vec<u8> {
+    let mut pdf = format!(
+        "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox {media_box} /Resources << /Font << /F1 {font_id} 0 R >> >> /Contents {content_id} 0 R >>\nendobj\n"
+    );
+    quarter_em_font(&mut pdf, font_id);
+    pdf.push_str(&format!("{content_id} 0 obj\n<< /Length {} >>\nstream\n{body}\nendstream\nendobj\n%%EOF", body.len()));
+    pdf.into_bytes()
+}
+
+#[test]
+fn imports_pdf_page_geometry_and_body_metrics_from_the_text_layer() {
+    let mut body = String::from("BT /F1 9.5 Tf\n");
+    for (index, y) in [700.0, 690.0, 680.0, 670.0, 660.0, 650.0].into_iter().enumerate() {
+        body.push_str(&format!("1 0 0 1 36 {y} Tm (row {index} of body text) Tj\n"));
+    }
+    body.push_str("ET");
+    let bytes = text_page_pdf("[0 0 612 792]", 4, 6, &body);
+    let graph = import_pdf_bytes("letter.pdf", &bytes).expect("import Letter PDF");
+    let page = graph.page_setup.expect("measured page setup");
+    assert_eq!(page.page_width, Some(612.0));
+    assert_eq!(page.page_height, Some(792.0));
+    assert_eq!(page.base_font_size, Some(9.5));
+    assert_eq!(page.margin_left, Some(36.0));
+    let line_height = page.line_height.expect("measured leading");
+    assert!((line_height - 10.0 / 9.5).abs() < 0.01, "{line_height}");
+    let margin_top = page.margin_top.expect("measured top margin");
+    assert!((margin_top - (792.0 - 700.0 - 9.5)).abs() < 0.01, "{margin_top}");
+}
+
+fn table_row_texts(row: &document_ir::TableRow) -> Vec<String> {
+    row.cells
+        .iter()
+        .map(|cell| {
+            cell.content
+                .iter()
+                .map(|inline| match inline {
+                    Inline::Text { text } => text.as_str(),
+                    _ => "",
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+}
+
+#[test]
+fn merged_header_rows_with_span_blanks_join_the_table_grid() {
+    let body = "BT /F1 12 Tf\n\
+        1 0 0 1 72 700 Tm (Item) Tj\n\
+        1 0 0 1 192 700 Tm (       ) Tj\n\
+        1 0 0 1 357 700 Tm (Total) Tj\n\
+        1 0 0 1 72 684 Tm (Name) Tj\n\
+        1 0 0 1 192 684 Tm (Qty) Tj\n\
+        1 0 0 1 357 684 Tm (Note) Tj\n\
+        1 0 0 1 72 668 Tm (Pen) Tj\n\
+        1 0 0 1 192 668 Tm (Two) Tj\n\
+        1 0 0 1 357 668 Tm (Blue) Tj\n\
+        1 0 0 1 72 652 Tm (Pad) Tj\n\
+        1 0 0 1 192 652 Tm (One) Tj\n\
+        1 0 0 1 357 652 Tm (White) Tj\n\
+        ET";
+    let bytes = text_page_pdf("[0 0 612 792]", 4, 6, body);
+    let graph = import_pdf_bytes("merged-header.pdf", &bytes).expect("import merged header table");
+    let table = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { rows, .. } => Some(rows.clone()),
+            _ => None,
+        })
+        .expect("table block");
+    assert_eq!(table.len(), 4, "{table:?}");
+    assert_eq!(table_row_texts(&table[0]), vec!["Item".to_owned(), String::new(), "Total".to_owned()]);
+    assert_eq!(table_row_texts(&table[1]), vec!["Name".to_owned(), "Qty".to_owned(), "Note".to_owned()]);
+}
+
+#[test]
+fn plain_text_above_a_table_stays_outside_the_grid() {
+    let body = "BT /F1 12 Tf\n\
+        1 0 0 1 72 700 Tm (A plain sentence without column gaps.) Tj\n\
+        1 0 0 1 72 684 Tm (Name) Tj\n\
+        1 0 0 1 192 684 Tm (Qty) Tj\n\
+        1 0 0 1 357 684 Tm (Note) Tj\n\
+        1 0 0 1 72 668 Tm (Pen) Tj\n\
+        1 0 0 1 192 668 Tm (Two) Tj\n\
+        1 0 0 1 357 668 Tm (Blue) Tj\n\
+        ET";
+    let bytes = text_page_pdf("[0 0 612 792]", 4, 6, body);
+    let graph = import_pdf_bytes("paragraph-table.pdf", &bytes).expect("import paragraph and table");
+    let table = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { rows, .. } => Some(rows.clone()),
+            _ => None,
+        })
+        .expect("table block");
+    assert_eq!(table.len(), 2, "{table:?}");
+    assert!(table.iter().all(|row| row.cells.len() == 3), "{table:?}");
+    let paragraph = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Paragraph { content } => Some(format!("{content:?}")),
+            _ => None,
+        })
+        .expect("paragraph block");
+    assert!(paragraph.contains("plain sentence"), "{paragraph}");
+}
+
 mod import_internal;
