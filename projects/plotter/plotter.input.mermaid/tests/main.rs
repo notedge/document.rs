@@ -25,6 +25,20 @@ fn composite_state_regions_become_labelled_frames_with_an_approximation() {
     assert!(format!("{:?}", records[0]).contains("Running"), "the approximation names the state: {:?}", records[0]);
 }
 
+/// The `approximated` record marks a missing capability rather than a property
+/// of composite states, so it must disappear once the region frame nests inside
+/// the state frame. Enable this test when `DiagramLayoutPlan` gains nested
+/// frames and the region cluster becomes the state node's child.
+#[test]
+#[ignore = "`DiagramLayoutPlan` has no nested frame yet"]
+fn composite_state_regions_stop_reporting_the_approximation_once_nested_frames_land() {
+    let source = "stateDiagram-v2\n  [*] --> Running\n  state Running {\n    Fast --> Slow : settle\n  }\n";
+    let lowered = mermaid_to_scene(source).expect("a composite state still lowers");
+
+    let records: Vec<_> = lowered.diagnostics.iter().filter(|record| record.code().as_str() == codes::APPROXIMATED).collect();
+    assert!(records.is_empty(), "containment is now represented: {:?}", records);
+}
+
 #[test]
 fn an_unsupported_family_reports_one_code_from_both_entries() {
     let source = "gantt\n  title Plan\n  section A\n  Task :a1, 2024-01-01, 3d\n";

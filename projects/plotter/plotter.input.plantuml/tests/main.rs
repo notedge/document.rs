@@ -41,6 +41,18 @@ fn composite_state_regions_become_labelled_frames_with_an_approximation() {
     assert!(format!("{:?}", records[0]).contains("Running"), "the approximation names the state: {:?}", records[0]);
 }
 
+/// Same marker as the mermaid frontend: the `approximated` record exists only
+/// while the region frame cannot nest inside the state frame.
+#[test]
+#[ignore = "`DiagramLayoutPlan` has no nested frame yet"]
+fn composite_state_regions_stop_reporting_the_approximation_once_nested_frames_land() {
+    let source = "@startuml\n[*] --> Running\nstate Running {\n  Fast --> Slow\n}\n@enduml\n";
+    let lowered = plantuml_to_scene(source).expect("a composite state still lowers");
+
+    let records: Vec<_> = lowered.diagnostics.iter().filter(|record| record.code().as_str() == codes::APPROXIMATED).collect();
+    assert!(records.is_empty(), "containment is now represented: {:?}", records);
+}
+
 #[test]
 fn class_declarations_and_members_lower_to_one_spec() {
     let spec = plantuml_to_spec(CLASS_SOURCE).expect("the class subset should lower");
