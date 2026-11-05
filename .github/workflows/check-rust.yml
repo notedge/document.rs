@@ -26,8 +26,19 @@ jobs:
         run: cargo build --release
       - name: Tests
         run: cargo test --release
-      # `document.formats` defaults to `markdown` only, so the `docx`, `pdf`
-      # and `epub` export paths were never compiled by the steps above even
-      # though the capability table publishes them as `Partial`.
+
+  # `document.formats` defaults to the `markdown` feature, so the default
+  # build never compiles the `docx`, `pdf` or `epub` exporters even though the
+  # capability table publishes them as `Partial`. This job runs on its own so
+  # a failure earlier in `build` cannot skip the only step that compiles them.
+  formats-features:
+    runs-on: ubuntu-latest
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-23
       - name: Feature matrix (docx, pdf, epub, html)
         run: cargo test -p document-formats --all-features --release
