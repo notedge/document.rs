@@ -18,24 +18,30 @@ const CM: f64 = 72.0 / 2.54;
 /// Scene units per millimetre.
 const MM: f64 = 72.0 / 25.4;
 /// Scene units per typographic point.
-const PT: f64 = 1.0;
+///
+/// Scene units are PostScript points, so one TeX point is `72 / 72.27` of a
+/// scene unit. Tectonic output scales every authored length by the same ratio.
+const PT: f64 = 72.0 / 72.27;
 
 /// Margin added around the fitted picture bounds, in scene units.
 const PICTURE_MARGIN: f64 = 2.0;
 /// Default node label font size, in scene units.
 const DEFAULT_FONT_SIZE: f64 = 12.0;
 /// Default stroke width, in scene units.
-const DEFAULT_LINE_WIDTH: f64 = 0.4;
+const DEFAULT_LINE_WIDTH: f64 = 0.4 * PT;
 /// `thin` stroke width, in scene units.
-const THIN_WIDTH: f64 = 0.4;
+const THIN_WIDTH: f64 = 0.4 * PT;
 /// `thick` stroke width, in scene units.
-const THICK_WIDTH: f64 = 0.8;
+const THICK_WIDTH: f64 = 0.8 * PT;
 /// `very thick` stroke width, in scene units.
-const VERY_THICK_WIDTH: f64 = 1.2;
+const VERY_THICK_WIDTH: f64 = 1.2 * PT;
 /// Length of one painted dash piece, in scene units.
-const DASH_ON: f64 = 4.0;
+///
+/// TikZ's `dashed` pattern is three TeX points on and three off, which the
+/// engine paints as `2.98883` PostScript points each.
+const DASH_ON: f64 = 3.0 * PT;
 /// Length of one gap between dash pieces, in scene units.
-const DASH_OFF: f64 = 3.0;
+const DASH_OFF: f64 = 3.0 * PT;
 /// Gap between a node point and an anchored label, in scene units.
 const NODE_GAP: f64 = 2.0;
 /// Line segments used to sample a circle before dashing it.
