@@ -1905,8 +1905,6 @@ dependencies = [
 name = "plotter-input-tikz"
 version = "0.1.0"
 dependencies = [
- "document-compose",
- "document-fonts",
  "plotter-diagram",
  "plotter-scene",
  "plotter-types",

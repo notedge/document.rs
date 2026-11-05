@@ -9,8 +9,6 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-document-compose = { workspace = true }
-document-fonts = { workspace = true }
 plotter-diagram = { workspace = true }
 plotter-scene = { workspace = true }
 
