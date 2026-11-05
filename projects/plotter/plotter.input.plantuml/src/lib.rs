@@ -299,7 +299,7 @@ fn plantuml_root_to_spec(root: &PlantUmlRoot, source: &str) -> Result<(DiagramSp
 /// `A <|-- B` and `A --|> B` point at the same superclass without a second
 /// scan of the source text.
 fn class_spec(diagram: &ClassDiagram, source: &str) -> Result<(DiagramSpec, Vec<Diagnostic>, SourceMap), DiagramError> {
-    refuse_dropped(source, REJECTED_STATEMENTS, true, "class")?;
+    refuse_dropped(source, REJECTED_STATEMENTS, true, "class and sequence")?;
     let mut spec = DiagramSpec::new(Direction::BottomUp);
     let mut diagnostics = Vec::new();
     let mut sources = SourceMap::new(SOURCE);
@@ -371,7 +371,7 @@ fn class_spec(diagram: &ClassDiagram, source: &str) -> Result<(DiagramSpec, Vec<
 /// endpoint with no declaration becomes an implicit participant, matching the
 /// Mermaid sequence lowering.
 fn sequence_spec(diagram: &SequenceDiagram, source: &str) -> Result<(DiagramSpec, SourceMap), DiagramError> {
-    refuse_dropped(source, REJECTED_STATEMENTS, false, "sequence")?;
+    refuse_dropped(source, REJECTED_STATEMENTS, false, "class and sequence")?;
     let mut spec = DiagramSpec::new(Direction::TopDown);
     let mut sources = SourceMap::new(SOURCE);
     let mut known: BTreeSet<String> = BTreeSet::new();
@@ -1029,7 +1029,7 @@ fn port_direction(direction: PortDirection) -> &'static str {
 fn refuse_dropped(source: &str, keywords: &[&str], skip_braced: bool, family: &str) -> Result<(), DiagramError> {
     if let Some((range, keyword)) = locate_dropped_statement(source, keywords, skip_braced) {
         return Err(DiagramError::unsupported(format!(
-            "{family} statement `{keyword}` is not lowered, the diagram falls back to its source"
+            "PlantUML `{keyword}` statements are not part of the accepted {family} subset, the diagram falls back to its source"
         ))
         .with_span(range));
     }
@@ -1072,7 +1072,14 @@ fn locate_unsupported_stereotype(source: &str) -> Option<(Range<usize>, String)>
 /// reports the trimmed line range, so the refusal names authored bytes instead
 /// of an AST position the builder does not keep. Comments are skipped so a
 /// commented-out statement is never refused.
+///
+/// When several refused statements appear, the one listed earliest in `keywords`
+/// wins. The lists put styling and structural constructs before declaration
+/// words, so an accepted family never reports a foreign declaration such as
+/// `participant` when the authored block marker is what actually failed.
 fn locate_dropped_statement(source: &str, keywords: &[&str], skip_braced: bool) -> Option<(Range<usize>, String)> {
+    let mut found: Option<(usize, Range<usize>, String)> = None;
+    let mut seen = Vec::new();
     let mut depth = 0usize;
     let mut in_block_comment = false;
     for (range, line) in source_lines(source) {
@@ -1094,14 +1101,20 @@ fn locate_dropped_statement(source: &str, keywords: &[&str], skip_braced: bool) 
             continue;
         }
         let token = line.split_whitespace().next().unwrap_or_default().trim_end_matches(':');
-        if keywords.iter().any(|keyword| *keyword == token) {
-            return Some((range, token.to_string()));
+        if let Some(position) = keywords.iter().position(|keyword| *keyword == token) {
+            if !seen.contains(&position) {
+                seen.push(position);
+                let better = found.as_ref().map_or(true, |(best, _, _)| position < *best);
+                if better {
+                    found = Some((position, range, token.to_string()));
+                }
+            }
         }
         if skip_braced {
             depth = depth.saturating_add(line.matches('{').count()).saturating_sub(line.matches('}').count());
         }
     }
-    None
+    found.map(|(_, range, keyword)| (range, keyword))
 }
 
 /// Every non-empty line with its trimmed byte range.
