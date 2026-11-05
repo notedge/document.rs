@@ -865,7 +865,7 @@ fn component_spec(
 ) -> Result<(DiagramSpec, Vec<Diagnostic>, SourceMap), DiagramError> {
     refuse_dropped(source, DROPPED_COMPONENT_STATEMENTS, false, "component")?;
     let mut graph = Graph::default();
-    collect_components(&mut graph, &diagram.elements, &[], 0)?;
+    collect_components(&mut graph, &diagram.elements, &[], 0, source)?;
 
     for relation in &diagram.relations {
         let left = require_id(&relation.left)?;
@@ -899,16 +899,17 @@ fn collect_components(
     elements: &[ComponentElement],
     ancestors: &[String],
     depth: usize,
+    source: &str,
 ) -> Result<(), DiagramError> {
     for element in elements {
         match element {
             ComponentElement::Component(node) => {
                 let id = require_id(&node.name)?;
-                graph.upsert(&id, Some(component_label(node, false)), Some(NodeShape::Box), ancestors, Some(oak_span(&node.span)));
+                graph.upsert(&id, Some(component_label(node, false, source)), Some(NodeShape::Box), ancestors, Some(oak_span(&node.span)));
             }
             ComponentElement::Interface(node) => {
                 let id = require_id(&node.name)?;
-                graph.upsert(&id, Some(component_label(node, true)), Some(NodeShape::Box), ancestors, Some(oak_span(&node.span)));
+                graph.upsert(&id, Some(component_label(node, true, source)), Some(NodeShape::Box), ancestors, Some(oak_span(&node.span)));
             }
             ComponentElement::Port(port) => {
                 let id = require_id(&port.name)?;
@@ -930,21 +931,53 @@ fn collect_components(
                 }
                 let mut nested = ancestors.to_vec();
                 nested.push(cluster);
-                collect_components(graph, &package.elements, &nested, depth + 1)?;
+                collect_components(graph, &package.elements, &nested, depth + 1, source)?;
             }
         }
     }
     Ok(())
 }
 
-fn component_label(node: &ComponentNode, interface: bool) -> String {
+/// The text PlantUML draws inside a component or interface box.
+///
+/// `oak-plantuml` records the alias in `name` and leaves `display` empty for
+/// the bracketed and quoted forms, so `component [Web] as W` would otherwise
+/// show the alias. The declaration span is read back to recover the authored
+/// display text.
+fn component_label(node: &ComponentNode, interface: bool, source: &str) -> String {
+    let authored: Range<usize> = node.span.clone().into();
     let name = node
         .display
         .as_deref()
         .map(str::trim)
         .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| node.name.trim());
-    if interface { format!("«interface» {name}") } else { name.to_string() }
+        .map(str::to_string)
+        .or_else(|| authored_component_display(source.get(authored).unwrap_or_default()))
+        .unwrap_or_else(|| node.name.trim().to_string());
+    if interface { format!("«interface» {name}") } else { name }
+}
+
+/// The display text of one authored component declaration.
+///
+/// PlantUML accepts `component [Web] as W`, `component "Web" as W` and the
+/// unaliased `[Web]` form. Brackets win over quotes because the bracketed
+/// component syntax is the one the family documents.
+fn authored_component_display(authored: &str) -> Option<String> {
+    let header = authored.lines().next()?.trim();
+    if let Some(open) = header.find('[') {
+        let after = &header[open + 1..];
+        if let Some(close) = after.find(']') {
+            let text = after[..close].trim();
+            if !text.is_empty() {
+                return Some(text.to_string());
+            }
+        }
+    }
+    let open = header.find('"')?;
+    let after = &header[open + 1..];
+    let close = after.find('"')?;
+    let text = after[..close].trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 fn package_label(package: &ComponentPackage) -> String {
