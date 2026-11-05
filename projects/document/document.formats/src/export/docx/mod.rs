@@ -3,6 +3,7 @@
 mod footnotes;
 mod numbering;
 mod package;
+mod page;
 mod rels;
 mod writer;
 
@@ -10,17 +11,30 @@ use document_ir::DocumentGraph;
 
 use crate::FormatError;
 
-/// Export a document graph to DOCX bytes.
+pub use page::DocxPageSetup;
+
+/// Export a document graph to DOCX bytes with the default A4 page setup.
 pub fn export_docx_bytes(graph: &DocumentGraph) -> Result<Vec<u8>, FormatError> {
+    export_docx_bytes_with_page_setup(graph, &DocxPageSetup::a4())
+}
+
+/// Export a document graph to DOCX bytes with an explicit page setup.
+///
+/// The page setup is written into `w:sectPr` and `word/styles.xml`, so page
+/// size, margins, columns, body size and line spacing are declared by the
+/// package instead of being left to the consumer's defaults.
+pub fn export_docx_bytes_with_page_setup(graph: &DocumentGraph, setup: &DocxPageSetup) -> Result<Vec<u8>, FormatError> {
     let rendered = writer::render_document_xml(graph)?;
+    let document_xml = page::apply_page_setup(&rendered.document_xml, setup);
     Ok(package::build_minimal_opc_package(
-        &rendered.document_xml,
+        &document_xml,
         rendered.include_numbering,
         &rendered.document_rels_xml,
         &rendered.media_parts,
         &rendered.image_extensions,
         rendered.footnotes_xml.as_deref(),
         metadata_xml(graph).as_deref(),
+        &page::styles_xml(setup),
     ))
 }
 

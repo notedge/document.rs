@@ -69,6 +69,7 @@ pub fn build_minimal_opc_package(
     image_extensions: &[String],
     footnotes_xml: Option<&str>,
     metadata_xml: Option<&str>,
+    styles_xml: &str,
 ) -> Vec<u8> {
     let content_types = content_types_xml(include_numbering, image_extensions, footnotes_xml.is_some(), metadata_xml.is_some());
     let root_rels = root_rels_xml(metadata_xml.is_some());
@@ -77,6 +78,7 @@ pub fn build_minimal_opc_package(
         ("_rels/.rels", root_rels.as_bytes()),
         ("word/_rels/document.xml.rels", document_rels_xml.as_bytes()),
         ("word/document.xml", document_xml.as_bytes()),
+        ("word/styles.xml", styles_xml.as_bytes()),
     ];
     if include_numbering {
         entries.insert(3, ("word/numbering.xml", super::numbering::NUMBERING_XML.as_bytes()));
@@ -119,7 +121,8 @@ fn content_types_xml(
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>"#,
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>"#,
     );
     if include_numbering {
         xml.push_str("\n  <Override PartName=\"/word/numbering.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml\"/>");

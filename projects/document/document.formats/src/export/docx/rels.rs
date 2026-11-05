@@ -86,12 +86,18 @@ impl DocumentRelsRegistry {
     }
 
     /// Renders `word/_rels/document.xml.rels` for collected relationships.
+    ///
+    /// The styles part is always packaged, so its relationship is appended
+    /// last and never shifts the ids the body already references.
     pub fn render_document_rels_xml(&self) -> String {
+        const STYLES_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
         if self.entries.is_empty() {
-            return r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+            return format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="{STYLES_REL}" Target="styles.xml"/>
 </Relationships>"#
-                .to_string();
+            );
         }
 
         let mut xml = String::from(
@@ -124,6 +130,11 @@ impl DocumentRelsRegistry {
                 }
             }
         }
+        xml.push_str("\n  <Relationship Id=\"rId");
+        xml.push_str(&(self.entries.len() + 1).to_string());
+        xml.push_str("\" Type=\"");
+        xml.push_str(STYLES_REL);
+        xml.push_str("\" Target=\"styles.xml\"/>");
         xml.push_str("\n</Relationships>");
         xml
     }
