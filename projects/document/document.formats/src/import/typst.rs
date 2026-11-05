@@ -904,8 +904,11 @@ fn list_marker(line: &str) -> Option<(usize, bool, Option<u32>, &str)> {
         indent = (indent / 4 + 1) * 4;
         rest = after;
     }
-    if let Some(body) = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("+ ")).or_else(|| rest.strip_prefix("-\t")) {
+    if let Some(body) = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("-\t")) {
         return Some((indent, false, None, body.trim_end_matches('\r')));
+    }
+    if let Some(body) = rest.strip_prefix("+ ").or_else(|| rest.strip_prefix("+\t")) {
+        return Some((indent, true, None, body.trim_end_matches('\r')));
     }
     let digits: String = rest.chars().take_while(|character| character.is_ascii_digit()).collect();
     if digits.is_empty() {
