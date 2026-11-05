@@ -29,7 +29,7 @@ pub use crate::{
         origin_frontier, origin_politeness, origin_robots, origin_store,
     },
     error::{CrawlError, Result},
-    events::{CrawlEvent, EventLog, PageTransaction},
+    events::{BrowserFallbackTrigger, CrawlEvent, EventLog, PageTransaction},
     extract::{
         ExtractBudget, ExtractContext, ExtractInput, ExtractOutcome, ExtractResult, ExtractStatus, ProbeResult, ProbeStatus,
     },

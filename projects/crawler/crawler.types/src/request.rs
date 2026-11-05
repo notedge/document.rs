@@ -111,7 +111,8 @@ pub enum BrowserFallbackPolicy {
     /// Never invoke browser fallback.
     #[default]
     Never,
-    /// Capture a browser snapshot when HTTP fetch fails.
+    /// Capture a browser snapshot when HTTP fetch fails or the fetched page
+    /// yields no usable body content (a JavaScript shell or an empty skeleton).
     OnFetchFailure,
 }
 

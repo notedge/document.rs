@@ -4,10 +4,11 @@ use crate::browser::{BrowserProvider, snapshot_to_fetch_artifact};
 use boost_diagnostic::{DiagnosticSeverity, Message, MessageArg};
 use crawler_fetch::{FetchClient, FetchRequest, RobotsPolicy, Transport, site_key_for_url};
 use crawler_types::{
-    AdmissionDecision, BrowserFallbackPolicy, ChallengeOutcome, ChallengePolicy, CrawlBudgetStatus, CrawlCheckpoint,
-    CrawlError, CrawlEvent, CrawlReport, CrawlRequest, ExtractBudget, ExtractContext, ExtractStatus, FetchArtifact,
-    FrontierItem, PageChallengeState, Result, apply_challenge_policy, diagnostics as pd,
+    AdmissionDecision, BrowserFallbackPolicy, BrowserFallbackTrigger, ChallengeOutcome, ChallengePolicy, CrawlBudgetStatus,
+    CrawlCheckpoint, CrawlError, CrawlEvent, CrawlReport, CrawlRequest, ExtractBudget, ExtractContext, ExtractResult,
+    ExtractStatus, FetchArtifact, FrontierItem, PageChallengeState, Result, apply_challenge_policy, diagnostics as pd,
 };
+use document_ir::{Block, DocumentGraph, Inline};
 
 use crate::{
     admission::{admit_frontier_item, seed_frontier},
@@ -17,6 +18,54 @@ use crate::{
     transaction::commit_page,
 };
 use crawler_types::PageTransaction;
+
+/// Minimum plain-text characters an HTTP extraction must yield before the crawl
+/// accepts the fetched page as real content.
+///
+/// Below this value the page is treated as a JavaScript shell or an empty
+/// skeleton and, when browser fallback is enabled, the render path is tried.
+pub const LOW_YIELD_MIN_TEXT_CHARS: u64 = 64;
+
+/// Minimum number of content-bearing `notedown-ir` blocks an HTTP extraction
+/// must yield before the crawl accepts the fetched page as real content.
+pub const LOW_YIELD_MIN_CONTENT_BLOCKS: u32 = 1;
+
+/// Inline `<script>` payload size from which a page may be considered
+/// script-dominant rather than content-dominant.
+pub const LOW_YIELD_SCRIPT_MIN_BYTES: u64 = 512;
+
+/// Inline `<script>` payload must be at least this multiple of the extracted
+/// text characters for the script-dominance signal to fire.
+pub const LOW_YIELD_SCRIPT_TEXT_RATIO: u64 = 4;
+
+/// Observed content yield of one extraction, used only to route a page toward
+/// the render fallback. It never changes the `notedown-ir` produced by extract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PageYield {
+    /// Total plain-text characters across content-bearing blocks.
+    pub text_chars: u64,
+    /// Number of content-bearing `notedown-ir` blocks.
+    pub content_blocks: u32,
+    /// Total bytes inside inline `<script>` elements.
+    pub inline_script_bytes: u64,
+}
+
+impl PageYield {
+    /// Measure the routing yield of an HTTP artifact and its extraction.
+    pub fn measure(artifact: &FetchArtifact, extract: &ExtractResult) -> Self {
+        let inline_script_bytes = artifact.body_bytes().map(inline_script_bytes).unwrap_or(0);
+        let (text_chars, content_blocks) = extract.document.as_ref().map(measure_document).unwrap_or((0, 0));
+        Self { text_chars, content_blocks, inline_script_bytes }
+    }
+
+    /// Whether this yield is too thin to accept as a real page.
+    pub fn is_low(&self) -> bool {
+        self.content_blocks < LOW_YIELD_MIN_CONTENT_BLOCKS
+            || self.text_chars < LOW_YIELD_MIN_TEXT_CHARS
+            || (self.inline_script_bytes >= LOW_YIELD_SCRIPT_MIN_BYTES
+                && self.inline_script_bytes >= self.text_chars.saturating_mul(LOW_YIELD_SCRIPT_TEXT_RATIO))
+    }
+}
 
 /// Optional browser and fallback settings for a crawl run.
 #[derive(Clone, Copy)]
@@ -182,30 +231,46 @@ fn run_crawl_loop<T: Transport>(
                 record_crawl_diagnostic(&mut state, &error);
                 let fetch_error = error.to_string();
                 match try_browser_fallback(&item, options) {
-                    Some((snapshot, browser_engine)) => {
+                    BrowserFallbackAttempt::Captured { snapshot, browser_engine } => {
                         state.report.events.push(CrawlEvent::BrowserFallback {
                             url: item.request_url.clone(),
-                            fetch_error,
+                            trigger: BrowserFallbackTrigger::FetchFailure,
+                            fetch_error: Some(fetch_error),
                             browser_engine,
+                            observed_text_chars: None,
+                            observed_content_blocks: None,
                         });
-                        match resolve_browser_snapshot(snapshot, options.challenge_policy) {
-                            BrowserPageAction::Proceed(artifact) => artifact,
-                            BrowserPageAction::Skip(reason) => {
-                                record_skipped(&mut state, &item, &reason);
-                                continue;
+                        match accept_browser_snapshot(&mut state, &item, snapshot, options) {
+                            Some(artifact) => {
+                                let host_key = site_key_for_url(&item.request_url);
+                                if sitemap_discovered.insert(host_key)
+                                    && !client.robots().sitemaps_for_url(&item.request_url).is_empty()
+                                {
+                                    sitemap::discover(&mut state, &item, &mut client, &mut sitemap_discovered);
+                                }
+                                process_fetched_item(
+                                    &mut state,
+                                    &item,
+                                    artifact,
+                                    extractors,
+                                    extract_budget,
+                                    &mut committed_pages,
+                                    &mut artifacts,
+                                    request.budget.max_depth,
+                                    options,
+                                    false,
+                                    false,
+                                );
                             }
-                            BrowserPageAction::Pause(challenge_state) => {
-                                record_paused(&mut state, &item, challenge_state);
-                                continue;
-                            }
-                            BrowserPageAction::Fail(reason) => {
-                                state.report.failed += 1;
-                                state.report.events.push(CrawlEvent::Failed { url: item.request_url.clone(), reason });
-                                continue;
-                            }
+                            None => {}
                         }
+                        continue;
                     }
-                    None => {
+                    BrowserFallbackAttempt::Failed(error) => {
+                        record_browser_fallback_failure(&mut state, &item, BrowserFallbackTrigger::FetchFailure, error);
+                        continue;
+                    }
+                    BrowserFallbackAttempt::Disabled => {
                         state.report.failed += 1;
                         state.report.events.push(CrawlEvent::Failed { url: item.request_url.clone(), reason: fetch_error });
                         continue;
@@ -230,6 +295,9 @@ fn run_crawl_loop<T: Transport>(
             &mut committed_pages,
             &mut artifacts,
             request.budget.max_depth,
+            options,
+            true,
+            true,
         );
     }
 
@@ -242,14 +310,27 @@ fn run_crawl_loop<T: Transport>(
     Ok(CrawlOutput { report: state.report, committed_pages, artifacts, checkpoint })
 }
 
-fn try_browser_fallback(item: &FrontierItem, options: CrawlOptions<'_>) -> Option<(crawler_types::BrowserSnapshot, String)> {
+enum BrowserFallbackAttempt {
+    Disabled,
+    Captured { snapshot: crawler_types::BrowserSnapshot, browser_engine: String },
+    Failed(CrawlError),
+}
+
+fn try_browser_fallback(item: &FrontierItem, options: CrawlOptions<'_>) -> BrowserFallbackAttempt {
     if options.browser_fallback != BrowserFallbackPolicy::OnFetchFailure {
-        return None;
+        return BrowserFallbackAttempt::Disabled;
     }
-    let browser = options.browser?;
-    let snapshot = browser.capture_snapshot(&item.request_url).ok()?;
-    let engine = snapshot.browser_engine.clone();
-    Some((snapshot, engine))
+    let Some(browser) = options.browser
+    else {
+        return BrowserFallbackAttempt::Disabled;
+    };
+    match browser.capture_snapshot(&item.request_url) {
+        Ok(snapshot) => {
+            let browser_engine = snapshot.browser_engine.clone();
+            BrowserFallbackAttempt::Captured { snapshot, browser_engine }
+        }
+        Err(error) => BrowserFallbackAttempt::Failed(error),
+    }
 }
 
 enum BrowserPageAction {
@@ -257,6 +338,55 @@ enum BrowserPageAction {
     Skip(String),
     Pause(PageChallengeState),
     Fail(String),
+}
+
+/// Resolve a captured snapshot against the challenge policy and record the
+/// resulting skip / pause / failure event when it cannot proceed.
+fn accept_browser_snapshot(
+    state: &mut CrawlState,
+    item: &FrontierItem,
+    snapshot: crawler_types::BrowserSnapshot,
+    options: CrawlOptions<'_>,
+) -> Option<FetchArtifact> {
+    match resolve_browser_snapshot(snapshot, options.challenge_policy) {
+        BrowserPageAction::Proceed(artifact) => Some(artifact),
+        BrowserPageAction::Skip(reason) => {
+            record_skipped(state, item, &reason);
+            None
+        }
+        BrowserPageAction::Pause(challenge_state) => {
+            record_paused(state, item, challenge_state);
+            None
+        }
+        BrowserPageAction::Fail(reason) => {
+            state.report.failed += 1;
+            state.report.events.push(CrawlEvent::Failed { url: item.request_url.clone(), reason });
+            None
+        }
+    }
+}
+
+/// Record a failed render fallback without swallowing the provider diagnostic.
+fn record_browser_fallback_failure(
+    state: &mut CrawlState,
+    item: &FrontierItem,
+    trigger: BrowserFallbackTrigger,
+    error: CrawlError,
+) {
+    let diagnostic_code = error.code().unwrap_or(pd::BROWSER_FALLBACK_FAILED).to_string();
+    let provider_code = error.text_arg("workerCode").filter(|code| !code.is_empty()).map(str::to_string);
+    let reason = error.to_string();
+    let CrawlError::Diagnostic(d) = &error;
+    state.report.push_diagnostic(d.clone());
+    state.report.failed += 1;
+    state.report.events.push(CrawlEvent::BrowserFallbackFailed {
+        url: item.request_url.clone(),
+        trigger,
+        diagnostic_code,
+        provider_code,
+        reason: reason.clone(),
+    });
+    state.report.events.push(CrawlEvent::Failed { url: item.request_url.clone(), reason });
 }
 
 fn resolve_browser_snapshot(snapshot: crawler_types::BrowserSnapshot, policy: ChallengePolicy) -> BrowserPageAction {
@@ -275,26 +405,27 @@ fn challenge_reason(prefix: &str, state: PageChallengeState) -> String {
     format!("{prefix}:{}", serde_json::to_string(&state).unwrap_or_else(|_| "unknown".into()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_fetched_item(
     state: &mut CrawlState,
     item: &FrontierItem,
-    artifact: FetchArtifact,
+    mut artifact: FetchArtifact,
     extractors: &[&dyn Extractor],
     extract_budget: ExtractBudget,
     committed_pages: &mut Vec<String>,
     artifacts: &mut Vec<FetchArtifact>,
     max_depth: u32,
+    options: CrawlOptions<'_>,
+    record_fetched: bool,
+    allow_low_yield_fallback: bool,
 ) {
     let cache_hit = artifact.transport_provenance == crawler_types::TransportProvenance::CacheHit;
-    state.report.events.push(CrawlEvent::Fetched { url: artifact.final_url.clone(), status: artifact.status, cache_hit });
+    if record_fetched {
+        state.report.events.push(CrawlEvent::Fetched { url: artifact.final_url.clone(), status: artifact.status, cache_hit });
+    }
     artifacts.push(artifact.clone());
 
-    let extract = run_extract(
-        &artifact,
-        extractors,
-        extract_budget,
-        &ExtractContext { page_identity: Some(item.request_url.to_string()) },
-    );
+    let mut extract = extract_artifact(&artifact, item, extractors, extract_budget);
     state.report.events.push(CrawlEvent::Extracted {
         url: extract.source_url.clone(),
         status: extract.status,
@@ -304,6 +435,47 @@ fn process_fetched_item(
     if matches!(extract.status, ExtractStatus::Failed | ExtractStatus::Unsupported) {
         state.report.failed += 1;
         return;
+    }
+
+    if allow_low_yield_fallback && is_html_artifact(&artifact) {
+        let page_yield = PageYield::measure(&artifact, &extract);
+        if page_yield.is_low() {
+            match try_browser_fallback(item, options) {
+                BrowserFallbackAttempt::Disabled => {}
+                BrowserFallbackAttempt::Failed(error) => {
+                    record_browser_fallback_failure(state, item, BrowserFallbackTrigger::LowYield, error);
+                    return;
+                }
+                BrowserFallbackAttempt::Captured { snapshot, browser_engine } => {
+                    state.report.events.push(CrawlEvent::BrowserFallback {
+                        url: item.request_url.clone(),
+                        trigger: BrowserFallbackTrigger::LowYield,
+                        fetch_error: None,
+                        browser_engine,
+                        observed_text_chars: Some(page_yield.text_chars),
+                        observed_content_blocks: Some(page_yield.content_blocks),
+                    });
+                    let Some(rendered) = accept_browser_snapshot(state, item, snapshot, options)
+                    else {
+                        return;
+                    };
+                    artifact = rendered;
+                    if let Some(last) = artifacts.last_mut() {
+                        *last = artifact.clone();
+                    }
+                    extract = extract_artifact(&artifact, item, extractors, extract_budget);
+                    state.report.events.push(CrawlEvent::Extracted {
+                        url: extract.source_url.clone(),
+                        status: extract.status,
+                        extractor: extract.extractor.clone(),
+                    });
+                    if matches!(extract.status, ExtractStatus::Failed | ExtractStatus::Unsupported) {
+                        state.report.failed += 1;
+                        return;
+                    }
+                }
+            }
+        }
     }
 
     state.report.extracted += 1;
@@ -331,6 +503,100 @@ fn process_fetched_item(
     for next in frontier_from_links(&mut state.queue, item, &discovered, max_depth) {
         state.report.events.push(CrawlEvent::Discovered { url: next.request_url.clone(), depth: next.depth });
     }
+}
+
+fn extract_artifact(
+    artifact: &FetchArtifact,
+    item: &FrontierItem,
+    extractors: &[&dyn Extractor],
+    extract_budget: ExtractBudget,
+) -> ExtractResult {
+    run_extract(artifact, extractors, extract_budget, &ExtractContext { page_identity: Some(item.request_url.to_string()) })
+}
+
+/// Only HTML artifacts can be replaced by a rendered DOM. A short PDF, JSON or
+/// plain-text response is not a JavaScript shell.
+fn is_html_artifact(artifact: &FetchArtifact) -> bool {
+    if let Some(content_type) = artifact.content_type.as_deref() {
+        return content_type.to_ascii_lowercase().contains("html");
+    }
+    let Some(body) = artifact.body_bytes()
+    else {
+        return false;
+    };
+    let head = &body[..body.len().min(64)];
+    let head = String::from_utf8_lossy(head);
+    let head = head.trim_start().trim_start_matches('\u{feff}').to_ascii_lowercase();
+    ["<!doctype html", "<html", "<body", "<div", "<p", "<article", "<main"].iter().any(|prefix| head.starts_with(prefix))
+}
+
+fn measure_document(graph: &DocumentGraph) -> (u64, u32) {
+    let mut text_chars = 0u64;
+    let mut content_blocks = 0u32;
+    for node in &graph.blocks {
+        if let Some(chars) = block_text_chars(&node.block) {
+            content_blocks += 1;
+            text_chars += chars;
+        }
+    }
+    (text_chars, content_blocks)
+}
+
+fn block_text_chars(block: &Block) -> Option<u64> {
+    let chars = match block {
+        Block::Section { title, .. } => inline_text_chars(title),
+        Block::Paragraph { content } => inline_text_chars(content),
+        Block::List { items, .. } => items.iter().map(|item| inline_text_chars(&item.content)).sum(),
+        Block::Table { caption, rows } => {
+            caption.as_deref().map(|caption| caption.chars().count() as u64).unwrap_or(0)
+                + rows.iter().flat_map(|row| &row.cells).map(|cell| inline_text_chars(&cell.content)).sum::<u64>()
+        }
+        Block::Quote { content, .. } => inline_text_chars(content),
+        Block::Code { content, .. } => content.chars().count() as u64,
+        Block::Math { formula } => formula.source.chars().count() as u64,
+        Block::Diagram { source, .. } | Block::Chart { source, .. } => source.chars().count() as u64,
+        Block::Opaque { .. } | Block::RawHtml { .. } => return None,
+    };
+    Some(chars)
+}
+
+fn inline_text_chars(inlines: &[Inline]) -> u64 {
+    inlines.iter().map(|inline| inline.plain_text().chars().count() as u64).sum()
+}
+
+/// Sum the bytes inside inline `<script>` elements.
+fn inline_script_bytes(body: &[u8]) -> u64 {
+    const OPEN: &[u8] = b"<script";
+    const CLOSE: &[u8] = b"</script";
+    let mut total = 0u64;
+    let mut cursor = 0usize;
+    while let Some(start) = find_ascii_case_insensitive(body, OPEN, cursor) {
+        let Some(open_end) = body[start..].iter().position(|byte| *byte == b'>')
+        else {
+            break;
+        };
+        let body_start = start + open_end + 1;
+        let Some(end) = find_ascii_case_insensitive(body, CLOSE, body_start)
+        else {
+            break;
+        };
+        total += end.saturating_sub(body_start) as u64;
+        cursor = end + CLOSE.len();
+    }
+    total
+}
+
+fn find_ascii_case_insensitive(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
+    if needle.is_empty() || from >= haystack.len() || needle.len() > haystack.len() {
+        return None;
+    }
+    let last = haystack.len() - needle.len();
+    (from..=last).find(|start| {
+        haystack
+            .get(*start..)
+            .and_then(|rest| rest.get(..needle.len()))
+            .is_some_and(|window| window.eq_ignore_ascii_case(needle))
+    })
 }
 
 fn record_skipped(state: &mut CrawlState, item: &FrontierItem, reason: &str) {
