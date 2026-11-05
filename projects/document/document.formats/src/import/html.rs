@@ -1,6 +1,6 @@
 use document_ir::{
-    AttributePair, Attributes, Block, BreakKind, DocumentGraph, DocumentId, Inline, LossMarker, NodeId, RelationEndpoint,
-    SemanticStatus, SourceKind, SourceRef,
+    AttributePair, Attributes, Block, BreakKind, DocumentGraph, DocumentId, Inline, LossMarker, MathDisplay, NodeId,
+    RelationEndpoint, SemanticStatus, SourceKind, SourceRef,
 };
 use oak_core::{Builder, SourceText, parser::session::ParseSession};
 use oak_html::{
@@ -8,7 +8,11 @@ use oak_html::{
     ast::{Element, HtmlDocument, HtmlNode},
 };
 
-use super::common::register_image_assets;
+use super::{
+    common::register_image_assets,
+    math_latex::record_math_unsupported,
+    math_ml::{is_display_math, lower_math_element, math_display, single_display_math_child},
+};
 use crate::FormatError;
 
 /// Attribute role that produced an HTML link candidate.
@@ -186,7 +190,7 @@ fn lower_children(children: &[HtmlNode], graph: &mut DocumentGraph, source: &str
     let mut pending_span: Option<std::ops::Range<usize>> = None;
     for child in children {
         match child {
-            HtmlNode::Element(element) if is_block_element(element) => {
+            HtmlNode::Element(element) if is_block_element(element) || is_display_math(element) => {
                 flush_inline_run(&mut result, &mut pending, &mut pending_span);
                 result.extend(lower_blocks(element, graph, source));
             }
@@ -424,6 +428,11 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
             )]
         }
         "p" => {
+            // A paragraph that only wraps display MathML is a display formula,
+            // not a paragraph with inline math.
+            if let Some(math) = single_display_math_child(element) {
+                return vec![(lower_math_block(math, graph, MathDisplay::Display), span)];
+            }
             // HTML closes an open `<p>` as soon as another paragraph-level
             // element starts, so a nested `<p>` is a sibling paragraph rather
             // than inline text inside the first one.
@@ -645,6 +654,7 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
         // Inline SVG is captured verbatim as raw markup: the importer never
         // re-parses it into a shape model and never leaks its label text into
         // prose.
+        "math" => vec![(lower_math_block(element, graph, math_display(element)), span)],
         "svg" => vec![(Block::RawHtml { html: raw_element_markup(element, source) }, span)],
         // Endnotes commonly sit in a trailing `<footer>` or `<aside>`. Those
         // wrappers are block containers, so the footnote section inside is
@@ -981,6 +991,12 @@ fn is_table_structure(element: &Element) -> bool {
     )
 }
 
+fn lower_math_block(element: &Element, graph: &mut DocumentGraph, display: MathDisplay) -> Block {
+    let (formula, unsupported) = lower_math_element(element, display);
+    record_math_unsupported(graph, "import.html.math_unsupported", &unsupported);
+    Block::Math { formula }
+}
+
 fn is_block_element(element: &Element) -> bool {
     matches!(
         element.tag_name.to_ascii_lowercase().as_str(),
@@ -1075,6 +1091,11 @@ fn lower_inline_element(element: &Element, graph: &mut DocumentGraph, source: &s
     // Inline-position SVG keeps its exact markup instead of leaking label text.
     if tag == "svg" {
         return vec![Inline::RawHtml { html: raw_element_markup(element, source) }];
+    }
+    if tag == "math" {
+        let (formula, unsupported) = lower_math_element(element, MathDisplay::Inline);
+        record_math_unsupported(graph, "import.html.math_unsupported", &unsupported);
+        return vec![Inline::InlineMath { formula }];
     }
     let nested = lower_inlines(element, graph, source);
     // Footnote references are semantic notes, not superscript text. Both the

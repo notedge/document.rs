@@ -1,9 +1,12 @@
 //! EPUB XHTML block lowering via typed `oak-html` AST and CSS selectors.
 
 use document_ir::{
-    Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, LossMarker, SemanticStatus, TableCell, TableRow,
+    Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, LossMarker, MathDisplay, SemanticStatus, TableCell,
+    TableRow,
 };
 use oak_html::ast::{Element, HtmlDocument, HtmlNode};
+
+use crate::import::math_ml::{lower_math_element, math_display, single_display_math_child};
 
 use super::{
     assets::register_image_from_src,
@@ -111,6 +114,9 @@ fn lower_semantic_block(
             Some(Block::Section { level, title, children: Vec::new() })
         }
         "p" => {
+            if let Some(math) = single_display_math_child(element) {
+                return Some(Block::Math { formula: lower_math(math, MathDisplay::Display, losses) });
+            }
             let mut content =
                 non_empty_inlines(collect_inlines_from_element(element, graph, member_path, losses)).or_else(|| {
                     let plain = descendant_text(element);
@@ -119,6 +125,7 @@ fn lower_semantic_block(
             trim_inline_edges(&mut content);
             Some(Block::Paragraph { content })
         }
+        "math" => Some(Block::Math { formula: lower_math(element, math_display(element), losses) }),
         "figcaption" => lower_figcaption_block(element, graph, member_path, losses),
         "ul" | "ol" => {
             let ordered = tag == "ol";
@@ -628,6 +635,21 @@ fn collect_table_row(
     TableRow { is_header, cells }
 }
 
+fn lower_math(element: &Element, display: MathDisplay, losses: &mut Vec<LossMarker>) -> document_ir::MathFormula {
+    let (formula, unsupported) = lower_math_element(element, display);
+    if !unsupported.is_empty() {
+        losses.push(LossMarker {
+            code: "import.epub.math_unsupported".into(),
+            message: format!(
+                "math constructs {} have no structured mapping and were kept as readable text inside the formula",
+                unsupported.join(", ")
+            ),
+            status: SemanticStatus::Partial,
+        });
+    }
+    formula
+}
+
 fn collect_inlines_from_element(
     element: &Element,
     graph: &mut DocumentGraph,
@@ -699,6 +721,7 @@ fn lower_inline_element(
                 })
             }
         }
+        "math" => Some(Inline::InlineMath { formula: lower_math(element, math_display(element), losses) }),
         "br" => Some(Inline::Break { kind: BreakKind::Hard }),
         "s" | "del" | "strike" => Some(Inline::Styled {
             style: "strike".into(),

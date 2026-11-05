@@ -1,13 +1,14 @@
 use std::collections::{HashMap, HashSet};
 
 use document_ir::{
-    Asset, AssetId, AssetKind, Block, BreakKind, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, RelationEndpoint,
-    SemanticStatus, TableCell,
+    Asset, AssetId, AssetKind, Block, BreakKind, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, MathDisplay,
+    RelationEndpoint, SemanticStatus, TableCell,
 };
 use oak_xml::ast::{XmlElement, XmlValue};
 
 use super::{
     footnotes::FootnoteCatalog,
+    math::{lower_omml, omath_children},
     numbering::NumberingCatalog,
     table::{TableState, append_cell_paragraph, push_table_block},
     xml_extensions::{
@@ -15,6 +16,7 @@ use super::{
         parse_xml_bytes, u32_attribute,
     },
 };
+use crate::import::math_latex::record_math_unsupported;
 use crate::FormatError;
 
 /// Parses `word/document.xml` body content into a flat `DocumentGraph`.
@@ -157,7 +159,9 @@ fn parse_table_element(
             let mut current_cell = Vec::new();
             for paragraph in cell.children.iter().filter_map(XmlValue::as_element).filter(|child| element_is(child, "p")) {
                 let paragraph = parse_paragraph_element(paragraph, rels, graph, footnotes, referenced_footnotes);
-                if let Some(content) = paragraph_inlines(&paragraph) {
+                let mut content = paragraph_inlines(&paragraph).unwrap_or_default();
+                content.extend(math_block_inlines(&paragraph));
+                if !content.is_empty() {
                     append_cell_paragraph(&mut current_cell, &content);
                 }
             }
@@ -213,9 +217,27 @@ fn parse_paragraph_element(
         else if element_is(child, "footnoteReference") {
             push_footnote_reference(graph, &mut paragraph.inlines, footnotes, referenced_footnotes, u32_attribute(child, "id"));
         }
+        else if element_is(child, "oMathPara") {
+            for formula in omath_children(child) {
+                paragraph.math_blocks.push(lower_docx_math(graph, formula, MathDisplay::Display));
+            }
+        }
+        else if element_is(child, "oMath") {
+            paragraph.inlines.push(Inline::InlineMath { formula: lower_docx_math_formula(graph, child, MathDisplay::Inline) });
+        }
     }
 
     paragraph
+}
+
+fn lower_docx_math(graph: &mut DocumentGraph, element: &XmlElement, display: MathDisplay) -> Block {
+    Block::Math { formula: lower_docx_math_formula(graph, element, display) }
+}
+
+fn lower_docx_math_formula(graph: &mut DocumentGraph, element: &XmlElement, display: MathDisplay) -> document_ir::MathFormula {
+    let (formula, unsupported) = lower_omml(element, display);
+    record_math_unsupported(graph, "import.docx.math_unsupported", &unsupported);
+    formula
 }
 
 fn append_paragraph_run(
@@ -255,6 +277,11 @@ fn append_paragraph_run(
                     paragraph.push_image(&rel_id, rels, graph);
                 }
             }
+        }
+        else if element_is(child, "oMath") {
+            paragraph.push_run(&run);
+            run.text.clear();
+            paragraph.inlines.push(Inline::InlineMath { formula: lower_docx_math_formula(graph, child, MathDisplay::Inline) });
         }
     }
     paragraph.push_run(&run);
@@ -353,6 +380,7 @@ fn parse_run_element(element: &XmlElement) -> RunState {
 struct ParagraphState {
     style: Option<String>,
     inlines: Vec<Inline>,
+    math_blocks: Vec<Block>,
     pending_image_alt: Option<String>,
     is_list_item: bool,
     num_id: Option<u32>,
@@ -597,7 +625,9 @@ fn media_type_for(path: &str) -> Option<String> {
 
 fn finish_paragraph(graph: &mut DocumentGraph, body: &mut BodyState, paragraph: &ParagraphState, numbering: &NumberingCatalog) {
     if paragraph.is_list_item {
-        if let Some(content) = paragraph_inlines(paragraph) {
+        let mut content = paragraph_inlines(paragraph).unwrap_or_default();
+        content.extend(math_block_inlines(paragraph));
+        if !content.is_empty() {
             let item = PendingListItem { content, level: paragraph.ilvl.unwrap_or(0) };
             let ordered = list_marker_ordered(paragraph, numbering);
             match &mut body.pending_list {
@@ -615,6 +645,20 @@ fn finish_paragraph(graph: &mut DocumentGraph, body: &mut BodyState, paragraph: 
     }
     flush_pending_list(graph, body, numbering);
     push_paragraph(graph, paragraph);
+    for block in &paragraph.math_blocks {
+        graph.push_block(block.clone());
+    }
+}
+
+fn math_block_inlines(paragraph: &ParagraphState) -> Vec<Inline> {
+    paragraph
+        .math_blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Math { formula } => Some(Inline::InlineMath { formula: formula.clone() }),
+            _ => None,
+        })
+        .collect()
 }
 
 fn list_marker_ordered(paragraph: &ParagraphState, numbering: &NumberingCatalog) -> Option<bool> {
@@ -692,11 +736,15 @@ fn build_nested_items(
 }
 
 fn paragraph_inlines(paragraph: &ParagraphState) -> Option<Vec<Inline>> {
-    let trimmed = paragraph.inlines.iter().map(Inline::plain_text).collect::<String>().trim().to_string();
-    if trimmed.is_empty() {
+    if paragraph.inlines.is_empty() {
         return None;
     }
-    if paragraph.inlines.is_empty() { Some(vec![Inline::Text { text: trimmed }]) } else { Some(paragraph.inlines.clone()) }
+    let trimmed = paragraph.inlines.iter().map(Inline::plain_text).collect::<String>().trim().to_string();
+    let has_non_text = paragraph.inlines.iter().any(|inline| !matches!(inline, Inline::Text { .. }));
+    if trimmed.is_empty() && !has_non_text {
+        return None;
+    }
+    Some(paragraph.inlines.clone())
 }
 
 fn push_paragraph(graph: &mut DocumentGraph, paragraph: &ParagraphState) {

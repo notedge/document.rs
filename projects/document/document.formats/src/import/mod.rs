@@ -5,6 +5,13 @@ mod common;
 #[cfg(any(feature = "xlsx", feature = "pptx"))]
 mod office;
 
+/// OMML and MathML to LaTeX spelling helpers used before TeX lowering.
+#[cfg(any(feature = "docx", feature = "html", feature = "epub"))]
+pub(crate) mod math_latex;
+/// MathML lowering shared by HTML and EPUB import.
+#[cfg(any(feature = "html", feature = "epub"))]
+pub(crate) mod math_ml;
+
 pub use common::register_image_assets;
 
 /// Legacy Word `.doc` import.

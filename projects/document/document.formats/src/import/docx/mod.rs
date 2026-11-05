@@ -2,6 +2,8 @@
 
 /// WordprocessingML footnote import helpers.
 pub mod footnotes;
+/// Office Math Markup Language import.
+pub(crate) mod math;
 /// List numbering definition import.
 pub mod numbering;
 mod reader;
