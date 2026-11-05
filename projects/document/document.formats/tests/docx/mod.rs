@@ -524,7 +524,5 @@ fn docx_import_reports_paragraph_and_section_layout_breaks() {
     assert!(graph.coverage.loss.iter().any(|loss| loss.code == "reader.docx.section_layout"));
 }
 mod export;
-mod import_numbering;
-mod import_xml;
 mod import_xml_extensions;
 mod inspect;
