@@ -139,7 +139,7 @@ fn table_quote_nested_list_and_task_list_reach_the_rendered_svg() {
     assert!(has_item("outer"), "the outer item must lower to a list block: {lists:#?}");
     assert!(has_item("inner"), "the nested item must not be dropped: {lists:#?}");
 
-    let tasks = imported
+    let task_list = imported
         .graph
         .blocks
         .iter()
@@ -148,9 +148,14 @@ fn table_quote_nested_list_and_task_list_reach_the_rendered_svg() {
             _ => None,
         })
         .expect("a task list must keep its checkbox state");
-    assert_eq!(tasks.len(), 2, "{tasks:#?}");
-    assert!(tasks[0].is_checked == Some(true));
-    assert!(tasks[1].is_checked == Some(false));
+    // A single blank line between bullet items keeps them in one loose list
+    // (the nested `inner` item is that list's child block), so the checkbox
+    // state lives on the task items inside the list rather than in a second
+    // block of its own.
+    let tasks: Vec<_> = task_list.iter().filter(|item| item.is_task).collect();
+    assert_eq!(tasks.len(), 2, "{task_list:#?}");
+    assert!(tasks[0].is_checked == Some(true), "{task_list:#?}");
+    assert!(tasks[1].is_checked == Some(false), "{task_list:#?}");
 
     let rendered = render_svg("virtual://structures.md", source, &Diagrams::new()).expect("the structures must render");
     assert!(rendered.svg.contains("quoted text"), "quote text must reach the svg");
