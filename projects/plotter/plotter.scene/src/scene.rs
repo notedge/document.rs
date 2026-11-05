@@ -139,6 +139,8 @@ pub struct ShapeStyle {
     pub stroke: Option<Color>,
     /// Outline width in scene units. Only meaningful when `stroke` is set.
     pub stroke_width: f64,
+    /// Dash pattern `[on, off]` in scene units, or `None` for a solid stroke.
+    pub dash: Option<[f64; 2]>,
     /// Group and shape opacity in the inclusive range `0.0..=1.0`.
     pub opacity: f64,
 }
@@ -157,7 +159,7 @@ impl ShapeStyle {
 
 impl Default for ShapeStyle {
     fn default() -> Self {
-        Self { fill: None, stroke: None, stroke_width: 1.0, opacity: 1.0 }
+        Self { fill: None, stroke: None, stroke_width: 1.0, dash: None, opacity: 1.0 }
     }
 }
 

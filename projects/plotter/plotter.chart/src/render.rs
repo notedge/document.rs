@@ -137,7 +137,13 @@ fn polyline(points: &[Point]) -> PathData {
 }
 
 fn shape_style(style: &MarkStyle) -> ShapeStyle {
-    ShapeStyle { fill: style.fill, stroke: style.stroke, stroke_width: style.stroke_width, opacity: style.opacity }
+    ShapeStyle {
+        fill: style.fill,
+        stroke: style.stroke,
+        stroke_width: style.stroke_width,
+        dash: None,
+        opacity: style.opacity,
+    }
 }
 
 fn text_style(fill: Color, font_size: f64, text_anchor: TextAnchor) -> TextStyle {

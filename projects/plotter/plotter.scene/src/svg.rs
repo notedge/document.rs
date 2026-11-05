@@ -80,7 +80,18 @@ fn validate_node(node: &SceneNode, context: &str) -> Result<(), SceneError> {
 
 fn validate_shape_style(style: &ShapeStyle, context: &str) -> Result<(), SceneError> {
     validate_opacity(style.opacity, &format!("{context}.opacity"))?;
-    validate_non_negative(style.stroke_width, &format!("{context}.stroke_width"))
+    validate_non_negative(style.stroke_width, &format!("{context}.stroke_width"))?;
+    if let Some([on, off]) = style.dash {
+        for (name, value) in [("on", on), ("off", off)] {
+            validate_finite(value, &format!("{context}.dash.{name}"))?;
+            if value <= 0.0 {
+                return Err(SceneError::invalid_style(format!(
+                    "{context}.dash.{name} must be positive, found {value}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_text_style(style: &TextStyle, context: &str) -> Result<(), SceneError> {
@@ -582,6 +593,11 @@ fn write_shape_paint(out: &mut String, style: &ShapeStyle, include_fill: bool, m
     }
     if let Some(_) = style.stroke {
         push_number_attribute(out, "stroke-width", style.stroke_width);
+    }
+    if let Some([on, off]) = style.dash {
+        out.push_str(" stroke-dasharray=\"");
+        let _ = write!(out, "{} {}", number(on), number(off));
+        out.push('"');
     }
 }
 

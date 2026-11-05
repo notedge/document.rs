@@ -441,7 +441,7 @@ impl Style {
         // shape, so the fill opacity rides on the fill colour instead.
         let fill = fill.map(|colour| if fill_only { colour } else { apply_alpha(colour, self.fill_opacity) });
         let opacity = if fill_only { self.opacity * self.fill_opacity } else { self.opacity };
-        ShapeStyle { fill, stroke, stroke_width: self.line_width, opacity: opacity.clamp(0.0, 1.0) }
+        ShapeStyle { fill, stroke, stroke_width: self.line_width, dash: None, opacity: opacity.clamp(0.0, 1.0) }
     }
 }
 
@@ -1069,6 +1069,7 @@ fn node_box(
         fill: None,
         stroke: Some(options.draw_color.unwrap_or(path_style.color)),
         stroke_width: path_style.line_width,
+        dash: None,
         opacity: (path_style.opacity * options.opacity.unwrap_or(1.0)).clamp(0.0, 1.0),
     };
     let points = [Point::new(min_x, min_y), Point::new(max_x, min_y), Point::new(max_x, max_y), Point::new(min_x, max_y)];
