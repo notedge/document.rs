@@ -2,6 +2,7 @@
 //! Document format import and export around `notedown-ir`.
 
 mod capability;
+pub mod detect;
 mod error;
 pub mod export;
 pub mod import;
