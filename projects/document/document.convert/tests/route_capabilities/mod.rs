@@ -1,6 +1,6 @@
-use document_convert::{supported_routes, supports_route};
+use document_convert::{convert_bytes, supported_routes, supports_route};
 
-const SOURCES: &[&str] = &["docx", "doc", "pdf", "epub", "html", "markdown", "notedown"];
+const SOURCES: &[&str] = &["docx", "doc", "pdf", "epub", "html", "markdown", "notedown", "tex", "typst"];
 
 #[test]
 fn every_source_routes_to_deliverable_writers() {
@@ -25,8 +25,26 @@ fn partial_exports_keep_their_routes() {
 #[test]
 fn unwired_or_unknown_formats_are_rejected() {
     assert!(!supports_route("markdown", "tex"));
-    assert!(!supports_route("tex", "markdown"));
     assert!(!supports_route("markdown", "markdown-project"));
+    // Both TeX and Typst are now readers, so their outgoing routes exist.
+    assert!(supports_route("tex", "markdown"));
+    assert!(supports_route("typst", "markdown"));
+}
+
+#[test]
+fn tex_to_markdown_keeps_the_authored_structure() {
+    let source = "\\section{Intro}\nHello \\textbf{world}.\n";
+    let output = convert_bytes("tex", "markdown", "intro.tex", source.as_bytes().to_vec(), None).expect("tex to markdown");
+
+    assert!(output.markdown.starts_with("# "), "the section became a heading: {}", output.markdown);
+    assert!(output.markdown.contains("Intro"), "the heading text survived: {}", output.markdown);
+    assert!(
+        output.markdown.contains("class=\"tex-section-number\""),
+        "the authored class survived: {}",
+        output.markdown
+    );
+    assert!(output.markdown.contains("**world**"), "bold run was lost: {}", output.markdown);
+    assert_eq!(output.loss_count, 0, "unexpected loss markers: {}", output.report_json);
 }
 
 #[test]

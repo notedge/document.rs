@@ -3,7 +3,7 @@ use std::{
     fmt::Write as _,
 };
 
-use document_ir::{Block, BreakKind, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
+use document_ir::{Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
 
 use crate::FormatError;
 
@@ -392,11 +392,15 @@ fn write_inline(
                 }
             }
         },
-        Inline::Attributed { .. } => {
-            return Err(FormatError::unsupported(
-                "markdown",
-                "inline `id`/`class` attributes on inline content have no Markdown representation and are refused instead of dropped",
-            ));
+        Inline::Attributed { attributes, children } => {
+            // Markdown accepts inline HTML, which is the only spelling that
+            // keeps the authored `id`/`class` attributes instead of dropping
+            // them, so the attributes survive the projection.
+            out.push_str("<span");
+            write_span_attributes(out, attributes)?;
+            out.push('>');
+            write_inlines_in_table_cell(out, children, image_urls, in_table_cell)?;
+            out.push_str("</span>");
         }
         Inline::Citation { .. } => {
             return Err(FormatError::unsupported(
@@ -410,6 +414,44 @@ fn write_inline(
         }
     }
     Ok(())
+}
+
+fn write_span_attributes(out: &mut String, attributes: &Attributes) -> Result<(), FormatError> {
+    if let Some(id) = &attributes.id {
+        out.push_str(r#" id=""#);
+        write_html_attribute_value(out, id);
+        out.push('"');
+    }
+    if !attributes.classes.is_empty() {
+        out.push_str(r#" class=""#);
+        write_html_attribute_value(out, &attributes.classes.join(" "));
+        out.push('"');
+    }
+    for pair in &attributes.pairs {
+        let valid_name = !pair.key.is_empty()
+            && pair.key.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':' | '.'));
+        if !valid_name || pair.key.eq_ignore_ascii_case("id") || pair.key.eq_ignore_ascii_case("class") {
+            return Err(FormatError::unsupported("markdown", format!("attribute name `{}` has no inline HTML spelling", pair.key)));
+        }
+        out.push(' ');
+        out.push_str(&pair.key);
+        out.push_str(r#"=""#);
+        write_html_attribute_value(out, &pair.value);
+        out.push('"');
+    }
+    Ok(())
+}
+
+fn write_html_attribute_value(out: &mut String, value: &str) {
+    for ch in value.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
 }
 
 fn write_markdown_text(out: &mut String, text: &str) {
