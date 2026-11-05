@@ -44,6 +44,13 @@ const DASH_ON: f64 = 3.0 * PT;
 const DASH_OFF: f64 = 3.0 * PT;
 /// Gap between a node point and an anchored label, in scene units.
 const NODE_GAP: f64 = 2.0;
+/// Text width factor used by the scene text-bounds approximation.
+///
+/// `plotter-scene` reserves `char_count * font_size * 0.6` for one text line, so
+/// a node box measured here matches the extent its host already derives.
+const TEXT_WIDTH_FACTOR: f64 = 0.6;
+/// TikZ's default `inner sep` in em units, the padding between label and box.
+const NODE_INNER_SEP_EM: f64 = 1.0 / 3.0;
 /// Line segments used to sample a circle before dashing it.
 const CIRCLE_SEGMENTS: usize = 72;
 /// Control-point offset that turns a quarter ellipse into a cubic Bézier.
@@ -441,11 +448,15 @@ struct NodeOptions {
     text: Option<Color>,
     scale: f64,
     opacity: Option<f64>,
+    /// `draw` on a node strokes its box, unlike a bare colour word.
+    draw: bool,
+    /// `draw=<colour>` overrides the box stroke colour.
+    draw_color: Option<Color>,
 }
 
 impl Default for NodeOptions {
     fn default() -> Self {
-        Self { anchor: Anchor::Center, color: None, text: None, scale: 1.0, opacity: None }
+        Self { anchor: Anchor::Center, color: None, text: None, scale: 1.0, opacity: None, draw: false, draw_color: None }
     }
 }
 
@@ -554,7 +565,7 @@ impl Parser {
             }
         }
         let label = self.finish_node(point, options, Style::default())?;
-        self.nodes.push(label);
+        self.nodes.extend(label);
         self.expect_kind(TokenKind::Semicolon, "`\\node` is missing its `;`")
     }
 
@@ -720,7 +731,7 @@ impl Parser {
                 Some(TokenKind::Word(word)) if word.eq_ignore_ascii_case("node") => {
                     self.cursor += 1;
                     let point = current.ok_or_else(|| TikzError::syntax(offset, "`node` needs a current point"))?;
-                    texts.push(self.parse_node(point, style)?);
+                    texts.extend(self.parse_node(point, style)?);
                 }
                 Some(other) => {
                     return Err(TikzError::syntax(offset, format!("unexpected {other:?} in a path expression")));
@@ -780,13 +791,18 @@ impl Parser {
     }
 
     /// Parse `node[options] {text}` at `point`.
-    fn parse_node(&mut self, point: Point, path_style: Style) -> Result<SceneNode, TikzError> {
+    fn parse_node(&mut self, point: Point, path_style: Style) -> Result<Vec<SceneNode>, TikzError> {
         let options = self.parse_node_options()?;
         self.finish_node(point, options, path_style)
     }
 
-    /// Build one label node from its already-parsed options.
-    fn finish_node(&mut self, point: Point, options: NodeOptions, path_style: Style) -> Result<SceneNode, TikzError> {
+    /// Build the nodes for one label from its already-parsed options.
+    ///
+    /// `draw` adds a stroked box behind the label, the way TikZ draws a node
+    /// border: the box wraps the text extent that `plotter-scene` approximates,
+    /// plus the default `inner sep` on every side. The box is pushed before the
+    /// text so the label paints over its own border.
+    fn finish_node(&mut self, point: Point, options: NodeOptions, path_style: Style) -> Result<Vec<SceneNode>, TikzError> {
         let offset = self.offset();
         let Some(TokenKind::Brace(text)) = self.next_kind()
         else {
@@ -797,6 +813,10 @@ impl Parser {
         }
         let font_size = DEFAULT_FONT_SIZE * options.scale;
         let (position, text_anchor) = node_placement(point, options.anchor, font_size);
+        let mut nodes = Vec::new();
+        if options.draw {
+            nodes.push(node_box(text.as_str(), position, text_anchor, font_size, options, path_style));
+        }
         let fill = options.text.or(options.color).or(path_style.text).unwrap_or(path_style.color);
         let style = TextStyle {
             fill: Some(fill),
@@ -805,7 +825,8 @@ impl Parser {
             text_anchor,
             ..TextStyle::default()
         };
-        Ok(SceneNode::new(NodeKind::Text { position, text, style }))
+        nodes.push(SceneNode::new(NodeKind::Text { position, text, style }));
+        Ok(nodes)
     }
 
     /// Parse the option list attached to a node label.
@@ -887,8 +908,18 @@ fn apply_shape_option(style: &mut Style, option: &OptionSpec) -> Result<(), Tikz
 }
 
 /// Apply one option to node label options.
+///
+/// `draw` is a screen attribute even on a node: bare `draw` strokes the node box
+/// in the enclosing path colour, and `draw=<colour>` strokes it in that colour.
+/// A bare colour word such as `red` stays a colour, which is why `draw` is named
+/// before the catch-all arm.
 fn apply_node_option(options: &mut NodeOptions, option: &OptionSpec) -> Result<(), TikzError> {
     match (option.key.as_str(), option.value.as_ref()) {
+        ("draw", None) => options.draw = true,
+        ("draw", Some(OptionValue::Word(name))) => {
+            options.draw = true;
+            options.draw_color = Some(named_color(name, option.offset)?);
+        }
         ("above", None) => options.anchor = Anchor::Above,
         ("below", None) => options.anchor = Anchor::Below,
         ("left", None) => options.anchor = Anchor::Left,
@@ -1001,6 +1032,45 @@ fn drop_leading_point(contours: &mut Vec<Contour>, open: Option<usize>, start: P
     if replaceable {
         contours.pop();
     }
+}
+
+/// The stroked box TikZ draws around a node label.
+///
+/// The label extent follows the same `char_count * font_size * 0.6` width and
+/// `0.8` / `0.2` baseline split that `plotter-scene` reserves, so the box and the
+/// host's own text bounds agree. Every side grows by the default `inner sep`, a
+/// third of the font size.
+fn node_box(
+    text: &str,
+    position: Point,
+    anchor: TextAnchor,
+    font_size: f64,
+    options: NodeOptions,
+    path_style: Style,
+) -> SceneNode {
+    let width = text.chars().count() as f64 * font_size * TEXT_WIDTH_FACTOR;
+    let left = match anchor {
+        TextAnchor::Start => position.x,
+        TextAnchor::Middle => position.x - width * 0.5,
+        TextAnchor::End => position.x - width,
+    };
+    let sep = font_size * NODE_INNER_SEP_EM;
+    let (min_x, max_x) = (left - sep, left + width + sep);
+    let (min_y, max_y) = (position.y - font_size * 0.8 - sep, position.y + font_size * 0.2 + sep);
+    let style = ShapeStyle {
+        fill: None,
+        stroke: Some(options.draw_color.unwrap_or(path_style.color)),
+        stroke_width: path_style.line_width,
+        opacity: (path_style.opacity * options.opacity.unwrap_or(1.0)).clamp(0.0, 1.0),
+    };
+    let points = [Point::new(min_x, min_y), Point::new(max_x, min_y), Point::new(max_x, max_y), Point::new(min_x, max_y)];
+    let mut path = PathData::new();
+    path.commands.push(PathCommand::MoveTo(points[0]));
+    for point in &points[1..] {
+        path.commands.push(PathCommand::LineTo(*point));
+    }
+    path.commands.push(PathCommand::Close);
+    SceneNode::new(NodeKind::Path { path, style })
 }
 
 /// Turn the collected contours into one path, dashing them when asked.
