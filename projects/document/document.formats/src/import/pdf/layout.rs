@@ -6,6 +6,8 @@
 //! reported by the importer as a loss marker rather than presented as authored
 //! semantics.
 
+use document_ir::PageSetup;
+
 use super::types::{ExtractedLine, PageItem, PdfImage};
 
 /// A gap wider than eight tenths of an em between two runs is a cell boundary.
@@ -45,11 +47,8 @@ impl StyleProfile {
                 *weights.entry(key).or_default() += line.text.chars().filter(|character| !character.is_whitespace()).count();
             }
         }
-        let body_size = weights
-            .into_iter()
-            .max_by(|left, right| left.1.cmp(&right.1))
-            .map(|(size, _)| size as f32 / 10.0)
-            .unwrap_or(10.0);
+        let body_size =
+            weights.into_iter().max_by(|left, right| left.1.cmp(&right.1)).map(|(size, _)| size as f32 / 10.0).unwrap_or(10.0);
         let mut heading_sizes = Vec::new();
         sizes.sort_by(|left, right| right.partial_cmp(left).unwrap_or(std::cmp::Ordering::Equal));
         for size in sizes {
@@ -66,10 +65,12 @@ impl StyleProfile {
     }
 
     fn heading_level(&self, size: f32) -> Option<u8> {
-        self.heading_sizes
-            .iter()
-            .position(|heading| (heading - size).abs() < 0.5)
-            .map(|index| (index + 1) as u8)
+        self.heading_sizes.iter().position(|heading| (heading - size).abs() < 0.5).map(|index| (index + 1) as u8)
+    }
+
+    /// Body text size in points, measured from glyph sizes alone.
+    pub(crate) fn body_size(&self) -> f32 {
+        self.body_size
     }
 }
 
@@ -152,7 +153,11 @@ fn layout_lines(
             index += consumed;
             continue;
         }
-        if let Some((rows, consumed)) = table_at(&lines[index..]) {
+        if let Some((rows, consumed, header_start)) = table_at(&lines[index..]) {
+            flush_paragraph(blocks, paragraph);
+            for line in &lines[index..index + header_start] {
+                append_line(paragraph, line, profile.body_size, leading, blocks);
+            }
             flush_paragraph(blocks, paragraph);
             blocks.push(FlowBlock::Table { rows });
             index += consumed;
@@ -184,7 +189,8 @@ fn append_line(
     leading: f32,
     blocks: &mut Vec<FlowBlock>,
 ) {
-    let Some(current) = paragraph.as_mut() else {
+    let Some(current) = paragraph.as_mut()
+    else {
         *paragraph = Some(Paragraph { text: line.text.clone(), size: line.size, y: line.y });
         return;
     };
@@ -219,6 +225,17 @@ fn paragraph_break(current: &Paragraph, line: &ExtractedLine, body_size: f32, le
 
 /// Median baseline gap between consecutive lines of the body size.
 fn estimate_leading(lines: &[ExtractedLine], body_size: f32) -> f32 {
+    let gaps = leading_gaps(lines, body_size);
+    if gaps.is_empty() {
+        return body_size * 1.3;
+    }
+    let mut gaps = gaps;
+    gaps.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
+    gaps[gaps.len() / 2]
+}
+
+/// Baseline gaps between consecutive body lines on one page.
+fn leading_gaps(lines: &[ExtractedLine], body_size: f32) -> Vec<f32> {
     let mut gaps = Vec::new();
     for pair in lines.windows(2) {
         let (previous, next) = (&pair[0], &pair[1]);
@@ -232,11 +249,80 @@ fn estimate_leading(lines: &[ExtractedLine], body_size: f32) -> f32 {
             gaps.push(gap);
         }
     }
+    gaps
+}
+
+/// Median body baseline distance across every page.
+///
+/// Page boundaries never contribute a gap, because a line at the top of one
+/// page is not one leading below the last line of the previous page.
+fn document_leading(pages: &[Vec<PageItem>], body_size: f32) -> f32 {
+    let mut gaps = Vec::new();
+    for page in pages {
+        let lines = page
+            .iter()
+            .filter_map(|item| match item {
+                PageItem::Line(line) => Some(line.clone()),
+                PageItem::NamedImage(_) | PageItem::InlineImage(_) => None,
+            })
+            .collect::<Vec<_>>();
+        gaps.extend(leading_gaps(&lines, body_size));
+    }
     if gaps.is_empty() {
         return body_size * 1.3;
     }
     gaps.sort_by(|left, right| left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal));
     gaps[gaps.len() / 2]
+}
+
+/// Page setup measured from the text layer and the page boxes.
+///
+/// The values are measurements, not authored facts: the page box comes from
+/// `/MediaBox`, margins come from the body text bounding box, and body size and
+/// line height come from the glyph sizes and baseline gaps. Column count stays
+/// unset because the text layer does not declare it.
+pub(crate) fn page_setup(pages: &[Vec<PageItem>], profile: &StyleProfile, boxes: &[(f64, f64)]) -> PageSetup {
+    let body_size = profile.body_size();
+    let mut setup = PageSetup { base_font_size: Some(f64::from(body_size)), ..PageSetup::default() };
+    let leading = document_leading(pages, body_size);
+    if leading > 0.0 && body_size > 0.0 {
+        setup.line_height = Some(f64::from(leading / body_size));
+    }
+    let Some(&(width, height)) = boxes.first()
+    else {
+        return setup;
+    };
+    setup.page_width = Some(width);
+    setup.page_height = Some(height);
+    let lines = pages
+        .iter()
+        .flat_map(|page| page.iter())
+        .filter_map(|item| match item {
+            PageItem::Line(line) => Some(line),
+            PageItem::NamedImage(_) | PageItem::InlineImage(_) => None,
+        })
+        .filter(|line| (line.size - body_size).abs() < 0.6)
+        .collect::<Vec<_>>();
+    let left = lines.iter().filter_map(|line| line.x).reduce(f32::min);
+    if let Some(left) = left.filter(|left| *left > 0.0) {
+        setup.margin_left = Some(f64::from(left));
+    }
+    let top = lines.iter().filter_map(|line| line.y).reduce(f32::max);
+    if let Some(top) = top.filter(|top| *top > 0.0) {
+        let margin = height - f64::from(top) - f64::from(body_size);
+        setup.margin_top = (margin > 0.0).then_some(margin);
+    }
+    let right = lines.iter().flat_map(|line| line.runs.iter()).filter_map(|run| run.end).reduce(f32::max);
+    if let Some(right) = right.filter(|right| *right > 0.0) {
+        let margin = width - f64::from(right);
+        setup.margin_right = (margin > 0.0).then_some(margin);
+    }
+    let bottom = lines.iter().filter_map(|line| line.y).reduce(f32::min);
+    if let Some(bottom) = bottom.filter(|bottom| *bottom > 0.0) {
+        let margin = f64::from(bottom) - f64::from(body_size) * 0.2;
+        setup.margin_bottom = (margin > 0.0).then_some(margin);
+    }
+    setup
 }
 
 struct ListEntry {
@@ -345,20 +431,46 @@ fn build_list(entries: &[ListEntry], ordered: bool, tolerance: f32) -> FlowList 
 }
 
 /// Recognise table rows and return their cells plus how many lines were used.
-fn table_at(lines: &[ExtractedLine]) -> Option<(Vec<Vec<String>>, usize)> {
-    let first = split_cells(lines.first()?)?;
-    if first.len() < 2 {
-        return None;
-    }
-    let mut rows = vec![first];
-    let mut index = 1;
-    while let Some(line) = lines.get(index) {
-        let Some(cells) = split_cells(line) else {
+///
+/// The return value is `(rows, consumed, header_start)`: `header_start` is the
+/// offset of the first table row inside `lines`, so the caller can keep the
+/// lines above it in the paragraph flow. The table anchors on the first data
+/// row, whose cells are all filled. Rows above the anchor stay part of the
+/// table when they sit within the row distance the table layout uses, split
+/// into at least two cells, and carry no more cells than the anchor row: a
+/// merged header spans several columns, so its row leaves cells empty where a
+/// span swallows the column text. A plain paragraph above the header either
+/// splits into fewer than two cells or keeps its distance, and stays a
+/// paragraph.
+fn table_at(lines: &[ExtractedLine]) -> Option<(Vec<Vec<String>>, usize, usize)> {
+    let anchor = lines.iter().position(|line| data_cells(line).is_some())?;
+    let width = data_cells(&lines[anchor])?.len();
+    let mut start = anchor;
+    while start > 0 {
+        let above = &lines[start - 1];
+        let below = &lines[start];
+        let Some(cells) = header_cells(above)
+        else {
             break;
         };
-        // Rows may carry fewer text cells than the widest row because a cell
-        // spans columns or rows. Keeping them avoids splitting one table into
-        // fragments, and the merged-cell loss marker records the limitation.
+        if cells.len() > width {
+            break;
+        }
+        if let (Some(above_y), Some(below_y)) = (above.y, below.y)
+            && (above_y - below_y).abs() > above.size.max(below.size).max(1.0) * 2.4
+        {
+            break;
+        }
+        start -= 1;
+    }
+    let mut rows =
+        lines[start..=anchor].iter().filter_map(|line| header_cells(line).or_else(|| data_cells(line))).collect::<Vec<_>>();
+    let mut index = anchor + 1;
+    while let Some(line) = lines.get(index) {
+        let Some(cells) = data_cells(line)
+        else {
+            break;
+        };
         let previous = &lines[index - 1];
         if let (Some(previous_y), Some(y)) = (previous.y, line.y)
             && (previous_y - y).abs() > previous.size.max(line.size).max(1.0) * 2.4
@@ -368,10 +480,23 @@ fn table_at(lines: &[ExtractedLine]) -> Option<(Vec<Vec<String>>, usize)> {
         rows.push(cells);
         index += 1;
     }
-    (rows.len() >= 2).then_some((rows, index))
+    (rows.len() >= 2).then_some((rows, index, start))
 }
 
-fn split_cells(line: &ExtractedLine) -> Option<Vec<String>> {
+/// Cells of a data row: every column carries its own text.
+fn data_cells(line: &ExtractedLine) -> Option<Vec<String>> {
+    let cells = split_cells(line);
+    (cells.len() >= 2 && cells.iter().all(|cell| !cell.is_empty())).then_some(cells)
+}
+
+/// Cells of a merged header row: spans swallow columns, so empty cells appear
+/// where a span covers them, and at least one cell still carries text.
+fn header_cells(line: &ExtractedLine) -> Option<Vec<String>> {
+    let cells = split_cells(line);
+    (cells.len() >= 2 && cells.iter().any(|cell| !cell.is_empty())).then_some(cells)
+}
+
+fn split_cells(line: &ExtractedLine) -> Vec<String> {
     let mut cells = Vec::new();
     let mut current = String::new();
     let mut previous_end: Option<f32> = None;
@@ -386,5 +511,5 @@ fn split_cells(line: &ExtractedLine) -> Option<Vec<String>> {
         previous_end = run.end;
     }
     cells.push(current.trim().to_owned());
-    (cells.len() >= 2 && cells.iter().all(|cell| !cell.is_empty())).then_some(cells)
+    cells
 }

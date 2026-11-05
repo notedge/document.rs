@@ -153,6 +153,22 @@ fn compressed_font_object_stream() -> (Vec<u8>, u32) {
 }
 
 #[test]
+fn a_cm_transform_maps_page_setup_to_page_units() {
+    let font = "/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding";
+    let pdf = single_page_font_pdf(
+        font,
+        "/Font << /F1 4 0 R >>",
+        None,
+        "q 0.5 0 0 0.5 20 400 cm BT /F1 12 Tf 38 800 Td (Body text in a scaled page.) Tj 0 -24 Td (Second body line.) Tj ET Q",
+    );
+    let graph = import_pdf_bytes("scaled-page", &pdf).expect("pdf import");
+    let page = graph.page_setup.expect("page setup");
+
+    assert_eq!(page.base_font_size, Some(6.0), "the transform scales the font size");
+    assert_eq!(page.margin_left, Some(39.0), "the transform maps text x to page x");
+}
+
+#[test]
 fn line_moves_build_one_paragraph_text() {
     let font = "/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding";
     let pdf = single_page_font_pdf(
@@ -346,31 +362,19 @@ fn unresolved_font_fails_closed_with_diagnostic() {
 
 #[test]
 fn simple_font_widths_build_a_word_gap() {
-    let font = "/Type /Font /Subtype /Type1 /BaseFont /Test /Encoding /WinAnsiEncoding /FirstChar 65 /LastChar 66 /Widths [500 500]";
-    let pdf = width_font_pdf(
-        font,
-        None,
-        &[],
-        "BT /F1 10 Tf 1 0 0 1 20 800 Tm (A) Tj 1 0 0 1 60 800 Tm (B) Tj ET",
-    );
+    let font =
+        "/Type /Font /Subtype /Type1 /BaseFont /Test /Encoding /WinAnsiEncoding /FirstChar 65 /LastChar 66 /Widths [500 500]";
+    let pdf = width_font_pdf(font, None, &[], "BT /F1 10 Tf 1 0 0 1 20 800 Tm (A) Tj 1 0 0 1 60 800 Tm (B) Tj ET");
     let graph = import_pdf_bytes("simple-width-gap", &pdf).expect("pdf import");
 
-    assert_eq!(
-        paragraph_texts(&graph),
-        ["A B"],
-        "a gap wider than 0.2 em past the declared advance is a word gap"
-    );
+    assert_eq!(paragraph_texts(&graph), ["A B"], "a gap wider than 0.2 em past the declared advance is a word gap");
 }
 
 #[test]
 fn simple_font_widths_ignore_a_subthreshold_gap() {
-    let font = "/Type /Font /Subtype /Type1 /BaseFont /Test /Encoding /WinAnsiEncoding /FirstChar 65 /LastChar 66 /Widths [500 500]";
-    let pdf = width_font_pdf(
-        font,
-        None,
-        &[],
-        "BT /F1 10 Tf 1 0 0 1 20 800 Tm (A) Tj 1 0 0 1 26 800 Tm (B) Tj ET",
-    );
+    let font =
+        "/Type /Font /Subtype /Type1 /BaseFont /Test /Encoding /WinAnsiEncoding /FirstChar 65 /LastChar 66 /Widths [500 500]";
+    let pdf = width_font_pdf(font, None, &[], "BT /F1 10 Tf 1 0 0 1 20 800 Tm (A) Tj 1 0 0 1 26 800 Tm (B) Tj ET");
     let graph = import_pdf_bytes("simple-width-kerning", &pdf).expect("pdf import");
 
     assert_eq!(paragraph_texts(&graph), ["AB"], "a gap below 0.2 em is kerning, not a word gap");
@@ -414,11 +418,7 @@ fn encoding_cmap_widths_build_a_word_gap() {
     );
     let graph = import_pdf_bytes("cmap-width-gap", &pdf).expect("pdf import");
 
-    assert_eq!(
-        paragraph_texts(&graph),
-        ["A B"],
-        "an embedded encoding CMap must map codes to CIDs and supply `W` widths"
-    );
+    assert_eq!(paragraph_texts(&graph), ["A B"], "an embedded encoding CMap must map codes to CIDs and supply `W` widths");
 }
 
 #[test]

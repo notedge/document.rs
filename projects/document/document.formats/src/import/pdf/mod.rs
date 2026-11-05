@@ -18,17 +18,19 @@ pub mod test_support;
 
 use std::collections::BTreeSet;
 
-use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, NodeId, SemanticStatus, TableCell, TableRow};
+use document_ir::{
+    Block, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, NodeId, SemanticStatus, TableCell, TableRow,
+};
 
 use crate::FormatError;
 
 use self::{
-    content::{extract_text_operators, PageSink},
+    content::{PageSink, extract_text_operators},
     fonts::page_font_maps,
     images::page_images,
-    layout::{page_flow, FlowBlock, FlowList, StyleProfile},
+    layout::{FlowBlock, FlowList, StyleProfile, page_flow, page_setup},
     metadata::{append_image_asset, pdf_metadata, report_unsupported_pdf_structures},
-    objects::{page_content_groups, scan_object_bodies},
+    objects::{page_content_groups, page_media_boxes, scan_object_bodies},
     streams::stream_contents,
 };
 
@@ -87,6 +89,10 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
         });
     }
     let profile = StyleProfile::from_pages(&pages);
+    let page_setup = page_setup(&pages, &profile, &page_media_boxes(&scan.bodies));
+    if page_setup.has_values() {
+        graph.page_setup = Some(page_setup);
+    }
     let mut inferred = InferredStructure::default();
     for page in &pages {
         for block in page_flow(page, &profile) {
@@ -112,7 +118,9 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
     if inferred.headings {
         graph.push_loss(LossMarker {
             code: "import.pdf.heading_level_inferred".into(),
-            message: "heading levels are inferred from font-size rank, the PDF text layer carries no authored heading semantics".into(),
+            message:
+                "heading levels are inferred from font-size rank, the PDF text layer carries no authored heading semantics"
+                    .into(),
             status: SemanticStatus::Partial,
         });
     }

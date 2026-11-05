@@ -155,6 +155,84 @@ fn collect_page_content_groups(bodies: &[(u32, Vec<u8>)], object: u32, result: &
     }
 }
 
+/// Page box sizes in page-tree order, in points.
+///
+/// A `/MediaBox` may be inherited from a `/Pages` node, so the walk carries the
+/// nearest declared box down the tree. A page without any box is skipped rather
+/// than given a guessed size.
+pub(crate) fn page_media_boxes(bodies: &[(u32, Vec<u8>)]) -> Vec<(f64, f64)> {
+    let mut result = Vec::new();
+    if let Some((_, catalog)) = bodies.iter().find(|(_, body)| dictionary_type_is(body, b"/Catalog")) {
+        if let Some(pages) = body_reference(catalog, b"/Pages") {
+            collect_page_boxes(bodies, pages, None, &mut result, &mut Vec::new());
+            if !result.is_empty() {
+                return result;
+            }
+        }
+    }
+    bodies
+        .iter()
+        .filter(|(_, body)| dictionary_type_is(body, b"/Page"))
+        .filter_map(|(_, body)| media_box(body, bodies))
+        .collect()
+}
+
+fn collect_page_boxes(
+    bodies: &[(u32, Vec<u8>)],
+    object: u32,
+    inherited: Option<(f64, f64)>,
+    result: &mut Vec<(f64, f64)>,
+    visited: &mut Vec<u32>,
+) {
+    if visited.contains(&object) {
+        return;
+    }
+    visited.push(object);
+    let Some(body) = bodies.iter().find(|(id, _)| *id == object).map(|(_, body)| body)
+    else {
+        return;
+    };
+    let page_box = media_box(body, bodies).or(inherited);
+    if dictionary_type_is(body, b"/Page") {
+        if let Some(page_box) = page_box {
+            result.push(page_box);
+        }
+        return;
+    }
+    for child in body_reference_values(body, b"/Kids").unwrap_or_default() {
+        collect_page_boxes(bodies, child, page_box, result, visited);
+    }
+}
+
+/// Reads one `/MediaBox` as `(width, height)` in points.
+fn media_box(body: &[u8], bodies: &[(u32, Vec<u8>)]) -> Option<(f64, f64)> {
+    let position = body.windows(9).position(|window| window == b"/MediaBox")?;
+    let start = skip_space(body, position + 9);
+    let slice = body.get(start..)?;
+    if slice.first() == Some(&b'[') {
+        let end = slice.iter().position(|byte| *byte == b']')?;
+        return parse_media_box(&slice[1..end]);
+    }
+    let id = reference_ids(slice).first().copied()?;
+    let referred = bodies.iter().find(|(object, _)| *object == id).map(|(_, body)| body)?;
+    let start = referred.iter().position(|byte| *byte == b'[')?;
+    let end = referred.get(start..)?.iter().position(|byte| *byte == b']')? + start;
+    parse_media_box(&referred[start + 1..end])
+}
+
+fn parse_media_box(values: &[u8]) -> Option<(f64, f64)> {
+    let numbers = split_pdf_whitespace(values)
+        .filter_map(|token| std::str::from_utf8(token).ok()?.parse::<f64>().ok())
+        .collect::<Vec<_>>();
+    let [x0, y0, x1, y1] = numbers.as_slice()
+    else {
+        return None;
+    };
+    let width = x1 - x0;
+    let height = y1 - y0;
+    (width > 0.0 && height > 0.0).then_some((width, height))
+}
+
 pub(crate) fn body_reference(body: &[u8], key: &[u8]) -> Option<u32> {
     body_reference_values(body, key)?.into_iter().next()
 }

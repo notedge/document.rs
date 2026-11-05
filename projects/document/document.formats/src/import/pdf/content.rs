@@ -51,22 +51,88 @@ struct RunGeometry {
     end: Option<f32>,
 }
 
+/// Text-space to page-space mapping from the content stream's `cm` stack.
+///
+/// PDF writers draw a page through a concatenated matrix, so glyph positions
+/// and sizes in the stream are not page units. Applying the matrix keeps the
+/// recorded geometry comparable with the media box, which is what page setup
+/// inference needs.
+#[derive(Clone, Copy)]
+pub(crate) struct TextTransform {
+    matrix: [f32; 6],
+}
+
+impl TextTransform {
+    fn identity() -> Self {
+        Self { matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }
+    }
+
+    /// Concatenates a `cm` operand, applying it before the current matrix.
+    fn concat(self, matrix: [f32; 6]) -> Self {
+        let [a, b, c, d, e, f] = matrix;
+        let [na, nb, nc, nd, ne, nf] = self.matrix;
+        Self {
+            matrix: [
+                a * na + b * nc,
+                a * nb + b * nd,
+                c * na + d * nc,
+                c * nb + d * nd,
+                e * na + f * nc + ne,
+                e * nb + f * nd + nf,
+            ],
+        }
+    }
+
+    fn geometry(self, geometry: RunGeometry) -> RunGeometry {
+        let scale = self.scale();
+        let anchor = geometry.y.unwrap_or(0.0);
+        RunGeometry {
+            x: geometry.x.map(|x| self.point(x, anchor).0),
+            y: geometry.y.map(|y| self.point(geometry.x.unwrap_or(0.0), y).1),
+            size: geometry.size * scale,
+            end: geometry.end.map(|end| self.point(end, anchor).0),
+        }
+    }
+
+    fn point(self, x: f32, y: f32) -> (f32, f32) {
+        let [a, b, c, d, e, f] = self.matrix;
+        (a * x + c * y + e, b * x + d * y + f)
+    }
+
+    /// Uniform scale factor of the matrix.
+    fn scale(self) -> f32 {
+        let [a, b, c, d, _, _] = self.matrix;
+        (a * d - b * c).abs().sqrt()
+    }
+}
+
 /// Rebuilds visual lines from glyph runs while a page is walked.
 ///
 /// Text operators only move a pen, so lines are lost unless every run brings
 /// its own baseline and size. The sink keeps the current line open across the
 /// `BT`/`ET` blocks and content streams that writers split a line into.
+///
+/// Runs arrive in text-space units. The active text transform maps them to
+/// page units, so a page drawn under a `cm` scale records the geometry a
+/// reader sees instead of the writer's internal coordinates.
 pub(crate) struct PageSink {
     items: Vec<PageItem>,
     current: Option<ExtractedLine>,
+    transform: TextTransform,
 }
 
 impl PageSink {
     pub(crate) fn new() -> Self {
-        Self { items: Vec::new(), current: None }
+        Self { items: Vec::new(), current: None, transform: TextTransform::identity() }
+    }
+
+    /// Sets the text transform currently in effect in the content stream.
+    pub(crate) fn set_transform(&mut self, transform: TextTransform) {
+        self.transform = transform;
     }
 
     fn text(&mut self, text: String, geometry: RunGeometry) {
+        let geometry = self.transform.geometry(geometry);
         for (index, segment) in text.split('\n').enumerate() {
             if index > 0 {
                 self.flush_line();
@@ -140,6 +206,9 @@ pub(crate) fn extract_text_operators(
     let mut positioned = false;
     let mut separation = Separation::None;
     let mut last_char: Option<char> = None;
+    let mut transform = TextTransform::identity();
+    let mut transform_stack: Vec<TextTransform> = Vec::new();
+    sink.set_transform(transform);
     while cursor < stream.len() {
         if stream[cursor..].starts_with(b"BI")
             && (cursor == 0 || stream[cursor - 1].is_ascii_whitespace())
@@ -346,6 +415,17 @@ pub(crate) fn extract_text_operators(
                 positioned = false;
                 cursor += 2;
             }
+            b'q' if cursor == 0 || pdf_delimiter(stream[cursor - 1]) => {
+                transform_stack.push(transform);
+                cursor += 1;
+            }
+            b'Q' if cursor == 0 || pdf_delimiter(stream[cursor - 1]) => {
+                if let Some(previous) = transform_stack.pop() {
+                    transform = previous;
+                    sink.set_transform(transform);
+                }
+                cursor += 1;
+            }
             b'T' if (cursor == 0 || pdf_delimiter(stream[cursor - 1])) && pdf_operator_at(stream, cursor, b"T*") => {
                 separation = Separation::Line;
                 text_position = None;
@@ -377,6 +457,10 @@ pub(crate) fn extract_text_operators(
                             note_text_position(&mut text_position, next, font_size, &mut separation);
                             text_block_start = false;
                             positioned = true;
+                        }
+                        TextPosition::ConcatMatrix if values.len() >= 6 => {
+                            transform = transform.concat([values[0], values[1], values[2], values[3], values[4], values[5]]);
+                            sink.set_transform(transform);
                         }
                         _ => {}
                     }
@@ -423,8 +507,6 @@ fn note_geometric_gap(start: Option<f32>, pen_end: Option<f32>, font_size: f32, 
         *separation = (*separation).max(Separation::Space);
     }
 }
-
-
 
 /// Pen end after a run, or `None` when its start or advance is unknown.
 fn pen_after_run(start: Option<f32>, advance: Option<f32>, font_size: f32) -> Option<f32> {
@@ -506,9 +588,10 @@ fn text_font_operator(stream: &[u8], cursor: usize) -> Option<(String, f32, usiz
 enum TextPosition {
     Translate,
     Matrix,
+    ConcatMatrix,
 }
 
-/// Parse a numeric prefix followed by `Td`, `TD` or `Tm`.
+/// Parse a numeric prefix followed by `Td`, `TD`, `Tm` or `cm`.
 fn text_position_operator(stream: &[u8], cursor: usize) -> Option<(Vec<f32>, TextPosition, usize)> {
     let mut values = Vec::new();
     let mut position = cursor;
@@ -530,6 +613,9 @@ fn text_position_operator(stream: &[u8], cursor: usize) -> Option<(Vec<f32>, Tex
     }
     else if pdf_operator_at(stream, operator, b"Td") || pdf_operator_at(stream, operator, b"TD") {
         Some((values, TextPosition::Translate, operator + 2))
+    }
+    else if values.len() >= 6 && pdf_operator_at(stream, operator, b"cm") {
+        Some((values, TextPosition::ConcatMatrix, operator + 2))
     }
     else {
         None
