@@ -28,6 +28,12 @@ const EDGE_LABEL_TEXT: Color = DIAGRAM_THEME.light.edge_label_text;
 const LIFELINE_COLOR: Color = DIAGRAM_THEME.light.edge_stroke;
 const ROUND_RADIUS: f64 = 5.0;
 const CLUSTER_RADIUS: f64 = 10.0;
+/// Dash lengths in scene units, shared by every diagram backend.
+const DASH_PATTERN: [f64; 2] = [3.0, 3.0];
+/// Dot lengths in scene units, shared by every diagram backend.
+const DOT_PATTERN: [f64; 2] = [1.0, 3.0];
+/// Stroke width used by thick and bold edges.
+const BOLD_EDGE_WIDTH: f64 = 2.5;
 const LINE_HEIGHT: f64 = 1.4;
 const BASELINE_SHIFT: f64 = 0.35;
 const ARROW_SIZE: f64 = 8.0;
@@ -231,6 +237,9 @@ fn push_node(scene: &mut SemanticScene, node: &PlacedNode) {
 }
 
 fn push_node_label(scene: &mut SemanticScene, node: &PlacedNode, options: &RenderOptions) {
+    if matches!(node.shape, NodeShape::Point) {
+        return;
+    }
     let source = SourceRef::element(node.id.clone());
     push_centered_text(
         scene,
@@ -274,6 +283,7 @@ fn label_backdrop_style() -> ShapeStyle {
         fill: Some(DIAGRAM_THEME.light.edge_label_bg),
         stroke: None,
         stroke_width: 0.0,
+        dash: None,
         opacity: EDGE_LABEL_BG_OPACITY,
     }
 }
@@ -331,8 +341,144 @@ fn node_shape(node: &PlacedNode) -> SemanticNode {
             SemanticKind::Ellipse { center: node.rect.center(), radii: Size::new(radius, radius), style }
         }
         NodeShape::Rhombus => SemanticKind::Path { path: rhombus_path(node.rect), style },
+        NodeShape::Hexagon => SemanticKind::Path { path: hexagon_path(node.rect), style },
+        NodeShape::Triangle => SemanticKind::Path { path: triangle_path(node.rect), style },
+        NodeShape::Star => SemanticKind::Path { path: star_path(node.rect), style },
+        NodeShape::Trapezium => SemanticKind::Path { path: trapezium_path(node.rect), style },
+        NodeShape::Parallelogram => SemanticKind::Path { path: parallelogram_path(node.rect), style },
+        NodeShape::Note => SemanticKind::Group { children: note_children(&node.id, node.rect, style), opacity: 1.0 },
+        NodeShape::Point => {
+            let radius = node.rect.width.min(node.rect.height) * 0.5;
+            SemanticKind::Ellipse {
+                center: node.rect.center(),
+                radii: Size::new(radius, radius),
+                style: ShapeStyle { fill: Some(NODE_STROKE), stroke: None, ..ShapeStyle::default() },
+            }
+        }
+        NodeShape::DoubleCircle => SemanticKind::Group { children: double_circle_children(&node.id, node.rect, style), opacity: 1.0 },
+        NodeShape::Component => SemanticKind::Group { children: component_children(&node.id, node.rect, style), opacity: 1.0 },
+        NodeShape::Ellipse => {
+            SemanticKind::Ellipse { center: node.rect.center(), radii: Size::new(node.rect.width * 0.5, node.rect.height * 0.5), style }
+        }
+        NodeShape::Plaintext => {
+            SemanticKind::Rect { rect: node.rect, style: ShapeStyle { fill: None, stroke: None, ..ShapeStyle::default() } }
+        }
     };
     SemanticNode::new(kind)
+}
+
+fn polygon_path(points: &[Point]) -> PathData {
+    let mut path = PathData::new();
+    if let Some((first, rest)) = points.split_first() {
+        path = path.move_to(*first);
+        for point in rest {
+            path = path.line_to(*point);
+        }
+        path = path.close();
+    }
+    path
+}
+
+fn hexagon_path(rect: Rect) -> PathData {
+    let inset = rect.width * 0.25;
+    let center = rect.center();
+    polygon_path(&[
+        Point::new(rect.x + inset, rect.y),
+        Point::new(rect.right() - inset, rect.y),
+        Point::new(rect.right(), center.y),
+        Point::new(rect.right() - inset, rect.bottom()),
+        Point::new(rect.x + inset, rect.bottom()),
+        Point::new(rect.x, center.y),
+    ])
+}
+
+fn triangle_path(rect: Rect) -> PathData {
+    let center = rect.center();
+    polygon_path(&[Point::new(center.x, rect.y), Point::new(rect.right(), rect.bottom()), Point::new(rect.x, rect.bottom())])
+}
+
+fn star_path(rect: Rect) -> PathData {
+    let center = rect.center();
+    let outer = rect.width.min(rect.height) * 0.5;
+    let inner = outer * 0.382;
+    let mut points = Vec::with_capacity(10);
+    for index in 0..10 {
+        let radius = if index % 2 == 0 { outer } else { inner };
+        let angle = -std::f64::consts::FRAC_PI_2 + std::f64::consts::PI * index as f64 / 5.0;
+        points.push(Point::new(center.x + radius * angle.cos(), center.y + radius * angle.sin()));
+    }
+    polygon_path(&points)
+}
+
+fn trapezium_path(rect: Rect) -> PathData {
+    let inset = rect.width * 0.2;
+    polygon_path(&[
+        Point::new(rect.x + inset, rect.y),
+        Point::new(rect.right() - inset, rect.y),
+        Point::new(rect.right(), rect.bottom()),
+        Point::new(rect.x, rect.bottom()),
+    ])
+}
+
+fn parallelogram_path(rect: Rect) -> PathData {
+    let slant = rect.width * 0.2;
+    polygon_path(&[
+        Point::new(rect.x + slant, rect.y),
+        Point::new(rect.right(), rect.y),
+        Point::new(rect.right() - slant, rect.bottom()),
+        Point::new(rect.x, rect.bottom()),
+    ])
+}
+
+fn note_children(id: &str, rect: Rect, style: ShapeStyle) -> Vec<SemanticNode> {
+    let fold = (rect.width.min(rect.height) * 0.25).clamp(2.0, 10.0);
+    let outline = polygon_path(&[
+        Point::new(rect.x, rect.y),
+        Point::new(rect.right() - fold, rect.y),
+        Point::new(rect.right(), rect.y + fold),
+        Point::new(rect.right(), rect.bottom()),
+        Point::new(rect.x, rect.bottom()),
+    ]);
+    vec![
+        SemanticNode::new(SemanticKind::Path { path: outline, style: style.clone() })
+            .with_id(format!("node-{id}-outline")),
+        SemanticNode::new(SemanticKind::Line {
+            from: Point::new(rect.right() - fold, rect.y),
+            to: Point::new(rect.right(), rect.y + fold),
+            style,
+        })
+        .with_id(format!("node-{id}-fold")),
+    ]
+}
+
+fn double_circle_children(id: &str, rect: Rect, style: ShapeStyle) -> Vec<SemanticNode> {
+    let outer = Size::new(rect.width * 0.5, rect.height * 0.5);
+    let inner = Size::new((rect.width * 0.5 - 2.0).max(1.0), (rect.height * 0.5 - 2.0).max(1.0));
+    vec![
+        SemanticNode::new(SemanticKind::Ellipse { center: rect.center(), radii: outer, style: style.clone() })
+            .with_id(format!("node-{id}-outer")),
+        SemanticNode::new(SemanticKind::Ellipse { center: rect.center(), radii: inner, style })
+            .with_id(format!("node-{id}-inner")),
+    ]
+}
+
+fn component_children(id: &str, rect: Rect, style: ShapeStyle) -> Vec<SemanticNode> {
+    let ear_width = (rect.width * 0.12).clamp(2.0, 6.0);
+    let ear_height = (rect.height * 0.18).clamp(3.0, 8.0);
+    let body = Rect::new(rect.x + ear_width, rect.y, (rect.width - ear_width).max(0.0), rect.height);
+    vec![
+        SemanticNode::new(SemanticKind::Rect { rect: body, style: style.clone() }).with_id(format!("node-{id}-body")),
+        SemanticNode::new(SemanticKind::Rect {
+            rect: Rect::new(rect.x, rect.y + rect.height * 0.28 - ear_height * 0.5, ear_width, ear_height),
+            style: style.clone(),
+        })
+        .with_id(format!("node-{id}-ear-top")),
+        SemanticNode::new(SemanticKind::Rect {
+            rect: Rect::new(rect.x, rect.y + rect.height * 0.72 - ear_height * 0.5, ear_width, ear_height),
+            style,
+        })
+        .with_id(format!("node-{id}-ear-bottom")),
+    ]
 }
 
 fn cylinder_children(id: &str, rect: Rect, style: ShapeStyle) -> Vec<SemanticNode> {
@@ -367,19 +513,23 @@ fn rhombus_path(rect: Rect) -> PathData {
 }
 
 fn node_style() -> ShapeStyle {
-    ShapeStyle { fill: Some(NODE_FILL), stroke: Some(NODE_STROKE), stroke_width: 1.0, opacity: 1.0 }
+    ShapeStyle { fill: Some(NODE_FILL), stroke: Some(NODE_STROKE), stroke_width: 1.0, dash: None, opacity: 1.0 }
 }
 
 fn cluster_style() -> ShapeStyle {
-    ShapeStyle { fill: Some(CLUSTER_FILL), stroke: Some(CLUSTER_STROKE), stroke_width: 1.0, opacity: 1.0 }
+    ShapeStyle { fill: Some(CLUSTER_FILL), stroke: Some(CLUSTER_STROKE), stroke_width: 1.0, dash: None, opacity: 1.0 }
 }
 
 fn edge_style(style: EdgeStyle) -> ShapeStyle {
-    let width = match style {
-        EdgeStyle::ThickArrow => 2.5,
-        _ => 1.0,
+    let (width, dash) = match style {
+        EdgeStyle::ThickArrow | EdgeStyle::BoldArrow | EdgeStyle::BoldLine => (BOLD_EDGE_WIDTH, None),
+        EdgeStyle::DashedArrow | EdgeStyle::DashedLine => (1.0, Some(DASH_PATTERN)),
+        EdgeStyle::DottedArrow | EdgeStyle::DottedLine => (1.0, Some(DOT_PATTERN)),
+        _ => (1.0, None),
     };
-    ShapeStyle::stroked(EDGE_COLOR, width)
+    let mut paint = ShapeStyle::stroked(EDGE_COLOR, width);
+    paint.dash = dash;
+    paint
 }
 
 fn label_text_style(font_size: f64, fill: Color) -> TextStyle {
@@ -398,7 +548,9 @@ fn has_arrow(style: EdgeStyle) -> bool {
         style,
         EdgeStyle::Arrow
             | EdgeStyle::DottedArrow
+            | EdgeStyle::DashedArrow
             | EdgeStyle::ThickArrow
+            | EdgeStyle::BoldArrow
             | EdgeStyle::HollowArrow
             | EdgeStyle::FilledDiamond
             | EdgeStyle::HollowDiamond

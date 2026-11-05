@@ -35,6 +35,28 @@ pub enum NodeShape {
     Circle,
     /// A decision diamond.
     Rhombus,
+    /// A hexagon with horizontal top and bottom edges.
+    Hexagon,
+    /// An isosceles triangle with its base at the bottom.
+    Triangle,
+    /// A five-pointed star.
+    Star,
+    /// A trapezium that is narrower at the top than at the bottom.
+    Trapezium,
+    /// A parallelogram leaning to the right.
+    Parallelogram,
+    /// A rectangle with a folded top-right corner.
+    Note,
+    /// A small filled dot without a label.
+    Point,
+    /// Two concentric circles.
+    DoubleCircle,
+    /// A rectangle with two vertical ears on the left side.
+    Component,
+    /// An ellipse filling the node rectangle.
+    Ellipse,
+    /// A text-only node with no outline or fill.
+    Plaintext,
 }
 
 /// How an edge is stroked.
@@ -49,10 +71,15 @@ pub enum EdgeStyle {
     /// A thick line with an arrow head.
     ThickArrow,
     /// A dotted line without an arrow head.
-    ///
-    /// The current scene surface has no dash attribute, so this style is
-    /// lowered as a solid line and reported as an approximation.
     DottedLine,
+    /// A dashed line with an arrow head.
+    DashedArrow,
+    /// A dashed line without an arrow head.
+    DashedLine,
+    /// A bold line with an arrow head.
+    BoldArrow,
+    /// A bold line without an arrow head.
+    BoldLine,
     /// A solid line ending in a hollow arrow head.
     ///
     /// Class inheritance uses this style so the superclass end stays distinct

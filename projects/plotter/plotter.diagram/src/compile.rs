@@ -239,17 +239,6 @@ pub fn compile_layered_with_source(spec: &DiagramSpec, options: &LayoutOptions, 
         let label_box = label
             .as_ref()
             .map(|label| estimate_label_box(label, polyline_midpoint(&points), edge_label_font_size(options.font_size)));
-        if matches!(edge.style, EdgeStyle::DottedArrow | EdgeStyle::DottedLine) {
-            diagnostics.push(located(
-                codes::APPROXIMATED,
-                format!(
-                    "dotted edge `{}->{}` is rendered as a solid line because the scene style has no dash surface",
-                    edge.from.node, edge.to.node
-                ),
-                source.edge(edge.spec_index),
-                source,
-            ));
-        }
         routed.push(RoutedEdge { from: edge.from.clone(), to: edge.to.clone(), points, label, label_box, style: edge.style });
     }
 
@@ -352,8 +341,6 @@ pub fn compile_layered_with_source(spec: &DiagramSpec, options: &LayoutOptions, 
 ///   diagnostic.
 /// - A self message is skipped with a diagnostic because the row layout has no
 ///   loop route.
-/// - A dotted message is drawn as a solid line because the scene style has no
-///   dash surface, with an approximation diagnostic.
 /// - Cluster and ordering-constraint declarations are ignored with a diagnostic
 ///   because sequence rows come from source position.
 pub fn compile_sequence(spec: &DiagramSpec, options: &LayoutOptions) -> DiagramLayoutPlan {
@@ -494,17 +481,6 @@ fn compile_time_ordered(
                 edge_label_font_size(options.font_size),
             )
         });
-        if matches!(edge.style, EdgeStyle::DottedArrow | EdgeStyle::DottedLine) {
-            diagnostics.push(located(
-                codes::APPROXIMATED,
-                format!(
-                    "dotted sequence message `{}->{}` is rendered as a solid line because the scene style has no dash surface",
-                    edge.from.node, edge.to.node
-                ),
-                source.edge(edge_index),
-                source,
-            ));
-        }
         messages.push(RoutedEdge {
             from: edge.from.clone(),
             to: edge.to.clone(),
@@ -1009,9 +985,15 @@ fn label_size(label: &str, shape: NodeShape, options: &LayoutOptions) -> Size {
     let widest = lines.iter().map(|line| measure_line(line, options.font_size)).fold(0.0, f64::max);
     let width = (widest + options.padding_x * 2.0).max(options.min_node_width);
     let height = (lines.len() as f64 * options.font_size * 1.4 + options.padding_y * 2.0).max(options.min_node_height);
-    if matches!(shape, NodeShape::Circle) {
+    if matches!(shape, NodeShape::Circle | NodeShape::DoubleCircle) {
         let side = width.max(height);
         Size::new(side, side)
+    }
+    else if matches!(shape, NodeShape::Point) {
+        Size::new(8.0, 8.0)
+    }
+    else if matches!(shape, NodeShape::Plaintext) {
+        Size::new(widest, lines.len() as f64 * options.font_size * 1.4)
     }
     else {
         Size::new(width, height)
