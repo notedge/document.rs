@@ -26,3 +26,8 @@ jobs:
         run: cargo build --release
       - name: Tests
         run: cargo test --release
+      # `document.formats` defaults to `markdown` only, so the `docx`, `pdf`
+      # and `epub` export paths were never compiled by the steps above even
+      # though the capability table publishes them as `Partial`.
+      - name: Feature matrix (docx, pdf, epub, html)
+        run: cargo test -p document-formats --all-features --release
