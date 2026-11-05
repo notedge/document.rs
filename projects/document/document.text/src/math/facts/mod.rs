@@ -327,3 +327,42 @@ fn extract_extended_shapes(info: &MathGlyphInfo) -> Vec<GlyphId> {
     shapes.dedup();
     shapes
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glyph_for_char_resolves_through_the_font_character_map() {
+        let facts = MathFontFacts::embedded().expect("the embedded font must carry a MATH table");
+        assert_eq!(facts.units_per_em(), 1000, "Latin Modern Math is a 1000 unit font");
+        let paren = facts.glyph_for_char('(').expect("the font maps '('");
+        assert_eq!(facts.glyph_for_char('('), Some(paren), "the mapping is stable");
+        assert_eq!(facts.glyph_for_char('\u{10FFFF}'), None, "unmapped characters must not invent a glyph");
+    }
+
+    #[test]
+    fn font_without_a_math_table_reports_nothing() {
+        assert!(MathFontFacts::from_bytes(b"not a font").is_none(), "unparsable bytes must not answer with facts");
+        assert!(MathFontFacts::from_bytes(&[]).is_none(), "empty input must not answer with facts");
+    }
+
+    #[test]
+    fn a_face_that_is_already_parsed_answers_the_same_facts() {
+        let bytes = MathFontFamily::builtin_default().and_then(|family| family.bytes()).expect("a math font is embedded");
+        let from_bytes = MathFontFacts::from_bytes(bytes).expect("the embedded font carries a MATH table");
+        let mut face = FontFace::load(bytes).expect("the embedded font must load");
+        let from_face = MathFontFacts::from_face(&mut face).expect("the parsed face carries a MATH table");
+
+        assert_eq!(from_face.units_per_em(), from_bytes.units_per_em());
+        assert_eq!(
+            from_face.variants().vertical_constructions().count(),
+            from_bytes.variants().vertical_constructions().count(),
+            "both entry points must read the same coverage"
+        );
+        assert_eq!(from_face.glyph_for_char('('), from_bytes.glyph_for_char('('), "the character maps agree");
+        let f = from_face.glyph_for_char('f').expect("the font maps 'f'");
+        assert!(from_face.italic_correction(f).is_some(), "this font publishes 'f''s italic correction");
+        assert_eq!(from_face.italic_correction(f), from_bytes.italic_correction(f), "the glyph facts agree");
+    }
+}

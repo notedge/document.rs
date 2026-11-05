@@ -556,3 +556,155 @@ fn glyph_outline(face: &mut FontFace, gid: u16, one_em: f64) -> Option<String> {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use document_compose::math::MathConstant;
+
+    // Real OTF payloads live in VuTeX. These probes need `install_math_font`
+    // from the host product and are exercised there, not in document.rs CI.
+
+    #[test]
+    #[ignore = "math fonts are owned by VuTeX"]
+    fn opentype_parses_and_has_constants() {
+        let data = opentype_font_metrics(MathFontFamily::LmMath).expect("font should parse and expose MATH table");
+        assert!(data.constants.contains_key(&MathConstant::AxisHeight));
+        assert!(data.constants.contains_key(&MathConstant::FractionRuleThickness));
+        assert!(data.constants.contains_key(&MathConstant::SuperscriptShiftUp));
+
+        let ah = data.constants[&MathConstant::AxisHeight].to_f64();
+        assert!((0.15..0.35).contains(&ah), "AxisHeight={ah} out of range");
+
+        let frt = data.constants[&MathConstant::FractionRuleThickness].to_f64();
+        assert!((0.01..0.12).contains(&frt), "FractionRuleThickness={frt} out of range");
+    }
+
+    #[test]
+    #[ignore = "math fonts are owned by VuTeX"]
+    fn opentype_has_glyph_metrics() {
+        let data = opentype_font_metrics(MathFontFamily::LmMath).expect("font should parse");
+        let family = Some("latin-modern-math".to_string());
+        let key = GlyphKey::from_char('x', family, FontStyle::Math);
+        let m = data.glyphs.get(&key).expect("glyph 'x' should exist");
+        assert!(m.width.to_f64() > 0.3, "width of 'x' should be > 0.3 em");
+        assert!(m.height.to_f64() > 0.3, "height of 'x' should be > 0.3 em");
+    }
+
+    #[test]
+    #[ignore = "math fonts are owned by VuTeX"]
+    fn opentype_has_outline_paths_for_common_glyphs() {
+        let data = opentype_font_metrics(MathFontFamily::LmMath).expect("font should parse");
+        let family = Some("latin-modern-math".to_string());
+        let key_a = GlyphKey::from_char('A', family.clone(), FontStyle::Math);
+        let path_a = data.glyph_paths.get(&key_a).expect("glyph 'A' should have an SVG path");
+        assert!(path_a.contains('M'), "path should start with a move");
+        assert!(path_a.contains('L') || path_a.contains('C') || path_a.contains('Q'), "path should have drawing segments");
+        let key_sqrt = GlyphKey::from_char('√', family, FontStyle::Math);
+        let path_sqrt = data.glyph_paths.get(&key_sqrt).expect("glyph '√' should have an SVG path");
+        assert!(!path_sqrt.is_empty(), "√ path should not be empty");
+    }
+
+    #[test]
+    #[ignore = "math fonts are owned by VuTeX"]
+    fn opentype_has_delimiter_variants() {
+        let data = opentype_font_metrics(MathFontFamily::LmMath).expect("font should parse");
+        let family = Some("latin-modern-math".to_string());
+        let key_paren = GlyphKey::from_char('(', family, FontStyle::Math);
+        let c = data.delimiters.get(&key_paren).expect("'(' should have a construction");
+        assert!(!c.variants.is_empty(), "'(' should have variants");
+        assert!(c.variants.len() >= 3, "'(' should have at least 3 variants, got {}", c.variants.len());
+    }
+
+    #[test]
+    #[ignore = "math fonts are owned by VuTeX"]
+    fn opentype_covers_every_accent_the_parser_emits() {
+        let data = opentype_font_metrics(MathFontFamily::LmMath).expect("font should parse");
+        let family = Some("latin-modern-math".to_string());
+        // `\hat`, `\bar`, `\vec`, `\tilde`, `\dot` and `\ddot`, in that order.
+        for ch in ['ˆ', '¯', '→', '˜', '˙', '¨'] {
+            let normal = GlyphKey::from_char(ch, family.clone(), FontStyle::Normal);
+            let metrics = data.glyphs.get(&normal).unwrap_or_else(|| panic!("'{ch}' should carry metrics"));
+            assert!(metrics.width.to_f64() > 0.2, "'{ch}' advance {} is too narrow", metrics.width.to_f64());
+            assert!(metrics.height.to_f64() > 0.4, "'{ch}' ink tops out at {} em", metrics.height.to_f64());
+            let path = data.glyph_paths.get(&normal).unwrap_or_else(|| panic!("'{ch}' should carry an outline"));
+            assert!(path.contains('M'), "'{ch}' outline should start with a move: {path}");
+        }
+    }
+
+    /// Vertical delimiter variants advance by their `hmtx` width, not by the
+    /// height they span in the stacking direction.
+    ///
+    /// Oracle: the font is re-parsed here and every reported width is compared
+    /// against `glyph_hor_advance`. The MATH `advance_measurement` of at least
+    /// one variant is also required to exceed that advance, so this test keeps
+    /// failing if a vertical measurement is ever mixed back into the width.
+    #[test]
+    #[ignore = "math fonts are owned by VuTeX"]
+    fn vertical_delimiter_variants_advance_by_their_hmtx_width() {
+        let data = opentype_font_metrics(MathFontFamily::LmMath).expect("font should parse");
+        let mut face = FontFace::load(MathFontFamily::LmMath.bytes().expect("installed")).expect("font should load");
+        let one_em = face.units_per_em() as f64;
+        let math = face.math().cloned().expect("MATH table");
+        let family = Some("latin-modern-math".to_string());
+
+        let mut widest_measurement_gap = 0.0f64;
+        for ch in ['(', ')', '[', ']', '{', '}', '|'] {
+            let gid = face.glyph_index(ch).expect("delimiter should exist in the font");
+            let construction = math.variants.vert_constructions.get(&gid).expect("vertical construction");
+            let key = GlyphKey::from_char(ch, family.clone(), FontStyle::Math);
+            let reported = data.delimiters.get(&key).expect("extracted construction");
+            assert_eq!(
+                reported.variants.len(),
+                construction.variants.len(),
+                "`{ch}`: every prepared variant must be extracted"
+            );
+
+            for (source, extracted) in construction.variants.iter().zip(&reported.variants) {
+                let hmtx = face.glyph_hor_advance(source.variant_glyph).expect("variant hmtx") as f64 / one_em;
+                let metrics = data.glyphs.get(&extracted.glyph).expect("variant metrics");
+                let width = metrics.width.to_f64();
+                assert!(
+                    (width - hmtx).abs() < 1e-4,
+                    "`{ch}` variant {:?}: width {width} must equal the hmtx advance {hmtx}",
+                    source.variant_glyph
+                );
+                widest_measurement_gap = widest_measurement_gap.max(source.advance_measurement as f64 / one_em - hmtx);
+            }
+
+            if let Some(assembly) = &construction.assembly {
+                for (source, component) in assembly.parts.iter().zip(&reported.components) {
+                    let hmtx = face.glyph_hor_advance(source.glyph_id).expect("part hmtx") as f64 / one_em;
+                    let metrics = data.glyphs.get(&component.glyph).expect("part metrics");
+                    let width = metrics.width.to_f64();
+                    assert!(
+                        (width - hmtx).abs() < 1e-4,
+                        "`{ch}` assembly part {:?}: width {width} must equal the hmtx advance {hmtx}",
+                        source.glyph_id
+                    );
+                    widest_measurement_gap = widest_measurement_gap.max(source.full_advance as f64 / one_em - hmtx);
+                }
+            }
+        }
+
+        assert!(
+            widest_measurement_gap > 1.0,
+            "no variant's stacking advance exceeds its hmtx width by an em, so this test proves nothing"
+        );
+    }
+
+    #[test]
+    fn svg_path_builder_normalizes_coords() {
+        let mut builder = SvgPathBuilder::new(1000.0);
+        builder.move_to(0.0, 0.0);
+        builder.line_to(500.0, 0.0);
+        builder.line_to(500.0, 500.0);
+        builder.line_to(0.0, 500.0);
+        builder.close();
+        let path = builder.finish();
+        assert!(path.contains("M 0.0000,0.0000"));
+        assert!(path.contains("L 0.5000,0.0000"));
+        assert!(path.contains("L 0.5000,0.5000"));
+        assert!(path.contains("Z"));
+    }
+}

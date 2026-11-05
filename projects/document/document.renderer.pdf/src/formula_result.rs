@@ -308,3 +308,138 @@ fn build_minimal_pdf(page_w: f64, page_h: f64, content: &str) -> Vec<u8> {
     out.extend_from_slice(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n").as_bytes());
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use document_compose::math::{Fixed, FormulaMetrics, PaintNode, formula_layout::BBox};
+
+    fn rect_result() -> FormulaLayoutResult {
+        FormulaLayoutResult {
+            metrics: FormulaMetrics {
+                width: Fixed::from_f64(100.0),
+                height: Fixed::from_f64(20.0),
+                depth: Fixed::from_f64(5.0),
+                axis: Fixed::ZERO,
+                ink_bounds: BBox {
+                    x: Fixed::from_f64(10.0),
+                    y: Fixed::ZERO,
+                    width: Fixed::from_f64(80.0),
+                    height: Fixed::from_f64(15.0),
+                },
+            },
+            paint: PaintNode::Group {
+                children: vec![PaintNode::Rect {
+                    x: Fixed::from_f64(10.0),
+                    y: Fixed::ZERO,
+                    width: Fixed::from_f64(80.0),
+                    height: Fixed::from_f64(15.0),
+                    stroke_width: Fixed::ZERO,
+                    baseline: Fixed::from_f64(15.0),
+                }],
+                translate_x: Fixed::ZERO,
+                translate_y: Fixed::ZERO,
+            },
+            diagnostics: Vec::new(),
+            fonts: document_compose::math::formula_layout::FontMetricsSnapshot::default(),
+            semantics: document_compose::math::MathSemantics::default(),
+            source: String::new(),
+        }
+    }
+
+    fn is_pdf(bytes: &[u8]) -> bool {
+        bytes.len() >= 8 && &bytes[..5] == b"%PDF-"
+    }
+
+    #[test]
+    fn rect_paint_emits_pdf() {
+        let pdf = render_formula_result(&rect_result()).expect("render");
+        assert!(is_pdf(&pdf), "starts with %PDF-");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Type /Catalog"));
+        assert!(text.contains("/Type /Page"));
+        assert!(text.contains("re"));
+    }
+
+    #[test]
+    fn rect_paint_flips_canvas_y() {
+        // Box: height 20 above the baseline, depth 5 below; canvas rect at
+        // (10, 0) 80x15 maps to PDF bottom-left (4 + 10, (5 + 4) + 20 - 0 - 15).
+        let pdf = String::from_utf8_lossy(&render_formula_result(&rect_result()).expect("render")).into_owned();
+        assert!(pdf.contains("14.0000 14.0000 80.0000 15.0000 re"), "{pdf}");
+    }
+
+    #[test]
+    fn vector_path_paint_emits_pdf_path_ops() {
+        let mut res = rect_result();
+        res.paint = PaintNode::Group {
+            children: vec![PaintNode::VectorPath {
+                d: "M 0 0 L 10 0 L 5 10 Z".to_string(),
+                x: Fixed::from_f64(1.0),
+                y: Fixed::from_f64(2.0),
+                scale: Fixed::ONE,
+                bbox: BBox { x: Fixed::ZERO, y: Fixed::ZERO, width: Fixed::from_f64(10.0), height: Fixed::from_f64(10.0) },
+            }],
+            translate_x: Fixed::ZERO,
+            translate_y: Fixed::ZERO,
+        };
+        let pdf = render_formula_result(&res).expect("render");
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains(" m\n"));
+        assert!(text.contains(" l\n"));
+        assert!(text.contains("h\n"));
+    }
+
+    #[test]
+    fn empty_paint_still_emits_valid_pdf() {
+        let res = FormulaLayoutResult::default();
+        let pdf = render_formula_result(&res).expect("render");
+        assert!(is_pdf(&pdf));
+        let text = String::from_utf8_lossy(&pdf);
+        assert!(text.contains("/Type /Page"));
+    }
+
+    #[test]
+    fn glyph_run_emits_no_paint() {
+        let mut res = rect_result();
+        res.paint = PaintNode::Group {
+            children: vec![PaintNode::GlyphRun {
+                font_id: "lmr".to_string(),
+                glyph_ids: vec![65, 66],
+                chars: vec![Some('A'), Some('B')],
+                family: "latin-modern-math".to_string(),
+                positions: vec![(Fixed::ZERO, Fixed::ZERO), (Fixed::from_f64(10.0), Fixed::ZERO)],
+                size: Fixed::from_f64(16.0),
+                path_data: vec![None, None],
+                spans: vec![None, None],
+            }],
+            translate_x: Fixed::ZERO,
+            translate_y: Fixed::ZERO,
+        };
+        let pdf = render_formula_result(&res).expect("render");
+        // No rect/path operators, but still valid PDF page
+        assert!(is_pdf(&pdf));
+    }
+
+    #[test]
+    fn glyph_run_outline_paints_under_cm_matrix() {
+        let mut res = rect_result();
+        res.paint = PaintNode::Group {
+            children: vec![PaintNode::GlyphRun {
+                font_id: "lmr".to_string(),
+                glyph_ids: vec![65],
+                chars: vec![Some('A')],
+                family: "latin-modern-math".to_string(),
+                positions: vec![(Fixed::from_f64(3.0), Fixed::from_f64(4.0))],
+                size: Fixed::from_f64(16.0),
+                path_data: vec![Some("M 0 0 L 1 1 Z".to_string())],
+                spans: vec![None],
+            }],
+            translate_x: Fixed::ZERO,
+            translate_y: Fixed::ZERO,
+        };
+        let pdf = String::from_utf8_lossy(&render_formula_result(&res).expect("render")).into_owned();
+        // 16 x 16 scale at the flipped anchor: x = 4 + 3, y = (5 + 4) + 20 - 4
+        assert!(pdf.contains("16.0000 0 0 16.0000 7.0000 25.0000 cm"), "{pdf}");
+    }
+}

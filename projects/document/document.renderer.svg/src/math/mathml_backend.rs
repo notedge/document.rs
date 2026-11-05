@@ -224,3 +224,119 @@ fn push_element_with_attrs(out: &mut String, tag: &str, attrs: &str, text: &str)
 fn escape_xml(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_semantics_still_emits_a_document() {
+        let mut backend = MathmlBackend::new();
+        backend.render_semantics(&MathSemantics::default());
+        let mathml = backend.finish();
+        assert!(mathml.starts_with("<math"));
+        assert!(mathml.ends_with("</math>"));
+        assert!(mathml.contains("<mrow></mrow>"));
+    }
+
+    #[test]
+    fn sparse_atoms_emit_their_own_elements() {
+        let semantics = MathSemantics {
+            nodes: vec![
+                MathSemNode::Identifier { text: "x".into(), mathvariant: None },
+                MathSemNode::Number("7".into()),
+                MathSemNode::Operator("+".into()),
+                MathSemNode::Text("sin".into()),
+                MathSemNode::Space { width_em: 1.0 },
+            ],
+        };
+        let mut backend = MathmlBackend::new();
+        backend.render_semantics(&semantics);
+        let mathml = backend.finish();
+        assert!(mathml.contains("<mi>x</mi>"));
+        assert!(mathml.contains("<mn>7</mn>"));
+        assert!(mathml.contains("<mo>+</mo>"));
+        assert!(mathml.contains("<mtext>sin</mtext>"));
+        assert!(mathml.contains(r#"<mspace width="1.0000em" />"#));
+    }
+
+    #[test]
+    fn accent_carries_the_accent_attribute() {
+        let semantics = MathSemantics {
+            nodes: vec![
+                MathSemNode::Accent {
+                    base: Box::new(MathSemNode::Identifier { text: "x".into(), mathvariant: None }),
+                    accent: "ˆ".into(),
+                    position: AccentPosition::Above,
+                },
+                MathSemNode::Accent {
+                    base: Box::new(MathSemNode::Identifier { text: "y".into(), mathvariant: None }),
+                    accent: "‾".into(),
+                    position: AccentPosition::Below,
+                },
+            ],
+        };
+        let mut backend = MathmlBackend::new();
+        backend.render_semantics(&semantics);
+        let mathml = backend.finish();
+        assert!(mathml.contains(r#"<mover accent="true"><mi>x</mi><mo>ˆ</mo></mover>"#), "an over-accent is marked: {mathml}");
+        assert!(
+            mathml.contains(r#"<munder accent="true"><mi>y</mi><mo>‾</mo></munder>"#),
+            "an under-accent is marked: {mathml}"
+        );
+    }
+
+    #[test]
+    fn stacked_expressions_are_not_accents() {
+        // `\overset` / `\underset` stack a full expression, not a compressed
+        // accent glyph, so they keep MathML's default `accent="false"`.
+        let semantics = MathSemantics {
+            nodes: vec![
+                MathSemNode::StackAbove {
+                    base: Box::new(MathSemNode::Identifier { text: "b".into(), mathvariant: None }),
+                    over: Box::new(MathSemNode::Identifier { text: "a".into(), mathvariant: None }),
+                },
+                MathSemNode::StackBelow {
+                    base: Box::new(MathSemNode::Identifier { text: "d".into(), mathvariant: None }),
+                    under: Box::new(MathSemNode::Identifier { text: "c".into(), mathvariant: None }),
+                },
+            ],
+        };
+        let mut backend = MathmlBackend::new();
+        backend.render_semantics(&semantics);
+        let mathml = backend.finish();
+        assert!(mathml.contains("<mover><mi>b</mi><mi>a</mi></mover>"), "overset stays bare: {mathml}");
+        assert!(mathml.contains("<munder><mi>d</mi><mi>c</mi></munder>"), "underset stays bare: {mathml}");
+        assert!(!mathml.contains("accent="), "no stack claims accent compression: {mathml}");
+    }
+
+    #[test]
+    fn authored_delimiters_are_marked_as_fences() {
+        let semantics = MathSemantics {
+            nodes: vec![
+                MathSemNode::Delimited {
+                    left: Some("(".into()),
+                    right: Some(")".into()),
+                    body: Box::new(MathSemNode::Identifier { text: "x".into(), mathvariant: None }),
+                },
+                // `\left( … \right.` keeps only the authored fence.
+                MathSemNode::Delimited {
+                    left: Some("[".into()),
+                    right: None,
+                    body: Box::new(MathSemNode::Identifier { text: "y".into(), mathvariant: None }),
+                },
+                // An ordinary operator is never a fence.
+                MathSemNode::Operator("+".into()),
+            ],
+        };
+        let mut backend = MathmlBackend::new();
+        backend.render_semantics(&semantics);
+        let mathml = backend.finish();
+        assert!(
+            mathml.contains(r#"<mrow><mo fence="true">(</mo><mi>x</mi><mo fence="true">)</mo></mrow>"#),
+            "both fences marked: {mathml}"
+        );
+        assert!(mathml.contains(r#"<mo fence="true">[</mo><mi>y</mi>"#), "the lone fence is marked: {mathml}");
+        assert!(mathml.contains("<mo>+</mo>"), "an infix operator stays bare: {mathml}");
+    }
+}

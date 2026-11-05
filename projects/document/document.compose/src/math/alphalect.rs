@@ -171,3 +171,103 @@ fn fraktur(c: char) -> Option<char> {
     }
     cp(0x1D504, (c as u32) - ('A' as u32))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn math_variables_resolve_to_italic() {
+        assert_eq!(math_alphalect(FontStyle::Math, 'x'), Some('\u{1D465}'));
+        assert_eq!(math_alphalect(FontStyle::Math, 'e'), Some('\u{1D452}'));
+        assert_eq!(math_alphalect(FontStyle::Math, 'A'), Some('\u{1D434}'));
+        assert_eq!(math_alphalect(FontStyle::Italic, 'z'), Some('\u{1D467}'));
+    }
+
+    #[test]
+    fn italic_gaps_take_the_letterlike_stand_in() {
+        assert_eq!(math_alphalect(FontStyle::Math, 'h'), Some('\u{210E}'));
+        assert_eq!(math_alphalect(FontStyle::Math, 'i'), Some('\u{1D456}'));
+        assert_eq!(math_alphalect(FontStyle::Math, 'j'), Some('\u{1D457}'));
+    }
+
+    #[test]
+    fn greek_italicizes_lowercase_only() {
+        assert_eq!(math_alphalect(FontStyle::Math, 'α'), Some('\u{1D6FC}'));
+        assert_eq!(math_alphalect(FontStyle::Math, 'ω'), Some('\u{1D714}'));
+        assert_eq!(math_alphalect(FontStyle::Math, 'Γ'), None);
+        assert_eq!(math_alphalect(FontStyle::Math, 'ϵ'), Some('\u{1D716}'));
+    }
+
+    #[test]
+    fn greek_lowercase_sequence_is_pinned() {
+        let expected = [
+            ('α', '\u{1D6FC}'),
+            ('β', '\u{1D6FD}'),
+            ('γ', '\u{1D6FE}'),
+            ('δ', '\u{1D6FF}'),
+            ('ε', '\u{1D700}'),
+            ('ζ', '\u{1D701}'),
+            ('η', '\u{1D702}'),
+            ('θ', '\u{1D703}'),
+            ('ι', '\u{1D704}'),
+            ('κ', '\u{1D705}'),
+            ('λ', '\u{1D706}'),
+            ('μ', '\u{1D707}'),
+            ('ν', '\u{1D708}'),
+            ('ξ', '\u{1D709}'),
+            ('ο', '\u{1D70A}'),
+            ('π', '\u{1D70B}'),
+            ('ρ', '\u{1D70C}'),
+            ('ς', '\u{1D70D}'),
+            ('σ', '\u{1D70E}'),
+            ('τ', '\u{1D70F}'),
+            ('υ', '\u{1D710}'),
+            ('φ', '\u{1D711}'),
+            ('χ', '\u{1D712}'),
+            ('ψ', '\u{1D713}'),
+            ('ω', '\u{1D714}'),
+            ('ϵ', '\u{1D716}'),
+            ('ϑ', '\u{1D717}'),
+            ('ϕ', '\u{1D719}'),
+            ('ϱ', '\u{1D71A}'),
+            ('ϖ', '\u{1D71B}'),
+        ];
+        for (source, face) in expected {
+            assert_eq!(math_alphalect(FontStyle::Math, source), Some(face), "{source:?}");
+        }
+    }
+
+    #[test]
+    fn non_letters_never_redirect() {
+        for style in alphalect_styles() {
+            for c in ['0', '9', '+', '=', '(', '.', ' '] {
+                assert_eq!(math_alphalect(*style, c), None, "{style:?} {c:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn upright_styles_keep_the_authored_glyph() {
+        assert_eq!(math_alphalect(FontStyle::Normal, 'x'), None);
+        assert_eq!(math_alphalect(FontStyle::Strike, 'x'), None);
+    }
+
+    #[test]
+    fn faces_land_in_their_own_blocks() {
+        assert_eq!(math_alphalect(FontStyle::Bold, 'A'), Some('\u{1D400}'));
+        assert_eq!(math_alphalect(FontStyle::SansSerif, 'a'), Some('\u{1D5BA}'));
+        assert_eq!(math_alphalect(FontStyle::Monospace, 'z'), Some('\u{1D6A3}'));
+        assert_eq!(math_alphalect(FontStyle::Calligraphic, 'L'), Some('\u{2112}'));
+        assert_eq!(math_alphalect(FontStyle::Calligraphic, 'a'), None);
+        assert_eq!(math_alphalect(FontStyle::DoubleStruck, 'R'), Some('\u{211D}'));
+        assert_eq!(math_alphalect(FontStyle::Fraktur, 'g'), Some('\u{1D524}'));
+    }
+
+    #[test]
+    fn every_source_resolves_somewhere_under_math() {
+        for c in alphalect_sources() {
+            assert!(math_alphalect(FontStyle::Math, *c).is_some(), "{c:?}");
+        }
+    }
+}

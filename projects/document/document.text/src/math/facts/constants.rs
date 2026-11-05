@@ -222,3 +222,122 @@ impl MathConstants {
         self.resolve(MathConstant::SpaceAfterScript)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a `TableConstants` by writing the same value into every field.
+    fn table_with(value: f32) -> TableConstants {
+        TableConstants {
+            script_percent_scale_down: value,
+            script_script_percent_scale_down: value,
+            delimited_sub_formula_min_height: value,
+            display_operator_min_height: value,
+            math_leading: value,
+            axis_height: value,
+            accent_base_height: value,
+            flattened_accent_base_height: value,
+            subscript_shift_down: value,
+            subscript_top_max: value,
+            subscript_baseline_drop_min: value,
+            superscript_shift_up: value,
+            superscript_shift_up_cramped: value,
+            superscript_bottom_min: value,
+            superscript_baseline_drop_max: value,
+            sub_superscript_gap_min: value,
+            superscript_bottom_max_with_subscript: value,
+            space_after_script: value,
+            upper_limit_gap_min: value,
+            upper_limit_baseline_rise_min: value,
+            lower_limit_gap_min: value,
+            lower_limit_baseline_drop_min: value,
+            stack_top_shift_up: value,
+            stack_top_display_style_shift_up: value,
+            stack_bottom_shift_down: value,
+            stack_bottom_display_style_shift_down: value,
+            stack_gap_min: value,
+            stack_display_style_gap_min: value,
+            stretch_stack_top_shift_up: value,
+            stretch_stack_bottom_shift_down: value,
+            stretch_stack_gap_above_min: value,
+            stretch_stack_gap_below_min: value,
+            fraction_numerator_shift_up: value,
+            fraction_numerator_display_style_shift_up: value,
+            fraction_denominator_shift_down: value,
+            fraction_denominator_display_style_shift_down: value,
+            fraction_numerator_gap_min: value,
+            fraction_num_display_style_gap_min: value,
+            fraction_rule_thickness: value,
+            fraction_denominator_gap_min: value,
+            fraction_denom_display_style_gap_min: value,
+            skewed_fraction_horizontal_gap: value,
+            skewed_fraction_vertical_gap: value,
+            overbar_vertical_gap: value,
+            overbar_rule_thickness: value,
+            overbar_extra_ascender: value,
+            underbar_vertical_gap: value,
+            underbar_rule_thickness: value,
+            underbar_extra_descender: value,
+            radical_vertical_gap: value,
+            radical_display_style_vertical_gap: value,
+            radical_rule_thickness: value,
+            radical_extra_ascender: value,
+            radical_kern_before_degree: value,
+            radical_kern_after_degree: value,
+            radical_degree_bottom_raise_percent: value,
+        }
+    }
+
+    #[test]
+    fn a_view_without_a_table_marks_every_value_it_answers_as_synthetic() {
+        let empty = MathConstants::default();
+        let gap = empty.upper_limit_gap_min();
+        assert!(gap.is_synthetic(), "a missing table must not answer an unmarked value");
+        assert!(!gap.is_from_font());
+        assert_eq!(gap.font_value(), None, "no font value exists behind a fallback");
+        assert_eq!(
+            gap.value(),
+            Some(default_math_constant(MathConstant::UpperLimitGapMin)),
+            "the fallback comes from the one synthetic table"
+        );
+    }
+
+    #[test]
+    fn a_constant_with_no_fallback_is_unavailable_rather_than_zero() {
+        let empty = MathConstants::default();
+        // The script scale ratios only exist when a font publishes them, so a
+        // missing table leaves the caller with nothing instead of a fake 1.0.
+        let ratio = empty.resolve(MathConstant::ScriptPercentScaleDown);
+        assert_eq!(ratio, MathConstantValue::Unavailable);
+        assert_eq!(ratio.value(), None);
+    }
+
+    #[test]
+    fn a_table_value_is_reported_as_the_font_measurement() {
+        let view = MathConstants::from_table(&table_with(500.0), 1000.0);
+        assert_eq!(view.accent_base_height(), MathConstantValue::FontTable(Fixed::from_f64(0.5)));
+        assert!(view.accent_base_height().is_from_font());
+        assert!(!view.accent_base_height().is_synthetic());
+    }
+
+    #[test]
+    fn percentage_constants_are_normalized_to_a_fraction() {
+        let view = MathConstants::from_table(&table_with(60.0), 1000.0);
+        assert_eq!(
+            view.radical_degree_bottom_raise_percent(),
+            MathConstantValue::FontTable(Fixed::from_f64(0.6)),
+            "a percentage constant must arrive as a fraction of the radical height"
+        );
+        assert_eq!(view.resolve(MathConstant::ScriptPercentScaleDown), MathConstantValue::FontTable(Fixed::from_f64(0.6)));
+    }
+
+    #[test]
+    fn every_published_constant_is_present_in_the_view() {
+        let view = MathConstants::from_table(&table_with(1.0), 1000.0);
+        assert_eq!(view.font_constants().count(), 56, "the table publishes 56 constants");
+        for (constant, _) in view.font_constants() {
+            assert!(view.font_value(constant).is_some(), "`{constant:?}` must be readable back");
+        }
+    }
+}

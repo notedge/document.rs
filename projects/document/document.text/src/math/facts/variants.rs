@@ -244,3 +244,142 @@ fn ceil_ratio(value: Fixed, step: Fixed) -> i64 {
     let step = step.0 as i64;
     (value + step - 1) / step
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn em(value: f64) -> Fixed {
+        Fixed::from_f64(value)
+    }
+
+    fn part(glyph: u16, full_advance: f64, is_extender: bool) -> AssemblyPart {
+        AssemblyPart {
+            glyph: GlyphId::new(glyph),
+            start_connector: em(0.1),
+            end_connector: em(0.1),
+            full_advance: em(full_advance),
+            is_extender,
+        }
+    }
+
+    /// Synthetic recipe: one top piece, one repeater, one bottom piece.
+    fn brace_assembly() -> GlyphAssembly {
+        GlyphAssembly {
+            italic_correction: em(0.02),
+            parts: vec![part(10, 0.5, false), part(11, 0.25, true), part(12, 0.5, false)],
+        }
+    }
+
+    #[test]
+    fn assembly_repeats_the_extender_until_the_target_is_reached() {
+        let assembly = brace_assembly();
+        let overlap = em(0.05);
+        // One copy of every part spans 1.25 - 2 * 0.05 = 1.15 em.
+        let plan = assembly.plan(em(2.0), overlap).expect("recipe must reach 2 em");
+        let extenders = plan.instances.iter().filter(|part| part.is_extender).count();
+        assert_eq!(extenders, 1 + ceil_ratio(em(2.0) - em(1.15), em(0.25) - overlap) as usize);
+        assert_eq!(plan.instances.len(), 2 + extenders);
+        assert!(plan.extent >= em(2.0), "assembled extent {} must reach the target", plan.extent.to_f64());
+        assert!(plan.extent - em(2.0) < em(0.25), "assembly must not overshoot more than one extender");
+    }
+
+    #[test]
+    fn assembly_keeps_the_minimal_recipe_when_it_already_fits() {
+        let assembly = brace_assembly();
+        let plan = assembly.plan(em(0.9), em(0.05)).expect("minimal recipe fits");
+        assert_eq!(plan.instances.len(), 3);
+        assert_eq!(plan.instances.iter().filter(|part| part.is_extender).count(), 1);
+        assert!(plan.extent >= em(0.9));
+    }
+
+    #[test]
+    fn assembly_without_a_repeater_cannot_grow() {
+        let assembly =
+            GlyphAssembly { italic_correction: Fixed::ZERO, parts: vec![part(10, 0.4, false), part(11, 0.4, false)] };
+        assert!(assembly.plan(em(0.5), Fixed::ZERO).is_some(), "fixed recipe covers 0.8 em");
+        assert!(assembly.plan(em(2.0), Fixed::ZERO).is_none(), "fixed recipe cannot reach 2 em");
+    }
+
+    #[test]
+    fn several_extenders_grow_together_so_a_symmetric_recipe_stays_symmetric() {
+        // Shape of Latin Modern Math's brace: hook, extender, middle, extender, hook.
+        let assembly = GlyphAssembly {
+            italic_correction: Fixed::ZERO,
+            parts: vec![
+                part(10, 0.5, false),
+                part(11, 0.25, true),
+                part(12, 0.5, false),
+                part(13, 0.25, true),
+                part(14, 0.5, false),
+            ],
+        };
+        let overlap = em(0.05);
+        let plan = assembly.plan(em(3.0), overlap).expect("recipe must reach 3 em");
+        let upper = plan.instances.iter().filter(|part| part.glyph == GlyphId::new(11)).count();
+        let lower = plan.instances.iter().filter(|part| part.glyph == GlyphId::new(13)).count();
+        assert_eq!(upper, lower, "both extenders repeat the same number of times");
+        assert!(upper >= 2, "the recipe must actually grow, got {upper} copies");
+        assert!(plan.extent >= em(3.0), "assembled extent {} must reach the target", plan.extent.to_f64());
+    }
+
+    #[test]
+    fn assembly_that_gains_nothing_from_repeating_is_rejected() {
+        let assembly = GlyphAssembly { italic_correction: Fixed::ZERO, parts: vec![part(10, 0.6, false), part(11, 0.1, true)] };
+        // The extender is no longer than the overlap it consumes.
+        assert!(assembly.plan(em(1.0), em(0.1)).is_none());
+    }
+
+    #[test]
+    fn smallest_sufficient_variant_wins_even_when_the_font_lists_them_unsorted() {
+        let construction = GlyphConstruction {
+            variants: vec![
+                MathVariant {
+                    glyph: GlyphId::new(1),
+                    advance: Some(em(0.3)),
+                    stretch_measurement: em(1.5),
+                    height: Some(em(1.4)),
+                    italic_correction: None,
+                },
+                MathVariant {
+                    glyph: GlyphId::new(2),
+                    advance: Some(em(0.4)),
+                    stretch_measurement: em(1.0),
+                    height: Some(em(0.9)),
+                    italic_correction: None,
+                },
+            ],
+            assembly: None,
+        };
+        let plan = construction.stretch(em(0.8), Fixed::ZERO).expect("a variant reaches 0.8 em");
+        match plan {
+            StretchPlan::Variant(variant) => {
+                assert_eq!(variant.glyph, GlyphId::new(2), "1.0 em is the smallest sufficient variant")
+            }
+            other => panic!("expected a variant, got {other:?}"),
+        }
+        assert!(construction.stretch(em(2.0), Fixed::ZERO).is_none(), "no design reaches 2 em");
+    }
+
+    #[test]
+    fn variant_is_preferred_over_an_assembly_that_would_also_fit() {
+        let construction = GlyphConstruction {
+            variants: vec![MathVariant {
+                glyph: GlyphId::new(7),
+                advance: Some(em(0.5)),
+                stretch_measurement: em(1.2),
+                height: Some(em(1.1)),
+                italic_correction: Some(em(0.03)),
+            }],
+            assembly: Some(brace_assembly()),
+        };
+        match construction.stretch(em(1.0), em(0.05)) {
+            Some(StretchPlan::Variant(variant)) => assert_eq!(variant.glyph, GlyphId::new(7)),
+            other => panic!("expected the prepared variant first, got {other:?}"),
+        }
+        match construction.stretch(em(3.0), em(0.05)) {
+            Some(StretchPlan::Assembly(plan)) => assert!(plan.extent >= em(3.0)),
+            other => panic!("expected an assembly above the tallest variant, got {other:?}"),
+        }
+    }
+}
