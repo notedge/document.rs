@@ -71,6 +71,7 @@ document-renderer-raster = { path = "projects/document/document.renderer.raster"
 document-input-markdown = { path = "projects/document/document.input.markdown" }
 document-input-tex = { path = "projects/document/document.input.tex" }
 document-input-typst = { path = "projects/document/document.input.typst" }
+document-input-formats = { path = "projects/document/document.input.formats" }
 
 # --- Crawler ---
 crawler-types = { path = "projects/crawler/crawler.types" }

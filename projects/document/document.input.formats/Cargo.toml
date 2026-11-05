@@ -1,0 +1,14 @@
+[package]
+name = "document-input-formats"
+version.workspace = true
+authors.workspace = true
+description = "容器文档格式的输入编排（探测 / 导入 / 失败路径）"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+document-compose = { workspace = true }
+document-formats = { workspace = true, features = ["doc", "docx", "epub", "html", "pdf"] }
+document-ir = { workspace = true }
