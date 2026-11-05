@@ -290,6 +290,7 @@ fn shape(
         fill: style.fill,
         stroke: style.stroke,
         stroke_width: style.stroke_width,
+        dash: None,
         opacity: opacity.clamp(0.0, 1.0),
     };
     let kind = match name {

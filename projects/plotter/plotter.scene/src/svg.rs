@@ -559,6 +559,15 @@ fn write_palette(out: &mut String, prefix: &str, tokens: &ThemeTokens, palette: 
 }
 
 fn write_shape_paint(out: &mut String, style: &ShapeStyle, include_fill: bool, mode: PaintMode) {
+    if style.fill.is_none() && style.stroke.is_none() {
+        // Inline declarations beat the role palette, which otherwise paints
+        // every node element with the theme fill.
+        out.push_str(" style=\"fill:none;stroke:none\"");
+        if style.opacity != 1.0 {
+            push_number_attribute(out, "opacity", style.opacity);
+        }
+        return;
+    }
     match mode {
         PaintMode::Inline => {
             if include_fill {

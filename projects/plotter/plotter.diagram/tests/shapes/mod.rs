@@ -95,6 +95,8 @@ fn every_native_shape_renders_its_own_geometry() {
         scene.nodes.iter().all(|node| node.id.as_deref() != Some("node-point-label")),
         "point nodes carry no label"
     );
+    let svg = scene.resolve(&SceneResolver::new()).to_svg().expect("scene should serialize");
+    assert!(svg.contains("style=\"fill:none;stroke:none\""), "plaintext must beat the role palette: {svg}");
 }
 
 #[test]
