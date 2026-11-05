@@ -25,11 +25,9 @@
 | `oak-mermaid` | `classDiagram` 的 `<<interface>>` 与 `<<abstract>>` 原型 | 降成普通类 | `oak-uml::Class` 无原型字段，`ClassDiagram::from` 把接口的成员搬进类后丢弃身份 | 保留原型标记，类名与原型分开存放 |
 | `oak-mermaid` | `classDiagram` 关系两端的多重性（`A "1" --> "many" B`） | 上游未建模 | `oak-uml::Relation` 无多重性字段 | 两端各一个可选的多重性文本 |
 | `oak-mermaid` | `sequenceDiagram` 的 `activate` / `deactivate` 与 `+` / `-` 简写 | 拒绝于语句行 | `SequenceDiagram` 无激活区间，PlantUML 的同名字段可参照 | 激活所属 participant、起始与结束消息序号 |
-| `oak-plantuml` | `activity`（旧语法）与 `activityDiagram`（新语法） | 拒绝于族头 | 活动节点、判断与合并、并行分叉与汇合、泳道、起止节点 | 控制流边与守卫条件、泳道归属、分叉汇合配对 |
-| `oak-plantuml` | `state` | 拒绝于族头 | 状态节点、复合状态、并发区域 | 迁移源与目标、迁移标签、状态内动作 |
-| `oak-plantuml` | `component` / `deployment` / `usecase` 等其余家族 | 拒绝于族头 | 组件、接口、端口、包、参与者、节点 | 组件与接口的提供/需求关系、嵌套归属 |
+| `oak-plantuml` | `deployment` / `usecase` / `object` / `timing` 等其余家族 | 拒绝于族头 | 部署节点、参与者、对象、时序片段 | 家族各自的节点与关系模型 |
 
-补齐方式：上游 AST 出现上述节点与关系后，本层只在既有 `DiagramSpec` 上增加降级分支，`DiagramSpec` 需要新字段时先报 `plotter.diagram` 设计缺口，不在前端私造中间结构。
+`activity`、`state`、`component` 三族已在 `oak-plantuml` 建模并由 `plotter.input.plantuml` 降级，不再是缺口。补齐方式：上游 AST 出现上述节点与关系后，本层只在既有 `DiagramSpec` 上增加降级分支，`DiagramSpec` 需要新字段时先报 `plotter.diagram` 设计缺口，不在前端私造中间结构。
 
 ## 三、下游场景模型缺口（需要 `plotter.diagram` / `plotter.scene` 扩模型）
 
@@ -39,6 +37,8 @@
 | `oak-dot` | 匿名子图、嵌套子图、子图作边操作数 | 拒绝于语句 | 无 id 的簇、簇的嵌套层级、簇整体作为边端点 | 簇 id 自动生成规则、嵌套簇包围框、簇端点展开为成员端点 |
 
 `record` 长期拒绝的理由：下游只有节点级锚点，没有端口模型，强行降级会把端口压平成普通方框，属于近似而非降级。
+
+形状与线型不再列缺口：`NodeShape` 已覆盖 DOT 的 `hexagon` / `triangle` / `star` / `trapezium` / `parallelogram` / `note` / `point` / `doublecircle` / `component` / `ellipse` / `plaintext`，`EdgeStyle` 已覆盖 `dashed` / `dotted` / `bold`，场景层以 `stroke-dasharray` 与线宽档落地。见 [`规划设计/document/03-plotter图表形状与线型扩展设计.md`](../../规划设计/document/03-plotter图表形状与线型扩展设计.md)。
 
 ## 四、明确不接的输入
 

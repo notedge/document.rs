@@ -22,13 +22,13 @@
         {"construct": "subgraph cluster_* with a label attribute", "sample": "digraph {\n  subgraph cluster_core {\n    label=\"Core\"\n    A -> B\n  }\n}\n"},
         {"construct": "named subgraph declaring rank=same", "sample": "digraph {\n  subgraph same { rank=same; A; B; }\n}\n", "note": "rank=same becomes a SameRank constraint and draws no frame. A braces-only group `{rank=same; ...}` has no id, so it is an anonymous subgraph and stays refused"},
         {"construct": "compass ports n / e / s / w"},
-        {"construct": "shapes box / rect / rectangle / square / plaintext / diamond / circle"},
-        {"construct": "style=rounded on a node", "sample": "digraph {\n  A [style=rounded]\n}\n"}
+        {"construct": "shapes box / rect / rectangle / square / plaintext / diamond / circle / ellipse / oval / cylinder / note / point / triangle / hexagon / parallelogram / trapezium / star / doublecircle / component"},
+        {"construct": "style=rounded on a node", "sample": "digraph {\n  A [style=rounded]\n}\n"},
+        {"construct": "edge style dashed / dotted / bold", "sample": "digraph {\n  A -> B [style=dashed]\n}\n"}
       ],
       "approximated": [
-        {"construct": "shape ellipse / oval", "code": "davinci.diagram.approximated", "loss": "drawn as a round node"},
         {"construct": "shape outside the subset", "code": "davinci.diagram.approximated", "loss": "drawn as a box"},
-        {"construct": "style filled / dashed / dotted / bold", "code": "davinci.diagram.approximated", "loss": "the fill comes from the theme and the line weight is not applied"},
+        {"construct": "node style filled / dashed / dotted / bold", "code": "davinci.diagram.approximated", "loss": "the node fill comes from the theme and the node outline keeps its theme dash and weight"},
         {"construct": "compass ports ne / nw / se / sw / c", "code": "davinci.diagram.approximated", "loss": "folded to the nearest axis anchor"},
         {"construct": "graph label", "code": "davinci.diagram.approximated", "loss": "a graph label has no scene carrier"}
       ],
@@ -65,10 +65,8 @@
         {"construct": "erDiagram entities, attributes with PK / FK keys, and crow's foot cardinality on both ends", "sample": "erDiagram\n  CUSTOMER ||--o{ ORDER : places\n"}
       ],
       "approximated": [
-        {"construct": "dotted edge style", "code": "davinci.diagram.approximated", "loss": "drawn as a dashed line"},
         {"construct": "nested subgraph", "code": "davinci.diagram.approximated", "loss": "inner clusters flatten into the outer frame"},
-        {"construct": "composite state regions", "code": "davinci.diagram.approximated", "loss": "the state keeps its own node as the transition endpoint, each region becomes one flat frame titled with the state label, and nested states join every ancestor frame"},
-        {"construct": "erDiagram non-identifying relation", "code": "davinci.diagram.approximated", "loss": "drawn as a dashed line"}
+        {"construct": "composite state regions", "code": "davinci.diagram.approximated", "loss": "the state keeps its own node as the transition endpoint, each region becomes one flat frame titled with the state label, and nested states join every ancestor frame"}
       ],
       "refused": [
         {"construct": "gantt / pie / journey / gitGraph / mindmap / timeline / requirementDiagram / quadrantChart / xychart-beta / sankey-beta / block-beta / C4Context / zenuml", "code": "davinci.diagram.unsupported", "span": "family header line"},

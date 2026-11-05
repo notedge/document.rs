@@ -773,7 +773,7 @@ fn approximated_at(message: impl Into<String>, span: Option<std::ops::Range<usiz
 /// render without a new scene primitive. A relationship becomes a plain line
 /// carrying both crow's foot cardinalities in its label, left end first. An
 /// identifying relationship keeps a solid line and a non-identifying one uses
-/// the dotted style, which the layout reports as an approximation.
+/// the dotted style.
 fn er_spec(diagram: &ErDiagram, source: &str) -> Result<DiagramSpec, DiagramError> {
     if let Some((range, keyword)) = locate_dropped_statement(source, DROPPED_ER_STATEMENTS, true) {
         return Err(DiagramError::unsupported(format!(
