@@ -53,8 +53,8 @@ impl WgpuRenderer {
     /// 探测本机是否有可用 adapter。
     pub fn is_available() -> bool {
         pollster::block_on(async {
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-            instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.is_some()
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+            instance.request_adapter(&wgpu::RequestAdapterOptions::default()).await.is_ok()
         })
     }
 
@@ -104,26 +104,26 @@ pub fn render_rgba8_wgpu(scene: &Scene) -> Result<RgbaImage> {
 }
 
 async fn create_context() -> Result<GpuContext> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         })
         .await
-        .ok_or_else(|| Diagnostic::error(DiagnosticCode::RenderFailed, "无可用 GPU adapter"))?;
+        .map_err(|err| Diagnostic::error(DiagnosticCode::RenderFailed, format!("无可用 GPU adapter：{err}")))?;
 
     let (device, queue) = adapter
-        .request_device(
-            &wgpu::DeviceDescriptor {
-                label: Some("apollo-wgpu-device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
-                memory_hints: wgpu::MemoryHints::default(),
-            },
-            None,
-        )
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("apollo-wgpu-device"),
+            required_features: wgpu::Features::empty(),
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+            required_limits: wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits()),
+            memory_hints: wgpu::MemoryHints::default(),
+            trace: wgpu::Trace::Off,
+        })
         .await
         .map_err(|err| Diagnostic::error(DiagnosticCode::RenderFailed, format!("创建设备失败：{err}")))?;
 
@@ -148,15 +148,15 @@ async fn create_context() -> Result<GpuContext> {
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("apollo-line-pipeline-layout"),
-        bind_group_layouts: &[&bind_group_layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&bind_group_layout)],
+        immediate_size: 0,
     });
 
-    let vertex_buffers = [wgpu::VertexBufferLayout {
+    let vertex_buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<LineVertex>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x4],
-    }];
+    })];
 
     let make_pipeline = |topology: wgpu::PrimitiveTopology, label: &str| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -181,7 +181,7 @@ async fn create_context() -> Result<GpuContext> {
             primitive: wgpu::PrimitiveState { topology, ..Default::default() },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         })
     };
@@ -244,6 +244,7 @@ fn render_offscreen(ctx: &GpuContext, width: u32, height: u32, lines: &[LineVert
             label: Some("apollo-line-pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
+                depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }),
@@ -253,6 +254,7 @@ fn render_offscreen(ctx: &GpuContext, width: u32, height: u32, lines: &[LineVert
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
         pass.set_bind_group(0, &bind_group, &[]);
         if let Some(buffer) = &mesh_buffer {
@@ -303,13 +305,15 @@ fn render_offscreen(ctx: &GpuContext, width: u32, height: u32, lines: &[LineVert
     buffer_slice.map_async(wgpu::MapMode::Read, move |result| {
         let _ = sender.send(result);
     });
-    ctx.device.poll(wgpu::Maintain::wait());
+    let _ = ctx.device.poll(wgpu::PollType::wait_indefinitely());
     receiver
         .recv()
         .map_err(|_| Diagnostic::error(DiagnosticCode::RenderFailed, "readback channel 关闭"))?
         .map_err(|err| Diagnostic::error(DiagnosticCode::RenderFailed, format!("map_async 失败：{err}")))?;
 
-    let data = buffer_slice.get_mapped_range();
+    let data = buffer_slice
+        .get_mapped_range()
+        .map_err(|err| Diagnostic::error(DiagnosticCode::RenderFailed, format!("读取映射失败：{err}")))?;
     let mut pixels = Vec::with_capacity((width * height * 4) as usize);
     for row in 0..height as usize {
         let start = row * padded_bytes_per_row as usize;
