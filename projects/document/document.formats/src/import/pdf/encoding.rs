@@ -6,11 +6,14 @@ pub(crate) fn decode_with_font(
     font: Option<&str>,
     maps: &HashMap<String, ToUnicodeMap>,
     literal: bool,
-) -> String {
-    if let Some(font) = font.and_then(|name| maps.get(name)) {
-        return if literal { font.decode(&unescape_pdf_literal(bytes)) } else { font.decode(bytes) };
+) -> Option<String> {
+    match font {
+        Some(name) => {
+            let map = maps.get(name)?;
+            if literal { map.decode(&unescape_pdf_literal(bytes)) } else { map.decode(bytes) }
+        }
+        None => Some(if literal { decode_pdf_string(bytes) } else { decode_text_bytes(bytes) }),
     }
-    if literal { decode_pdf_string(bytes) } else { decode_text_bytes(bytes) }
 }
 pub(crate) fn win_ansi_encoding(byte: u8) -> char {
     match byte {

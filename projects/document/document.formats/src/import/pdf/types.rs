@@ -28,4 +28,7 @@ pub(crate) enum ContentEvent {
 pub(crate) struct ExtractedText {
     pub(crate) events: Vec<ContentEvent>,
     pub(crate) spacing_adjustments: bool,
+    /// Font resource names whose encoding could not be resolved. Text drawn
+    /// with them is omitted and reported as a loss marker.
+    pub(crate) unresolved_fonts: std::collections::BTreeSet<String>,
 }

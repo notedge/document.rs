@@ -55,11 +55,13 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
     else {
         vec![streams.iter().collect::<Vec<_>>()]
     };
+    let mut unresolved_fonts = std::collections::BTreeSet::new();
     for streams_in_page in page_streams {
         let mut page_text = String::new();
         for stream in streams_in_page {
             let decoded = streams::decode_stream(stream.dictionary, stream.data)?;
-            let extracted = extract_text_operators(&decoded, &font_maps);
+            let mut extracted = extract_text_operators(&decoded, &font_maps);
+            unresolved_fonts.append(&mut extracted.unresolved_fonts);
             if extracted.spacing_adjustments {
                 graph.push_loss(LossMarker {
                     code: "import.pdf.text_spacing".into(),
@@ -93,6 +95,15 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
             }
         }
         flush_page_text(&mut graph, &mut page_text);
+    }
+    for font in unresolved_fonts {
+        graph.push_loss(LossMarker {
+            code: "import.pdf.font_encoding_unresolved".into(),
+            message: format!(
+                "font `/{font}` has neither a usable `/ToUnicode` map nor `/WinAnsiEncoding`, text drawn with it is omitted"
+            ),
+            status: SemanticStatus::Unresolved,
+        });
     }
     if graph.blocks.is_empty() {
         graph.push_loss(LossMarker {

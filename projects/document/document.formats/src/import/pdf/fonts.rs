@@ -16,12 +16,20 @@ pub(crate) struct ToUnicodeMap {
     max_code_len: usize,
     code_lengths: Vec<usize>,
     winansi_fallback: bool,
+    unresolved: bool,
 }
 
 impl ToUnicodeMap {
-    pub(crate) fn decode(&self, bytes: &[u8]) -> String {
+    /// Decode one text string with this font map.
+    ///
+    /// `None` means the font has no usable encoding information, so the caller
+    /// must fail closed instead of emitting raw control characters.
+    pub(crate) fn decode(&self, bytes: &[u8]) -> Option<String> {
+        if self.unresolved || (self.entries.is_empty() && !self.winansi_fallback) {
+            return None;
+        }
         if self.entries.is_empty() && self.winansi_fallback {
-            return bytes.iter().map(|byte| win_ansi_encoding(*byte)).collect();
+            return Some(bytes.iter().map(|byte| win_ansi_encoding(*byte)).collect());
         }
         let mut output = String::new();
         let mut cursor = 0;
@@ -45,9 +53,10 @@ impl ToUnicodeMap {
                 cursor += 1;
             }
         }
-        output
+        Some(output)
     }
 }
+
 pub(crate) fn page_font_maps(bytes: &[u8], streams: &[PdfStream<'_>]) -> Result<HashMap<String, ToUnicodeMap>, FormatError> {
     let bodies = object_bodies(bytes);
     let mut result = HashMap::new();
@@ -74,10 +83,14 @@ pub(crate) fn page_font_maps(bytes: &[u8], streams: &[PdfStream<'_>]) -> Result<
             if body_contains_name(font_body, b"/WinAnsiEncoding") {
                 result.insert(name, ToUnicodeMap { winansi_fallback: true, ..ToUnicodeMap::default() });
             }
+            else {
+                result.insert(name, ToUnicodeMap { unresolved: true, ..ToUnicodeMap::default() });
+            }
         }
     }
     Ok(result)
 }
+
 pub(crate) fn parse_to_unicode_cmap(bytes: &[u8]) -> Option<ToUnicodeMap> {
     let text = std::str::from_utf8(bytes).ok()?;
     let mut map = ToUnicodeMap::default();

@@ -14,6 +14,7 @@ use super::{
 pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, ToUnicodeMap>) -> ExtractedText {
     let mut events = Vec::new();
     let mut spacing_adjustments = false;
+    let mut unresolved_fonts = std::collections::BTreeSet::new();
     let mut cursor = 0;
     let mut current_font = None;
     while cursor < stream.len() {
@@ -48,16 +49,12 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                 };
                 let after = skip_content_space(stream, close + 1);
                 if pdf_operator_at(stream, after, b"Tj") {
-                    push_text_event(
-                        &mut events,
-                        decode_with_font(&stream[cursor + 1..close], current_font.as_deref(), font_maps, true),
-                    );
+                    let decoded = decode_with_font(&stream[cursor + 1..close], current_font.as_deref(), font_maps, true);
+                    push_decoded_text(&mut events, &mut unresolved_fonts, current_font.as_deref(), decoded, "");
                 }
                 else if pdf_operator_at(stream, after, b"'") || pdf_operator_at(stream, after, b"\"") {
-                    push_text_event(
-                        &mut events,
-                        format!("\n{}", decode_with_font(&stream[cursor + 1..close], current_font.as_deref(), font_maps, true)),
-                    );
+                    let decoded = decode_with_font(&stream[cursor + 1..close], current_font.as_deref(), font_maps, true);
+                    push_decoded_text(&mut events, &mut unresolved_fonts, current_font.as_deref(), decoded, "\n");
                 }
                 cursor = close + 1;
             }
@@ -68,12 +65,14 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                     break;
                 };
                 let after = skip_content_space(stream, close + 1);
-                let text = decode_with_font(&hex_bytes(&stream[cursor + 1..close]), current_font.as_deref(), font_maps, false);
+                let text = &stream[cursor + 1..close];
                 if pdf_operator_at(stream, after, b"Tj") {
-                    push_text_event(&mut events, text);
+                    let decoded = decode_with_font(&hex_bytes(text), current_font.as_deref(), font_maps, false);
+                    push_decoded_text(&mut events, &mut unresolved_fonts, current_font.as_deref(), decoded, "");
                 }
                 else if pdf_operator_at(stream, after, b"'") || pdf_operator_at(stream, after, b"\"") {
-                    push_text_event(&mut events, format!("\n{text}"));
+                    let decoded = decode_with_font(&hex_bytes(text), current_font.as_deref(), font_maps, false);
+                    push_decoded_text(&mut events, &mut unresolved_fonts, current_font.as_deref(), decoded, "\n");
                 }
                 cursor = close + 1;
             }
@@ -86,7 +85,12 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                         else {
                             break;
                         };
-                        run.push_str(&decode_with_font(&stream[position + 1..end], current_font.as_deref(), font_maps, true));
+                        push_decoded_run(
+                            &mut run,
+                            &mut unresolved_fonts,
+                            current_font.as_deref(),
+                            decode_with_font(&stream[position + 1..end], current_font.as_deref(), font_maps, true),
+                        );
                         position = end + 1;
                     }
                     else if stream[position] == b'<' && stream.get(position + 1) != Some(&b'<') {
@@ -95,12 +99,12 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                             break;
                         };
                         let end = position + 1 + relative;
-                        run.push_str(&decode_with_font(
-                            &hex_bytes(&stream[position + 1..end]),
+                        push_decoded_run(
+                            &mut run,
+                            &mut unresolved_fonts,
                             current_font.as_deref(),
-                            font_maps,
-                            false,
-                        ));
+                            decode_with_font(&hex_bytes(&stream[position + 1..end]), current_font.as_deref(), font_maps, false),
+                        );
                         position = end + 1;
                     }
                     else if stream[position] == b'%' {
@@ -127,7 +131,41 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
             _ => cursor += 1,
         }
     }
-    ExtractedText { events, spacing_adjustments }
+    ExtractedText { events, spacing_adjustments, unresolved_fonts }
+}
+
+fn push_decoded_text(
+    events: &mut Vec<ContentEvent>,
+    unresolved_fonts: &mut std::collections::BTreeSet<String>,
+    font: Option<&str>,
+    decoded: Option<String>,
+    prefix: &str,
+) {
+    match decoded {
+        Some(text) if prefix.is_empty() => push_text_event(events, text),
+        Some(text) => push_text_event(events, format!("{prefix}{text}")),
+        None => {
+            if let Some(font) = font {
+                unresolved_fonts.insert(font.to_owned());
+            }
+        }
+    }
+}
+
+fn push_decoded_run(
+    run: &mut String,
+    unresolved_fonts: &mut std::collections::BTreeSet<String>,
+    font: Option<&str>,
+    decoded: Option<String>,
+) {
+    match decoded {
+        Some(text) => run.push_str(&text),
+        None => {
+            if let Some(font) = font {
+                unresolved_fonts.insert(font.to_owned());
+            }
+        }
+    }
 }
 
 fn text_font_operator(stream: &[u8], cursor: usize) -> Option<(String, usize)> {

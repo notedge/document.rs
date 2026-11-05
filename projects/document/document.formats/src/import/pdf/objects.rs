@@ -1,4 +1,4 @@
-use super::syntax::{skip_space, split_pdf_whitespace, trim_pdf_brackets};
+use super::syntax::{skip_space, split_pdf_syntax_tokens, split_pdf_whitespace, trim_pdf_brackets};
 
 pub(crate) fn page_resource_sections(bytes: &[u8]) -> Vec<Vec<u8>> {
     let bodies = object_bodies(bytes);
@@ -83,7 +83,7 @@ fn dictionary_end(bytes: &[u8], start: usize) -> Option<usize> {
 
 pub(crate) fn resource_font_references(section: &[u8]) -> Vec<(String, u32)> {
     let mut result = Vec::new();
-    let tokens = split_pdf_whitespace(section).map(trim_pdf_brackets).collect::<Vec<_>>();
+    let tokens = split_pdf_syntax_tokens(section).collect::<Vec<_>>();
     for index in 0..tokens.len().saturating_sub(3) {
         let token = tokens[index];
         let Some(name) = token.strip_prefix(b"/")

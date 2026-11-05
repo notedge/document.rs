@@ -2,6 +2,40 @@ pub(crate) fn split_pdf_whitespace(bytes: &[u8]) -> impl DoubleEndedIterator<Ite
     bytes.split(|byte| byte.is_ascii_whitespace()).filter(|token| !token.is_empty())
 }
 
+/// Split PDF syntax into tokens, treating whitespace and delimiter bytes as
+/// separators.
+///
+/// Resource dictionaries may glue names to delimiters such as `<</F4 4 0 R`
+/// or `R>>>>`. Whitespace-only splitting would yield `<</F4` and `R>>>>`, so
+/// the font reference scan would miss every entry touching a delimiter.
+pub(crate) fn split_pdf_syntax_tokens(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut tokens = Vec::new();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+            continue;
+        }
+        let start = cursor;
+        if bytes[cursor] == b'/' {
+            cursor += 1;
+            while bytes.get(cursor).is_some_and(|byte| !pdf_delimiter(*byte)) {
+                cursor += 1;
+            }
+        }
+        else if pdf_delimiter(bytes[cursor]) {
+            cursor += 1;
+        }
+        else {
+            while bytes.get(cursor).is_some_and(|byte| !pdf_delimiter(*byte)) {
+                cursor += 1;
+            }
+        }
+        tokens.push(&bytes[start..cursor]);
+    }
+    tokens.into_iter()
+}
+
 pub(crate) fn trim_pdf_brackets(mut token: &[u8]) -> &[u8] {
     while token.first() == Some(&b'[') || token.first() == Some(&b']') {
         token = &token[1..];

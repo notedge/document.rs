@@ -45,7 +45,13 @@ pub(crate) fn page_images(bytes: &[u8], streams: &[PdfStream<'_>]) -> Result<Has
                 PdfImage { bytes: stream.data.to_vec(), media_type: "image/jpeg", source }
             }
             else if image_body.windows(12).any(|window| window == b"/FlateDecode") {
-                let bytes = decode_pdf_image_png(image_body, stream.data)?;
+                let Ok(bytes) = decode_pdf_image_png(image_body, stream.data)
+                else {
+                    // Keep text import available when one embedded image uses an
+                    // unsupported colorspace. The content stream reports the
+                    // missing XObject as an unresolved reference.
+                    continue;
+                };
                 PdfImage { bytes, media_type: "image/png", source }
             }
             else {
