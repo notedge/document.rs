@@ -14,7 +14,7 @@
 use std::path::Path;
 
 use document_ir::{
-    Block, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, RelationEndpoint, SemanticStatus, SourceSpan,
+    Block, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, NodeId, RelationEndpoint, SemanticStatus, SourceSpan,
 };
 use oak_core::{Builder, SourceText, parser::session::ParseSession};
 use oak_typst::{
@@ -129,8 +129,8 @@ impl<'a> TypstLowerer<'a> {
     fn lower_root(&mut self, items: &[TypstItem], region_end: usize, sink: &mut Sink) {
         let mut index = 0;
         while index < items.len() {
-            if let Some((lines, ordered, end)) = self.list_ahead() {
-                self.lower_list_items(lines, ordered, sink);
+            if let Some((lines, _, end)) = self.list_ahead() {
+                self.lower_list_items(lines, sink);
                 self.cursor = end;
                 self.lower_tail(end, region_end, sink);
                 return;
@@ -163,7 +163,7 @@ impl<'a> TypstLowerer<'a> {
                             break;
                         }
                     }
-                    self.lower_list_items(collected, ordered, sink);
+                    self.lower_list_items(collected, sink);
                     if let Some(tail_start) = tail {
                         self.lower_tail(tail_start, region_end, sink);
                         return;
@@ -425,17 +425,53 @@ impl<'a> TypstLowerer<'a> {
         true
     }
 
-    fn lower_list_items(&mut self, lines: Vec<ListLine>, ordered: bool, sink: &mut Sink) {
-        let mut items = Vec::new();
-        for line in lines {
-            let content = self.lower_inline_fragment(&line.content);
-            items.push(ListItem { content, children: Vec::new(), number: line.number, is_task: false, is_checked: None });
-        }
-        if items.is_empty() {
+    fn lower_list_items(&mut self, lines: Vec<ListLine>, sink: &mut Sink) {
+        if lines.is_empty() {
             self.loss("import.typst.empty_list", "list markup contains no item line", SemanticStatus::Partial);
             return;
         }
-        self.push_block(sink, Block::List { ordered, items });
+        // A list always starts a new block, so pending paragraph inlines flush
+        // before the first level is created.
+        sink.flush(&mut self.graph);
+        let mut stack: Vec<OpenTypstList> = Vec::new();
+        for line in lines {
+            let content = self.lower_inline_fragment(&line.content);
+            while stack.last().is_some_and(|open| open.indent > line.indent) {
+                stack.pop();
+            }
+            let continuation = match stack.last() {
+                Some(open) if open.indent == line.indent => {
+                    if open.ordered == line.ordered {
+                        Some(open.id)
+                    }
+                    else {
+                        stack.pop();
+                        None
+                    }
+                }
+                _ => None,
+            };
+            let id = match continuation {
+                Some(id) => id,
+                None => {
+                    let id = self.graph.push_block(Block::List { ordered: line.ordered, items: Vec::new() });
+                    if let Some(parent) = stack.last() {
+                        attach_nested_list(&mut self.graph, parent.id, id);
+                    }
+                    stack.push(OpenTypstList { indent: line.indent, ordered: line.ordered, id });
+                    id
+                }
+            };
+            if let Some(items) = list_items_mut(&mut self.graph, id) {
+                items.push(ListItem {
+                    content,
+                    children: Vec::new(),
+                    number: line.number,
+                    is_task: false,
+                    is_checked: None,
+                });
+            }
+        }
     }
 
     fn lower_tail(&mut self, start: usize, end: usize, sink: &mut Sink) {
@@ -613,18 +649,29 @@ impl<'a> TypstLowerer<'a> {
         let mut offset = self.cursor;
         let mut lines = Vec::new();
         let mut ordered = None;
+        let mut base_indent = 0usize;
         while offset < self.source.len() {
             let end = self.source[offset..].find('\n').map(|index| offset + index).unwrap_or(self.source.len());
             let line = self.source[offset..end].trim_end_matches('\r');
-            let Some((line_ordered, number, content)) = list_marker(line)
+            let Some((indent, line_ordered, number, content)) = list_marker(line)
             else {
                 break;
             };
-            if ordered.is_some_and(|ordered| ordered != line_ordered) {
-                break;
+            match ordered {
+                None => {
+                    ordered = Some(line_ordered);
+                    base_indent = indent;
+                }
+                Some(ordered_marker) => {
+                    // A line at the base indentation with a different marker
+                    // starts the next list. A deeper line is a nested list and
+                    // stays in this run.
+                    if line_ordered != ordered_marker && indent <= base_indent {
+                        break;
+                    }
+                }
             }
-            ordered = Some(line_ordered);
-            lines.push(ListLine { number, content: content.to_string() });
+            lines.push(ListLine { indent, ordered: line_ordered, number, content: content.to_string() });
             offset = if end < self.source.len() { end + 1 } else { end };
         }
         let ordered = ordered?;
@@ -677,8 +724,33 @@ impl<'a> TypstLowerer<'a> {
 }
 
 struct ListLine {
+    indent: usize,
+    ordered: bool,
     number: Option<u32>,
     content: String,
+}
+
+/// One list level that is still open while items are placed.
+struct OpenTypstList {
+    indent: usize,
+    ordered: bool,
+    id: NodeId,
+}
+
+fn list_items_mut(graph: &mut DocumentGraph, id: NodeId) -> Option<&mut Vec<ListItem>> {
+    let index = graph.blocks.iter().position(|node| node.id == id)?;
+    match &mut graph.blocks[index].block {
+        Block::List { items, .. } => Some(items),
+        _ => None,
+    }
+}
+
+fn attach_nested_list(graph: &mut DocumentGraph, parent: NodeId, child: NodeId) {
+    if let Some(items) = list_items_mut(graph, parent) {
+        if let Some(last) = items.last_mut() {
+            last.children.push(child);
+        }
+    }
 }
 
 /// One piece of a single-line `#` quote span: authored markup or a link.
@@ -798,11 +870,17 @@ fn split_list_lines(raw: &str, ordered: bool) -> (Vec<ListLine>, Option<usize>) 
     let mut lines = Vec::new();
     let mut offset = 0usize;
     let mut saw_item = false;
+    let mut base_indent = 0usize;
     for segment in raw.split_inclusive('\n') {
         let line = segment.trim_end_matches('\n').trim_end_matches('\r');
-        if let Some((line_ordered, number, content)) = list_marker(line) {
-            if line_ordered == ordered {
-                lines.push(ListLine { number, content: content.to_string() });
+        if let Some((indent, line_ordered, number, content)) = list_marker(line) {
+            if !saw_item {
+                base_indent = indent;
+            }
+            // A deeper line belongs to the same run even when its marker type
+            // differs: that is a nested list, not a new paragraph.
+            if line_ordered == ordered || (saw_item && indent > base_indent) {
+                lines.push(ListLine { indent, ordered: line_ordered, number, content: content.to_string() });
                 saw_item = true;
                 offset += segment.len();
                 continue;
@@ -820,18 +898,28 @@ fn split_list_lines(raw: &str, ordered: bool) -> (Vec<ListLine>, Option<usize>) 
     (lines, None)
 }
 
-fn list_marker(line: &str) -> Option<(bool, Option<u32>, &str)> {
-    if let Some(rest) = line.strip_prefix("- ").or_else(|| line.strip_prefix("+ ")).or_else(|| line.strip_prefix("-\t")) {
-        return Some((false, None, rest.trim_end_matches('\r')));
+fn list_marker(line: &str) -> Option<(usize, bool, Option<u32>, &str)> {
+    let mut indent = 0usize;
+    let mut rest = line;
+    while let Some(after) = rest.strip_prefix(' ') {
+        indent += 1;
+        rest = after;
     }
-    let digits: String = line.chars().take_while(|character| character.is_ascii_digit()).collect();
+    while let Some(after) = rest.strip_prefix('\t') {
+        indent = (indent / 4 + 1) * 4;
+        rest = after;
+    }
+    if let Some(body) = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("+ ")).or_else(|| rest.strip_prefix("-\t")) {
+        return Some((indent, false, None, body.trim_end_matches('\r')));
+    }
+    let digits: String = rest.chars().take_while(|character| character.is_ascii_digit()).collect();
     if digits.is_empty() {
         return None;
     }
-    let rest = &line[digits.len()..];
-    let rest = rest.strip_prefix('.')?;
-    let rest = rest.strip_prefix(' ').or_else(|| rest.strip_prefix('\t'))?;
-    Some((true, digits.parse().ok(), rest.trim_end_matches('\r')))
+    let after_digits = &rest[digits.len()..];
+    let after_dot = after_digits.strip_prefix('.')?;
+    let body = after_dot.strip_prefix(' ').or_else(|| after_dot.strip_prefix('\t'))?;
+    Some((indent, true, digits.parse().ok(), body.trim_end_matches('\r')))
 }
 
 fn expression_kind(line: &str) -> String {
