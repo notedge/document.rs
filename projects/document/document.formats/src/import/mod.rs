@@ -50,3 +50,6 @@ pub mod typst;
 /// SpreadsheetML XLSX import, IR projection and sheet grid view.
 #[cfg(feature = "xlsx")]
 pub mod xlsx;
+/// PresentationML PPTX import, IR projection and slide canvas view.
+#[cfg(feature = "pptx")]
+pub mod pptx;

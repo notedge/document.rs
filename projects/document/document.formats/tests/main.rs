@@ -7,6 +7,8 @@ mod markdown_math_ir;
 mod math_import;
 #[cfg(feature = "xlsx")]
 mod xlsx;
+#[cfg(feature = "pptx")]
+mod pptx;
 
 /// Cross-reference and verbatim constructs that used to fail or drift.
 #[cfg(all(feature = "html", feature = "tex"))]

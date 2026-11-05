@@ -100,6 +100,19 @@ pub fn capabilities() -> Vec<FormatCapability> {
             status: FormatStatus::Unavailable,
         });
     }
+    #[cfg(feature = "pptx")]
+    {
+        // The PresentationML reader resolves slides, layouts, masters,
+        // placeholders, text, shapes, images, tables and notes. Charts,
+        // SmartArt, OLE objects and media stay refused with structured codes.
+        capabilities.push(FormatCapability { id: "pptx", direction: FormatDirection::Import, status: FormatStatus::Partial });
+        // No PresentationML writer exists, so the export direction is opt-out.
+        capabilities.push(FormatCapability {
+            id: "pptx",
+            direction: FormatDirection::Export,
+            status: FormatStatus::Unavailable,
+        });
+    }
     #[cfg(feature = "tex")]
     capabilities.push(FormatCapability { id: "tex", direction: FormatDirection::Import, status: FormatStatus::Partial });
     #[cfg(feature = "typst")]
