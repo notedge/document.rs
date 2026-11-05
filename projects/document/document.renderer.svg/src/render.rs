@@ -57,31 +57,41 @@ fn write_item(out: &mut String, item: &DisplayItem) -> Result<(), Diagnostic> {
         DisplayItem::TextRun(run) => write_text_run(out, run),
         DisplayItem::Rule(rule) => {
             out.push_str(&format!(
-                r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="#111111" stroke-width="{}"/>"##,
+                r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{}" stroke-width="{}"/>"##,
                 num(rule.x1),
                 num(rule.y1),
                 num(rule.x2),
                 num(rule.y2),
+                rule.color.unwrap_or("#111111"),
                 num(rule.thickness),
             ));
         }
-        DisplayItem::Rect(rect) if rect.filled => {
-            out.push_str(&format!(
-                r##"<rect x="{}" y="{}" width="{}" height="{}" fill="#f2f2f2"/>"##,
-                num(rect.x),
-                num(rect.y),
-                num(rect.width),
-                num(rect.height),
-            ));
-        }
         DisplayItem::Rect(rect) => {
-            out.push_str(&format!(
-                r##"<rect x="{}" y="{}" width="{}" height="{}" fill="none" stroke="#999999" stroke-width="0.5"/>"##,
-                num(rect.x),
-                num(rect.y),
-                num(rect.width),
-                num(rect.height),
-            ));
+            let fill = rect.fill.unwrap_or("#f2f2f2");
+            let border = rect
+                .stroke
+                .map(|stroke| format!(r#" stroke="{stroke}" stroke-width="{}""#, num(rect.stroke_width)))
+                .unwrap_or_default();
+            if rect.filled {
+                out.push_str(&format!(
+                    r##"<rect x="{}" y="{}" width="{}" height="{}" fill="{}"{border}/>"##,
+                    num(rect.x),
+                    num(rect.y),
+                    num(rect.width),
+                    num(rect.height),
+                    fill,
+                ));
+            }
+            else {
+                out.push_str(&format!(
+                    r##"<rect x="{}" y="{}" width="{}" height="{}" fill="none"{}/>"##,
+                    num(rect.x),
+                    num(rect.y),
+                    num(rect.width),
+                    num(rect.height),
+                    if border.is_empty() { " stroke=\"#999999\" stroke-width=\"0.5\"".to_string() } else { border },
+                ));
+            }
         }
         DisplayItem::Image(image) => {
             match image.source.as_deref().map(str::trim).filter(|source| !source.is_empty()) {
@@ -163,12 +173,14 @@ fn write_text_run(out: &mut String, run: &DisplayTextRun) {
         }
     }
     out.push_str(&format!(
-        r##"<text x="{}" y="{}" font-size="{}" font-family="{}"{} xml:space="preserve">{}</text>"##,
+        r##"<text x="{}" y="{}" font-size="{}" font-family="{}"{}{}{} xml:space="preserve">{}</text>"##,
         num(run.x),
         num(run.y),
         num(run.size),
         escape_attribute(&run.font_family),
         style_attributes(run.style),
+        run.color.map(|color| format!(r#" fill="{color}""#)).unwrap_or_default(),
+        if run.numeric { r#" font-variant-numeric="tabular-nums""# } else { "" },
         escape_text(&run.text),
     ));
     if anchor.is_some() {

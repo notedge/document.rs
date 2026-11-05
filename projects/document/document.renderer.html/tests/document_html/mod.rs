@@ -115,7 +115,7 @@ fn reflow_html_wraps_link_runs_in_anchors() {
 
     assert!(html.contains(
         "<p data-vutex-block=\"paragraph\">Read \
-         <a href=\"https://example.com/guide?q=a&amp;lang=zh\"><strong>the guide</strong></a>.</p>"
+         <a class=\"vutex-link\" href=\"https://example.com/guide?q=a&amp;lang=zh\"><strong>the guide</strong></a>.</p>"
     ));
 }
 
@@ -194,9 +194,15 @@ fn snapshot_html_wraps_link_runs_in_anchors() {
 
     let html = render_html_snapshot(&build_display_presentation(&layout(&graph))).expect("snapshot html");
 
-    // Only the linked run is wrapped, and the attribute value stays escaped.
-    assert!(html.contains("<a href=\"https://example.com/guide?q=a&amp;lang=zh\">the guide</a>"), "{html}");
-    assert!(html.contains(">Read </div>"), "{html}");
+    // Only the linked run is wrapped, the attribute value stays escaped, and
+    // the accent colour rides the anchor while body ink rides every run.
+    assert!(
+        html.contains(
+            "<a class=\"vutex-link\" href=\"https://example.com/guide?q=a&amp;lang=zh\" style=\"color:#2B5B84\">the guide</a>"
+        ),
+        "{html}"
+    );
+    assert!(html.contains("color:#1A1A1A\">Read </div>"), "{html}");
 }
 
 #[test]
@@ -232,7 +238,7 @@ fn reflow_html_writes_link_titles_on_the_anchor() {
 
     assert!(
         html.contains(
-            "<a href=\"https://example.com/guide?q=a&amp;lang=zh\" \
+            "<a class=\"vutex-link\" href=\"https://example.com/guide?q=a&amp;lang=zh\" \
              title=\"Spec &amp; &quot;notes&quot;\">the guide</a>"
         ),
         "{html}"
@@ -254,8 +260,8 @@ fn snapshot_html_writes_link_titles_on_the_anchor() {
 
     assert!(
         html.contains(
-            "<a href=\"https://example.com/guide?q=a&amp;lang=zh\" \
-             title=\"Spec &amp; &quot;notes&quot;\">the guide</a>"
+            "<a class=\"vutex-link\" href=\"https://example.com/guide?q=a&amp;lang=zh\" \
+             title=\"Spec &amp; &quot;notes&quot;\" style=\"color:#2B5B84\">the guide</a>"
         ),
         "{html}"
     );

@@ -19,6 +19,7 @@ body{margin:0;padding:24px;background:#f5f5f5}\
 .vutex-page{position:relative;margin:0 auto 24px;background:#fff;box-shadow:0 0 4px rgba(0,0,0,.15)}\
 .vutex-text{position:absolute;white-space:pre;line-height:1}\
 .vutex-rule{position:absolute;background:#111}\
+.vutex-link{text-decoration:underline;text-decoration-thickness:.5pt}\
 .vutex-image{position:absolute;box-sizing:border-box;border:1px dashed #999;color:#666;font:8pt sans-serif}\
 .vutex-graphic{position:absolute;overflow:hidden}\
 </style>\n</head>\n<body>\n",
@@ -54,7 +55,7 @@ pub fn render_html_reflow(presentation: &FlowPresentation) -> Result<String, Dia
     }
     let mut out = String::new();
     out.push_str(
-        "<!doctype html>\n<html lang=\"und\">\n<head>\n<meta charset=\"utf-8\">\n<title>VuTeX document</title>\n</head>\n<body>\n",
+        "<!doctype html>\n<html lang=\"und\">\n<head>\n<meta charset=\"utf-8\">\n<title>VuTeX document</title>\n<style>.vutex-link{color:#2B5B84;text-decoration:underline;text-decoration-thickness:.5pt}</style>\n</head>\n<body>\n",
     );
     out.push_str(&format!("<{} class=\"vutex-flow\" data-vutex=\"flow\">\n", presentation.root_tag,));
     for block in &presentation.blocks {
@@ -68,12 +69,14 @@ fn write_item(out: &mut String, item: &DisplayItem) -> Result<(), Diagnostic> {
     match item {
         DisplayItem::TextRun(run) => {
             out.push_str(&format!(
-                "<div class=\"vutex-text\" data-vutex-item=\"text\" style=\"left:{}pt;top:{}pt;font-size:{}pt;font-family:{}{}\">",
+                "<div class=\"vutex-text\" data-vutex-item=\"text\" style=\"left:{}pt;top:{}pt;font-size:{}pt;font-family:{}{}{}{}\">",
                 num(run.x),
                 num(run.y - 0.8 * run.size),
                 num(run.size),
                 escape_attribute(&run.font_family),
                 style_declarations(run.style),
+                run.color.map(|color| format!(";color:{color}")).unwrap_or_default(),
+                if run.numeric { ";font-variant-numeric:tabular-nums" } else { "" },
             ));
             write_snapshot_text(out, run);
             out.push_str("</div>\n");
@@ -87,15 +90,28 @@ fn write_item(out: &mut String, item: &DisplayItem) -> Result<(), Diagnostic> {
                 (rule.x1 - rule.thickness / 2.0, rule.y1.min(rule.y2), rule.thickness, (rule.y2 - rule.y1).abs())
             };
             out.push_str(&format!(
-                "<div class=\"vutex-rule\" data-vutex-item=\"rule\" style=\"left:{}pt;top:{}pt;width:{}pt;height:{}pt\"></div>\n",
+                "<div class=\"vutex-rule\" data-vutex-item=\"rule\" style=\"left:{}pt;top:{}pt;width:{}pt;height:{}pt{}\"></div>\n",
                 num(left),
                 num(top),
                 num(width),
                 num(height),
+                rule.color.map(|color| format!(";background:{color}")).unwrap_or_default(),
             ));
         }
         DisplayItem::Rect(rect) => {
-            let paint = if rect.filled { "background:#f2f2f2".to_string() } else { "border:0.5pt solid #999".to_string() };
+            let mut paint = String::new();
+            if let Some(fill) = rect.fill {
+                paint.push_str(&format!("background:{fill}"));
+            }
+            else if rect.filled {
+                paint.push_str("background:#f2f2f2");
+            }
+            if let Some(stroke) = rect.stroke {
+                paint.push_str(&format!(";border:{}pt solid {stroke}", num(rect.stroke_width)));
+            }
+            else if !rect.filled {
+                paint.push_str("border:0.5pt solid #999");
+            }
             out.push_str(&format!(
                 "<div class=\"vutex-rect\" data-vutex-item=\"rect\" style=\"left:{}pt;top:{}pt;width:{}pt;height:{}pt;{}\"></div>\n",
                 num(rect.x),
@@ -169,7 +185,7 @@ fn write_graphic(out: &mut String, graphic: &DisplayGraphic) -> Result<(), Diagn
 fn write_snapshot_text(out: &mut String, run: &DisplayTextRun) {
     let anchor = run.href.as_deref().filter(|href| is_safe_href(href));
     if let Some(href) = anchor {
-        write_anchor_open(out, href, run.title.as_deref());
+        write_anchor_open(out, href, run.title.as_deref(), run.color);
     }
     out.push_str(&escape_text(&run.text));
     if anchor.is_some() {
@@ -279,7 +295,7 @@ fn write_flow_block(out: &mut String, block: &FlowBlock) {
 fn write_flow_run(out: &mut String, run: &FlowRun) {
     let anchor = run.href.as_deref().filter(|href| is_safe_href(href));
     if let Some(href) = anchor {
-        write_anchor_open(out, href, run.title.as_deref());
+        write_anchor_open(out, href, run.title.as_deref(), None);
     }
     let tag = match run.style {
         FontStyle::Bold => Some("strong"),
@@ -298,10 +314,16 @@ fn write_flow_run(out: &mut String, run: &FlowRun) {
 }
 
 /// Open an anchor, adding the escaped tooltip only when the run carries one.
-fn write_anchor_open(out: &mut String, href: &str, title: Option<&str>) {
-    out.push_str(&format!("<a href=\"{}\"", escape_attribute(href)));
+///
+/// The class carries the underline, and the theme ink travels as an inline
+/// colour so the browser default blue never reaches a VuTeX page.
+fn write_anchor_open(out: &mut String, href: &str, title: Option<&str>, color: Option<&'static str>) {
+    out.push_str(&format!("<a class=\"vutex-link\" href=\"{}\"", escape_attribute(href)));
     if let Some(title) = title {
         out.push_str(&format!(" title=\"{}\"", escape_attribute(title)));
+    }
+    if let Some(color) = color {
+        out.push_str(&format!(" style=\"color:{color}\""));
     }
     out.push('>');
 }

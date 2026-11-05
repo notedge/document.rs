@@ -19,6 +19,8 @@ fn pdf_writer_emits_a_parseable_document() {
                 text: "PDF smoke".to_string(),
                 href: None,
                 title: None,
+                color: None,
+                numeric: false,
             })],
         }],
     };

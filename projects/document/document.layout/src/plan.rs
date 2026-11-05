@@ -38,6 +38,10 @@ pub struct TextRun {
     /// Only link display content carries a title; all other runs keep `None`.
     /// Renderers emit it with the anchor, never for a dropped destination.
     pub title: Option<String>,
+    /// Ink colour the theme asked for, or `None` for the renderer default.
+    pub color: Option<&'static str>,
+    /// Whether the digits in this run should use tabular figures.
+    pub numeric: bool,
 }
 
 /// A straight stroked line, used for thematic breaks and table rules.
@@ -53,6 +57,8 @@ pub struct Rule {
     pub y2: f64,
     /// Stroke width in points.
     pub thickness: f64,
+    /// Stroke colour, or `None` for the renderer default.
+    pub color: Option<&'static str>,
 }
 
 /// A closed box in page coordinates.
@@ -68,6 +74,12 @@ pub struct Rect {
     pub height: f64,
     /// Filled boxes carry a light background, unfilled boxes only an outline.
     pub filled: bool,
+    /// Explicit fill colour, or `None` for the renderer's filled default.
+    pub fill: Option<&'static str>,
+    /// Outline colour, or `None` for no outline.
+    pub stroke: Option<&'static str>,
+    /// Outline width in points.
+    pub stroke_width: f64,
 }
 
 /// Reserved area for an image whose intrinsic size is not known to layout.

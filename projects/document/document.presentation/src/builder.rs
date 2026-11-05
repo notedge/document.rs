@@ -31,7 +31,7 @@ pub fn build_display_presentation(plan: &LayoutPlan) -> DisplayPresentation {
 
 fn lower_item(item: &LayoutItem) -> DisplayItem {
     match item {
-        LayoutItem::TextRun(TextRun { x, y, size, width, font_family, style, text, href, title }) => {
+        LayoutItem::TextRun(TextRun { x, y, size, width, font_family, style, text, href, title, color, numeric }) => {
             DisplayItem::TextRun(DisplayTextRun {
                 x: *x,
                 y: *y,
@@ -42,14 +42,28 @@ fn lower_item(item: &LayoutItem) -> DisplayItem {
                 text: text.clone(),
                 href: href.clone(),
                 title: title.clone(),
+                color: *color,
+                numeric: *numeric,
             })
         }
-        LayoutItem::Rule(Rule { x1, y1, x2, y2, thickness }) => {
-            DisplayItem::Rule(DisplayRule { x1: *x1, y1: *y1, x2: *x2, y2: *y2, thickness: *thickness })
-        }
-        LayoutItem::Rect(Rect { x, y, width, height, filled }) => {
-            DisplayItem::Rect(DisplayRect { x: *x, y: *y, width: *width, height: *height, filled: *filled })
-        }
+        LayoutItem::Rule(Rule { x1, y1, x2, y2, thickness, color }) => DisplayItem::Rule(DisplayRule {
+            x1: *x1,
+            y1: *y1,
+            x2: *x2,
+            y2: *y2,
+            thickness: *thickness,
+            color: *color,
+        }),
+        LayoutItem::Rect(Rect { x, y, width, height, filled, fill, stroke, stroke_width }) => DisplayItem::Rect(DisplayRect {
+            x: *x,
+            y: *y,
+            width: *width,
+            height: *height,
+            filled: *filled,
+            fill: *fill,
+            stroke: *stroke,
+            stroke_width: *stroke_width,
+        }),
         LayoutItem::ImagePlaceholder(ImagePlaceholder { x, y, width, height, alt, source }) => {
             DisplayItem::Image(DisplayImage {
                 x: *x,

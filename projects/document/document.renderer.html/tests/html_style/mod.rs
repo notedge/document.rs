@@ -44,7 +44,10 @@ fn snapshot_unstyled_runs_keep_their_original_style_attribute() {
     let html = snapshot(vec![text("Plain body")]);
 
     assert!(html.contains("<div class=\"vutex-text\" data-vutex-item=\"text\" style=\"left:"), "{html}");
-    assert!(html.contains(";font-family:serif\">Plain body</div>"), "no extra declarations: {html}");
+    assert!(
+        html.contains(";font-family:serif;color:#1A1A1A\">Plain body</div>"),
+        "ink stays the only extra declaration: {html}"
+    );
     assert!(!html.contains("font-weight"), "{html}");
     assert!(!html.contains("font-style"), "{html}");
 }

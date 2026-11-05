@@ -6,7 +6,7 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
 };
 
 use document_compose::{
@@ -14,12 +14,12 @@ use document_compose::{
     math::{FontStyle, GlyphKey, MathError},
 };
 use document_fonts::{BodyMetrics, key_for_run};
-use document_ir::{Block, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
+use document_ir::{AssetId, Block, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
 use document_text::math::{FontMetricsSystem, builtin_font_metrics};
 
 use crate::{
     diagram::Diagrams,
-    hint::LayoutHint,
+    hint::{Align, LayoutHint},
     math::{collect_paint, is_tex_formula, layout_formula},
     plan::{Graphic, ImagePlaceholder, LayoutItem, LayoutPage, LayoutPlan, Rect, Rule, TextRun},
 };
@@ -31,8 +31,6 @@ const ASCENT: f64 = 0.8;
 const STRIKE_OFFSET: f64 = 0.3;
 /// Stroke width of a strikethrough rule, as a fraction of the font size.
 const STRIKE_THICKNESS: f64 = 0.06;
-/// Horizontal indent per list nesting level, in points.
-const LIST_INDENT: f64 = 18.0;
 /// Font family used for body text.
 const SERIF: &str = "serif";
 /// Font family used for code and preformatted text.
@@ -341,8 +339,9 @@ pub fn layout_with_metrics(
     diagrams: &Diagrams,
     metrics: &BodyMetrics,
 ) -> (LayoutPlan, Vec<Diagnostic>) {
-    let mut builder = PageBuilder::new(*hint, diagrams, metrics);
+    let mut builder = PageBuilder::new(*hint, diagrams, metrics, graph);
     builder.render_blocks(graph, &root_ids(graph), 0.0);
+    builder.emit_page_chrome(graph);
     let mut diagnostics = builder.diagnostics;
     diagnostics.extend(builder.text.diagnostics());
     (LayoutPlan { pages: builder.pages }, diagnostics)
@@ -393,11 +392,12 @@ struct PendingText {
     face: TextFace,
     href: Option<String>,
     title: Option<String>,
+    numeric: bool,
 }
 
 impl PendingText {
     fn body() -> Self {
-        Self { text: String::new(), face: BODY_FACE, href: None, title: None }
+        Self { text: String::new(), face: BODY_FACE, href: None, title: None, numeric: false }
     }
 
     fn is_empty(&self) -> bool {
@@ -456,7 +456,7 @@ struct AtomFlow {
 impl AtomFlow {
     /// Start a flow whose unstyled text uses `face`.
     fn new(face: TextFace) -> Self {
-        Self { atoms: Vec::new(), pending: PendingText { text: String::new(), face, href: None, title: None } }
+        Self { atoms: Vec::new(), pending: PendingText { text: String::new(), face, href: None, title: None, numeric: false } }
     }
 
     /// Close the buffered text into atoms and return the composed flow.
@@ -475,6 +475,8 @@ struct CellLines {
     available: f64,
     /// Broken lines of the cell content.
     lines: Vec<Vec<InlineAtom>>,
+    /// Whether the cell holds a number and aligns to the right.
+    numeric: bool,
 }
 
 /// Vertical extent of one composed line.
@@ -530,10 +532,7 @@ fn display_skips(size: f64, line: f64, height: f64, depth: f64) -> (DisplaySkip,
     let below_gap = (BELOW_DISPLAY_GAP_MIN_EM * size - depth).max(BELOW_DISPLAY_GAP_EM * size);
     let below = (below_gap - ASCENT * size).max(0.0);
     let shrink = DISPLAY_SKIP_SHRINK_EM * size;
-    (
-        DisplaySkip { natural: above, shrink: shrink.min(above) },
-        DisplaySkip { natural: below, shrink: shrink.min(below) },
-    )
+    (DisplaySkip { natural: above, shrink: shrink.min(above) }, DisplaySkip { natural: below, shrink: shrink.min(below) })
 }
 
 /// Page-filling state for one layout pass.
@@ -541,8 +540,10 @@ struct PageBuilder<'a> {
     hint: LayoutHint,
     text: TextMeasure<'a>,
     pages: Vec<LayoutPage>,
-    /// Scenes registered by the host for `diagram` blocks.
+    /// Scenes registered by the host for `diagram` and `chart` blocks.
     diagrams: &'a Diagrams,
+    /// Storage locations the graph bound to its image assets.
+    asset_sources: HashMap<AssetId, String>,
     /// Top edge of the next line box, in page coordinates.
     cursor: f64,
     /// Degradations the pass applied, such as a math glyph without an outline.
@@ -550,12 +551,15 @@ struct PageBuilder<'a> {
 }
 
 impl<'a> PageBuilder<'a> {
-    fn new(hint: LayoutHint, diagrams: &'a Diagrams, faces: &'a BodyMetrics) -> Self {
+    fn new(hint: LayoutHint, diagrams: &'a Diagrams, faces: &'a BodyMetrics, graph: &DocumentGraph) -> Self {
+        let asset_sources =
+            graph.assets.iter().filter_map(|asset| asset.source.as_ref().map(|source| (asset.id, source.clone()))).collect();
         Self {
             hint,
             text: TextMeasure::new(faces),
             pages: vec![blank_page(&hint)],
             diagrams,
+            asset_sources,
             cursor: hint.margin.top,
             diagnostics: Vec::new(),
         }
@@ -633,6 +637,8 @@ impl<'a> PageBuilder<'a> {
             text,
             href: None,
             title: None,
+            color: Some(self.hint.style.ink),
+            numeric: false,
         }));
     }
 
@@ -646,21 +652,36 @@ impl<'a> PageBuilder<'a> {
     }
 
     fn emit_heading(&mut self, level: u8, title: &[Inline], indent: f64) {
+        let tokens = self.hint.style;
         let base = self.body_size();
-        let size = match level {
-            1 => base * 1.8,
-            2 => base * 1.45,
-            3 => base * 1.25,
-            _ => base * 1.1,
-        };
+        let index = usize::from(level.clamp(1, 4)) - 1;
+        let size = base * tokens.heading_scales[index];
         let line_box = self.line_box(size);
-        let before = if level <= 2 { base } else { base * 0.8 };
-        self.pad(before);
+        self.pad(tokens.heading_gap_before[index]);
         // Keep the heading on the same page as its first body line.
         self.ensure_space(line_box * 2.0 + self.line_box(base));
-        let atoms = self.compose_atoms(title, size, indent, BODY_FACE, ImageMode::AltText);
-        self.emit_inline_lines(atoms, size, indent);
-        self.pad(base * 0.4);
+        let face = if tokens.heading_bold { TextFace { family: SERIF, style: FontStyle::Bold } } else { BODY_FACE };
+        let atoms = self.compose_atoms(title, size, indent, face, ImageMode::AltText);
+        self.emit_inline_lines_aligned(atoms, size, indent, tokens.heading_align);
+        if level == 1 && tokens.heading_rule > 0.0 {
+            self.pad(tokens.heading_gap_after[index] * 0.2);
+            let x = self.left(indent);
+            let width = if tokens.heading_rule_width > 0.0 { tokens.heading_rule_width } else { self.content_width(indent) };
+            let y = self.cursor;
+            self.push(LayoutItem::Rule(Rule {
+                x1: x,
+                y1: y,
+                x2: x + width,
+                y2: y,
+                thickness: tokens.heading_rule,
+                color: Some(tokens.heading_rule_color),
+            }));
+            self.cursor += tokens.heading_rule;
+            self.pad(tokens.heading_gap_after[index] * 0.8);
+        }
+        else {
+            self.pad(tokens.heading_gap_after[index]);
+        }
     }
 
     /// Compose a paragraph from text, styled spans, inline math, and image atoms.
@@ -671,13 +692,16 @@ impl<'a> PageBuilder<'a> {
     /// When the math engine rejects a formula, its raw source joins the text
     /// flow, matching the display-math fallback.
     fn emit_paragraph(&mut self, content: &[Inline], indent: f64) {
+        let tokens = self.hint.style;
         let size = self.body_size();
         let atoms = self.compose_atoms(content, size, indent, BODY_FACE, ImageMode::Placeholder);
-        self.emit_inline_lines(atoms, size, indent);
-        // article's `\parskip` is zero, so consecutive one-line paragraphs keep
-        // exactly one `\baselineskip` between their baselines. Charging an extra
-        // fraction of the em here widened every paragraph gap — the inline
-        // `$x+y$` case measured 1.67 em more than the reference.
+        let first_indent = tokens.paragraph_indent.min(self.content_width(indent) * 0.5);
+        let lines = break_inline_atoms(&self.text, atoms, size, self.content_width(indent), first_indent);
+        for (index, line) in lines.iter().enumerate() {
+            let shift = if index == 0 { first_indent } else { 0.0 };
+            self.emit_inline_line_at(line, size, indent, shift, None);
+        }
+        self.pad(tokens.paragraph_gap);
     }
 
     /// Compose inline content into break atoms under `face`.
@@ -716,13 +740,18 @@ impl<'a> PageBuilder<'a> {
     ) {
         for inline in content {
             match inline {
-                Inline::Image { source, alt, .. } => {
+                Inline::Image { source, alt, asset, .. } => {
                     let alt_text: String = alt.iter().map(Inline::plain_text).collect();
+                    let source = asset
+                        .as_ref()
+                        .and_then(|asset| self.asset_sources.get(asset))
+                        .cloned()
+                        .unwrap_or_else(|| source.clone());
                     match image_mode {
                         ImageMode::Placeholder => {
                             flow.pending.flush(&mut flow.atoms);
                             self.emit_inline_lines(std::mem::take(&mut flow.atoms), size, indent);
-                            self.emit_image_placeholder(&alt_text, source, indent);
+                            self.emit_image_placeholder(&alt_text, &source, indent);
                         }
                         ImageMode::AltText => flow.pending.push(&alt_text, face, href, title, &mut flow.atoms),
                     }
@@ -772,6 +801,14 @@ impl<'a> PageBuilder<'a> {
                 Inline::Note { display: Some(display), .. } | Inline::Citation { display: Some(display), .. } => {
                     self.compose_inline(display, size, indent, flow, face, href, title, image_mode);
                 }
+                // A footnote reference with no authored display is still a
+                // semantic marker, not the `[^label]` source literal. Paint the
+                // label as a superscript so the reader sees a reference and the
+                // definition body below carries the text.
+                Inline::Note { label, display: None } => {
+                    flow.pending.flush(&mut flow.atoms);
+                    flow.atoms.extend(split_inline_atoms(&superscript_label(label), face, href, title));
+                }
                 other => flow.pending.push(&other.plain_text(), face, href, title, &mut flow.atoms),
             }
         }
@@ -780,18 +817,51 @@ impl<'a> PageBuilder<'a> {
     /// Break inline atoms into lines and paint each composed line.
     fn emit_inline_lines(&mut self, atoms: Vec<InlineAtom>, size: f64, indent: f64) {
         let max_width = self.content_width(indent);
-        for line in break_inline_atoms(&self.text, atoms, size, max_width) {
+        for line in break_inline_atoms(&self.text, atoms, size, max_width, 0.0) {
             self.emit_inline_line(&line, size, indent);
         }
     }
 
+    /// Break and paint inline atoms with the theme's heading alignment.
+    fn emit_inline_lines_aligned(&mut self, atoms: Vec<InlineAtom>, size: f64, indent: f64, align: Align) {
+        let max_width = self.content_width(indent);
+        for line in break_inline_atoms(&self.text, atoms, size, max_width, 0.0) {
+            let line_width = self.line_width(&line, size);
+            let shift = match align {
+                Align::Left => 0.0,
+                Align::Center => ((max_width - line_width) / 2.0).max(0.0),
+                Align::Right => (max_width - line_width).max(0.0),
+            };
+            self.emit_inline_line_at(&line, size, indent, shift, None);
+        }
+    }
+
+    /// Natural width of one composed line, in points.
+    fn line_width(&self, line: &[InlineAtom], size: f64) -> f64 {
+        let mut width = 0.0;
+        for atom in line {
+            match atom {
+                InlineAtom::Text { text, face, .. } => width += self.text.measure(text, size, *face),
+                InlineAtom::Math(math) => width += math.width,
+                InlineAtom::Break => {}
+            }
+        }
+        width
+    }
+
     /// Paint one composed line, sizing its box by the tallest formula it holds.
     fn emit_inline_line(&mut self, line: &[InlineAtom], size: f64, indent: f64) {
+        self.emit_inline_line_at(line, size, indent, 0.0, None);
+    }
+
+    /// Paint one composed line shifted inside its column, with an optional ink
+    /// override for quote text.
+    fn emit_inline_line_at(&mut self, line: &[InlineAtom], size: f64, indent: f64, shift: f64, color: Option<&'static str>) {
         let line_metrics = self.inline_line_metrics(line, size);
         self.ensure_space(line_metrics.raise + line_metrics.height);
         let top = self.cursor + line_metrics.raise;
         let baseline = top + ASCENT * size;
-        self.paint_line(line, size, self.left(indent), baseline, self.content_width(indent));
+        self.paint_line(line, size, self.left(indent) + shift, baseline, self.content_width(indent), color, false);
         self.cursor = top + line_metrics.height;
     }
 
@@ -820,9 +890,19 @@ impl<'a> PageBuilder<'a> {
     /// Consecutive atoms sharing a face, a destination, and a hover text stay
     /// one run, and a change of any key starts a new run so emphasis and link
     /// metadata survive into every renderer.
-    fn paint_line(&mut self, line: &[InlineAtom], size: f64, x: f64, baseline: f64, max_width: f64) -> f64 {
+    fn paint_line(
+        &mut self,
+        line: &[InlineAtom],
+        size: f64,
+        x: f64,
+        baseline: f64,
+        max_width: f64,
+        color: Option<&'static str>,
+        numeric: bool,
+    ) -> f64 {
         let mut x = x;
         let mut run = PendingText::body();
+        run.numeric = numeric;
         let mut run_x = x;
         for atom in line {
             match atom {
@@ -832,16 +912,18 @@ impl<'a> PageBuilder<'a> {
                         run.face = *face;
                         run.href = href.clone();
                         run.title = title.clone();
+                        run.numeric = numeric;
                     }
                     else if run.face != *face
                         || run.href.as_deref() != href.as_deref()
                         || run.title.as_deref() != title.as_deref()
                     {
-                        self.paint_inline_run(&mut run, run_x, baseline, size);
+                        self.paint_inline_run(&mut run, run_x, baseline, size, color);
                         run_x = x;
                         run.face = *face;
                         run.href = href.clone();
                         run.title = title.clone();
+                        run.numeric = numeric;
                     }
                     // A pair that crosses an atom boundary is still one painted
                     // pair when both atoms stay in the same run.
@@ -855,14 +937,14 @@ impl<'a> PageBuilder<'a> {
                     x += self.text.measure(text, size, *face) + cross;
                 }
                 InlineAtom::Math(math) => {
-                    self.paint_inline_run(&mut run, run_x, baseline, size);
+                    self.paint_inline_run(&mut run, run_x, baseline, size, color);
                     self.emit_inline_math(math, x, baseline, max_width);
                     x += math.width;
                 }
                 InlineAtom::Break => {}
             }
         }
-        self.paint_inline_run(&mut run, run_x, baseline, size);
+        self.paint_inline_run(&mut run, run_x, baseline, size, color);
         x
     }
 
@@ -871,12 +953,14 @@ impl<'a> PageBuilder<'a> {
     /// A strikethrough run also emits its decoration as a rule right after the
     /// text run, so paint order keeps the rule above the glyphs. The rule spans
     /// exactly the measured run width through the same face-aware metrics.
-    fn paint_inline_run(&mut self, run: &mut PendingText, x: f64, baseline: f64, size: f64) {
+    fn paint_inline_run(&mut self, run: &mut PendingText, x: f64, baseline: f64, size: f64, color: Option<&'static str>) {
         if run.is_empty() {
             return;
         }
         let width = self.text.measure(&run.text, size, run.face);
         let struck = run.face.style == FontStyle::Strike;
+        let tokens = self.hint.style;
+        let ink = if run.href.is_some() { Some(tokens.accent) } else { color.or(Some(tokens.ink)) };
         self.push(LayoutItem::TextRun(TextRun {
             x,
             y: baseline,
@@ -887,10 +971,12 @@ impl<'a> PageBuilder<'a> {
             text: std::mem::take(&mut run.text),
             href: run.href.clone(),
             title: run.title.clone(),
+            color: ink,
+            numeric: run.numeric,
         }));
         if struck {
             let y = baseline - STRIKE_OFFSET * size;
-            let rule = Rule { x1: x, y1: y, x2: x + width, y2: y, thickness: STRIKE_THICKNESS * size };
+            let rule = Rule { x1: x, y1: y, x2: x + width, y2: y, thickness: STRIKE_THICKNESS * size, color: Some(tokens.ink) };
             self.push(LayoutItem::Rule(rule));
         }
     }
@@ -904,14 +990,44 @@ impl<'a> PageBuilder<'a> {
         }
     }
 
-    /// Reserve a fixed box for one authored image.
+    /// Paint one footnote definition body under the last body line.
     ///
-    /// The box size is independent of the source, so layout never reads image
-    /// bytes. The destination is passed through for renderers that can resolve
-    /// a `data:` payload or a local file.
+    /// The definition payload is authored text, so it is wrapped at the
+    /// footnote size instead of being dropped as an opaque block. The theme's
+    /// gap separates the body from the text above, and a positive
+    /// `footnote_rule` paints a separator under the last body line of the page.
+    fn emit_footnote_definition(&mut self, label: &str, body: &str, indent: f64) {
+        let tokens = self.hint.style;
+        let size = self.body_size() * 0.82;
+        self.pad(tokens.footnote_gap);
+        if tokens.footnote_rule > 0.0 {
+            self.ensure_space(tokens.footnote_rule);
+            let x = self.left(indent);
+            let y = self.cursor;
+            self.push(LayoutItem::Rule(Rule {
+                x1: x,
+                y1: y,
+                x2: x + self.content_width(indent),
+                y2: y,
+                thickness: tokens.footnote_rule,
+                color: Some(tokens.rule_faint),
+            }));
+            self.cursor += tokens.footnote_rule;
+        }
+        self.ensure_space(size * 1.4);
+        let text = format!("{} {}", superscript_label(label), body);
+        self.emit_wrapped(&text, size, SERIF, indent);
+    }
+
+    /// Reserve a fixed box for one authored image that renderers resolve.
+    ///
+    /// The box spans the content column unless the theme caps it through
+    /// `image_max_width`; layout never reads image bytes.
     fn emit_image_placeholder(&mut self, alt: &str, source: &str, indent: f64) {
+        let tokens = self.hint.style;
         let size = self.body_size();
-        let width = self.content_width(indent).min(240.0);
+        let cap = if tokens.image_max_width > 0.0 { tokens.image_max_width } else { f64::INFINITY };
+        let width = self.content_width(indent).min(cap);
         let height = width * 0.625;
         self.pad(size * 0.3);
         self.ensure_space(height);
@@ -965,32 +1081,34 @@ impl<'a> PageBuilder<'a> {
     }
 
     fn emit_list(&mut self, ordered: bool, items: &[ListItem], indent: f64, graph: &DocumentGraph) {
+        let tokens = self.hint.style;
         let size = self.body_size();
         let line_box = self.line_box(size);
         for (index, item) in items.iter().enumerate() {
             let marker = match (ordered, item.number) {
                 (true, Some(number)) => format!("{number}."),
                 (true, None) => format!("{}.", index + 1),
-                (false, _) => "•".to_string(),
+                (false, _) => tokens.list_marker.to_string(),
             };
             let marker_width = self.text.measure(&marker, size, BODY_FACE);
-            let content_indent = indent + LIST_INDENT.max(marker_width + 6.0);
+            let content_indent = indent + tokens.list_indent.max(marker_width + tokens.list_marker_gap);
             let atoms = self.compose_atoms(&item.content, size, content_indent, BODY_FACE, ImageMode::AltText);
-            self.pad(size * 0.15);
+            self.pad(tokens.list_gap_before);
             self.ensure_space(line_box * 2.0);
             // The marker keeps the baseline of the first content line.
             self.emit_baseline(marker, size, SERIF, indent);
             self.emit_inline_lines(atoms, size, content_indent);
             self.render_blocks(graph, &item.children, content_indent);
-            self.pad(size * 0.2);
+            self.pad(tokens.list_item_gap);
         }
     }
 
     fn emit_quote(&mut self, content: &[Inline], indent: f64) {
+        let tokens = self.hint.style;
         let size = self.body_size();
-        let quote_indent = indent + 16.0;
+        let quote_indent = indent + tokens.quote_indent;
         let atoms = self.compose_atoms(content, size, quote_indent, BODY_FACE, ImageMode::AltText);
-        let lines = break_inline_atoms(&self.text, atoms, size, self.content_width(quote_indent));
+        let lines = break_inline_atoms(&self.text, atoms, size, self.content_width(quote_indent), 0.0);
         // The rule spans the real line extents, so a tall formula inside the
         // quote grows the rule instead of hanging outside it.
         let height: f64 = lines
@@ -1002,27 +1120,46 @@ impl<'a> PageBuilder<'a> {
             .sum();
         self.pad(size * 0.4);
         self.ensure_space(height);
-        let x = self.left(indent) + 2.0;
-        let top = self.cursor;
-        self.push(LayoutItem::Rule(Rule { x1: x, y1: top, x2: x, y2: top + height, thickness: 2.0 }));
+        if tokens.quote_rule > 0.0 {
+            let x = self.left(indent) + 2.0;
+            let top = self.cursor;
+            self.push(LayoutItem::Rule(Rule {
+                x1: x,
+                y1: top,
+                x2: x,
+                y2: top + height,
+                thickness: tokens.quote_rule,
+                color: Some(tokens.quote_rule_color),
+            }));
+        }
         for line in &lines {
-            self.emit_inline_line(line, size, quote_indent);
+            self.emit_inline_line_at(line, size, quote_indent, 0.0, Some(tokens.quote_text_color));
         }
         self.pad(size * 0.5);
     }
 
     fn emit_code(&mut self, content: &str, indent: f64) {
-        let size = self.body_size() * 0.92;
-        let line_box = self.line_box(size) * 0.95;
-        let padding = size * 0.6;
+        let tokens = self.hint.style;
+        let size = tokens.code_size;
+        let line_box = size * tokens.code_line_height;
+        let padding = tokens.code_padding;
         let lines: Vec<&str> = content.lines().collect();
         let height = lines.len().max(1) as f64 * line_box + padding * 2.0;
-        self.pad(size * 0.4);
+        self.pad(tokens.code_margin);
         self.ensure_space(height.min(self.hint.content_height()));
         let top = self.cursor;
         let x = self.left(indent);
         let width = self.content_width(indent);
-        self.push(LayoutItem::Rect(Rect { x, y: top, width, height, filled: true }));
+        self.push(LayoutItem::Rect(Rect {
+            x,
+            y: top,
+            width,
+            height,
+            filled: true,
+            fill: Some(tokens.code_fill),
+            stroke: (tokens.code_border > 0.0).then_some(tokens.code_border_color),
+            stroke_width: tokens.code_border,
+        }));
         for line in &lines {
             // Code lines stay verbatim: no wrapping, overflow is visible rather than hidden.
             let y = self.cursor + padding + ASCENT * size;
@@ -1037,19 +1174,22 @@ impl<'a> PageBuilder<'a> {
                 text: (*line).to_string(),
                 href: None,
                 title: None,
+                color: Some(tokens.ink),
+                numeric: false,
             }));
             self.cursor += line_box;
         }
         self.cursor = top + height;
-        self.pad(size * 0.6);
+        self.pad(tokens.code_margin);
     }
 
     fn emit_table(&mut self, caption: Option<&str>, rows: &[TableRow], indent: f64) {
+        let tokens = self.hint.style;
         let size = self.body_size();
         let line_box = self.line_box(size);
         let x = self.left(indent);
         let width = self.content_width(indent);
-        let padding = size * 0.35;
+        let padding = tokens.table_pad_h;
         let columns = rows
             .iter()
             .map(|row| row.cells.iter().map(|cell| cell.colspan.max(1) as usize).sum::<usize>())
@@ -1063,35 +1203,74 @@ impl<'a> PageBuilder<'a> {
         }
         self.pad(size * 0.4);
         for (row_index, row) in rows.iter().enumerate() {
+            let header_face = if row.is_header && tokens.heading_bold {
+                TextFace { family: SERIF, style: FontStyle::Bold }
+            }
+            else {
+                BODY_FACE
+            };
             let cells: Vec<CellLines> = row
                 .cells
                 .iter()
                 .map(|cell| {
                     let span = cell.colspan.max(1) as usize;
                     let available = (column_width * span as f64 - padding * 2.0).max(24.0);
-                    let atoms = self.compose_atoms(&cell.content, size, indent, BODY_FACE, ImageMode::AltText);
-                    CellLines { span, available, lines: break_inline_atoms(&self.text, atoms, size, available) }
+                    let atoms = self.compose_atoms(&cell.content, size, indent, header_face, ImageMode::AltText);
+                    let numeric = is_numeric_content(&cell.content);
+                    CellLines { span, available, lines: break_inline_atoms(&self.text, atoms, size, available, 0.0), numeric }
                 })
                 .collect();
             let max_lines = cells.iter().map(|cell| cell.lines.len()).max().unwrap_or(1).max(1);
-            let height = max_lines as f64 * line_box + padding * 2.0;
+            let height = max_lines as f64 * line_box + tokens.table_pad_v * 2.0;
             self.ensure_space(height);
             let top = self.cursor;
-            let thickness = if row.is_header { 1.0 } else { 0.4 };
-            self.push(LayoutItem::Rule(Rule { x1: x, y1: top, x2: x + width, y2: top, thickness }));
+            if row.is_header
+                && let Some(tint) = tokens.table_header_tint
+            {
+                self.push(LayoutItem::Rect(Rect {
+                    x,
+                    y: top,
+                    width,
+                    height,
+                    filled: true,
+                    fill: Some(tint),
+                    stroke: None,
+                    stroke_width: 0.0,
+                }));
+            }
+            let header_thickness = if row.is_header { tokens.table_header_rule } else { tokens.table_row_rule };
+            if header_thickness > 0.0 {
+                let color = if row.is_header { tokens.table_rule_strong_color } else { tokens.table_rule_color };
+                self.push(LayoutItem::Rule(Rule {
+                    x1: x,
+                    y1: top,
+                    x2: x + width,
+                    y2: top,
+                    thickness: header_thickness,
+                    color: Some(color),
+                }));
+            }
             let mut column = 0usize;
             for cell in &cells {
                 let cell_x = x + column_width * column as f64 + padding;
-                let mut line_top = top + padding;
+                let mut line_top = top + tokens.table_pad_v;
                 for line in &cell.lines {
-                    self.paint_line(line, size, cell_x, line_top + ASCENT * size, cell.available);
+                    let shift = if cell.numeric { (cell.available - self.line_width(line, size)).max(0.0) } else { 0.0 };
+                    self.paint_line(line, size, cell_x + shift, line_top + ASCENT * size, cell.available, None, cell.numeric);
                     line_top += line_box;
                 }
                 column += cell.span;
             }
             self.cursor = top + height;
-            if row_index + 1 == rows.len() {
-                self.push(LayoutItem::Rule(Rule { x1: x, y1: self.cursor, x2: x + width, y2: self.cursor, thickness: 0.4 }));
+            if row_index + 1 == rows.len() && tokens.table_final_rule > 0.0 {
+                self.push(LayoutItem::Rule(Rule {
+                    x1: x,
+                    y1: self.cursor,
+                    x2: x + width,
+                    y2: self.cursor,
+                    thickness: tokens.table_final_rule,
+                    color: Some(tokens.table_rule_strong_color),
+                }));
             }
         }
         self.pad(size * 0.8);
@@ -1172,14 +1351,89 @@ impl<'a> PageBuilder<'a> {
         self.pad(size * 0.5);
     }
 
+    /// Add the running header and folio to every page after the first.
+    ///
+    /// Chrome lives inside the page margins, so it never moves body text. A
+    /// theme that turns chrome off, such as the legacy traditional preset, gets
+    /// no extra runs and keeps its old page count.
+    fn emit_page_chrome(&mut self, graph: &DocumentGraph) {
+        let tokens = self.hint.style;
+        if !tokens.chrome {
+            return;
+        }
+        let page_width = self.hint.page_width;
+        let page_height = self.hint.page_height;
+        let left = self.hint.margin.left;
+        let right = page_width - self.hint.margin.right;
+        let title =
+            graph.metadata.title.as_deref().map(str::trim).filter(|title| !title.is_empty()).map(str::to_string).or_else(
+                || {
+                    graph.blocks.iter().find_map(|node| match &node.block {
+                        Block::Section { level: 1, title, .. } => {
+                            let text = title.iter().map(Inline::plain_text).collect::<String>();
+                            (!text.trim().is_empty()).then_some(text)
+                        }
+                        _ => None,
+                    })
+                },
+            );
+        for index in 1..self.pages.len() {
+            if let Some(title) = title.as_deref() {
+                let width = self.text.measure(title, tokens.header_size, BODY_FACE);
+                let x = match tokens.header_align {
+                    Align::Left => left,
+                    Align::Center => ((left + right - width) / 2.0).max(left),
+                    Align::Right => (right - width).max(left),
+                };
+                self.pages[index].items.push(LayoutItem::TextRun(TextRun {
+                    x,
+                    y: tokens.chrome_top,
+                    size: tokens.header_size,
+                    width,
+                    font_family: SERIF.to_string(),
+                    style: FontStyle::Normal,
+                    text: title.to_string(),
+                    href: None,
+                    title: None,
+                    color: Some(tokens.header_color),
+                    numeric: false,
+                }));
+            }
+            let folio = format!("{}", index + 1);
+            let width = self.text.measure(&folio, tokens.folio_size, BODY_FACE);
+            let x = ((left + right - width) / 2.0).max(left);
+            self.pages[index].items.push(LayoutItem::TextRun(TextRun {
+                x,
+                y: page_height - tokens.chrome_bottom,
+                size: tokens.folio_size,
+                width,
+                font_family: SERIF.to_string(),
+                style: FontStyle::Normal,
+                text: folio,
+                href: None,
+                title: None,
+                color: Some(tokens.folio_color),
+                numeric: true,
+            }));
+        }
+    }
+
     fn emit_thematic_break(&mut self, indent: f64) {
+        let tokens = self.hint.style;
         let size = self.body_size();
         self.pad(size * 0.6);
         self.ensure_space(1.0);
         let x = self.left(indent);
         let width = self.content_width(indent);
         let y = self.cursor;
-        self.push(LayoutItem::Rule(Rule { x1: x, y1: y, x2: x + width, y2: y, thickness: 0.6 }));
+        self.push(LayoutItem::Rule(Rule {
+            x1: x,
+            y1: y,
+            x2: x + width,
+            y2: y,
+            thickness: 0.6,
+            color: Some(tokens.rule_strong),
+        }));
         self.cursor += size * 0.6;
     }
 
@@ -1223,10 +1477,13 @@ impl<'a> PageBuilder<'a> {
                         self.emit_code(source, indent);
                     }
                 }
-                // Charts have no layout participant in this host yet, so the
-                // authored spec stays visible as code instead of disappearing
-                // from the page.
-                Block::Chart { source, .. } => self.emit_code(source, indent),
+                // Charts share the host-scene channel with diagrams. Without a
+                // registered scene the authored spec stays visible as code.
+                Block::Chart { source, .. } => {
+                    if !self.emit_diagram(*id, indent) {
+                        self.emit_code(source, indent);
+                    }
+                }
                 Block::Math { formula } => self.emit_math(formula, indent),
                 Block::Table { caption, rows } => self.emit_table(caption.as_deref(), rows, indent),
                 Block::Opaque { kind, .. } if kind == "thematic_break" => self.emit_thematic_break(indent),
@@ -1236,6 +1493,23 @@ impl<'a> PageBuilder<'a> {
                 // matches the previous treatment of the opaque environment.
                 Block::Opaque { kind, .. } if kind == "tex.environment.tikzpicture" => {
                     self.emit_diagram(*id, indent);
+                }
+                // Footnote definitions carry their body as text, not as an
+                // opaque payload with no layout meaning. Lay the body out so a
+                // reader sees the footnote instead of its authored source
+                // literal.
+                Block::Opaque { kind, payload_hint, .. } if kind == "footnote_definition" => {
+                    if let Some((label, body)) = split_footnote_definition(payload_hint) {
+                        self.emit_footnote_definition(&label, &body, indent);
+                    }
+                    else {
+                        self.diagnostics.push(Diagnostic {
+                            code: "vutex.layout.footnote_definition_unparsed".to_string(),
+                            severity: Severity::Warning,
+                            message: "footnote definition payload has no label and body separator".to_string(),
+                            span: None,
+                        });
+                    }
                 }
                 // Opaque payloads with no layout meaning are left out of the
                 // page, but never silently: the kind is reported as a
@@ -1254,11 +1528,53 @@ impl<'a> PageBuilder<'a> {
     }
 }
 
-/// Split text into paragraph atoms: words, single spaces, single CJK glyphs,
-/// and hard breaks. This mirrors [`split_atoms`], but keeps authored newlines
-/// as forced line endings instead of collapsing them into spaces. Every atom
-/// carries `face`, `href`, and `title`, so emphasis and link metadata survive
-/// line breaking.
+/// Map a footnote label to Unicode superscript characters when every character
+/// has a superscript form, so a flow target paints a reference instead of the
+/// authored `[^label]` literal.
+fn superscript_label(label: &str) -> String {
+    label
+        .trim()
+        .chars()
+        .map(|ch| match ch {
+            '0' => '⁰',
+            '1' => '¹',
+            '2' => '²',
+            '3' => '³',
+            '4' => '⁴',
+            '5' => '⁵',
+            '6' => '⁶',
+            '7' => '⁷',
+            '8' => '⁸',
+            '9' => '⁹',
+            '+' => '⁺',
+            '-' => '⁻',
+            '=' => '⁼',
+            '(' => '⁽',
+            ')' => '⁾',
+            other => other,
+        })
+        .collect()
+}
+
+/// Split an authored `[^label]: body` footnote definition into its label and
+/// body. Continuation lines are folded into one body string.
+fn split_footnote_definition(payload: &str) -> Option<(String, String)> {
+    let payload = payload.trim();
+    let rest = payload.strip_prefix("[^")?;
+    let (label, body) = rest.split_once("]:")?;
+    let label = label.trim();
+    if label.is_empty() {
+        return None;
+    }
+    let body = body.lines().map(str::trim).filter(|line| !line.is_empty()).collect::<Vec<_>>().join(" ");
+    if body.is_empty() {
+        return None;
+    }
+    Some((label.to_string(), body))
+}
+
+/// Split text into paragraph atoms: words, spaces, CJK glyphs, and hard breaks.
+/// Authored newlines stay forced line endings instead of collapsing into spaces.
 fn split_inline_atoms(text: &str, face: TextFace, href: Option<&str>, title: Option<&str>) -> Vec<InlineAtom> {
     let mut atoms = Vec::new();
     let mut word = String::new();
@@ -1305,11 +1621,18 @@ fn split_inline_atoms(text: &str, face: TextFace, href: Option<&str>, title: Opt
 ///
 /// Formula atoms are never split; one that does not fit starts the next line,
 /// and one wider than the whole column occupies a line of its own.
-fn break_inline_atoms(widths: &TextMeasure<'_>, atoms: Vec<InlineAtom>, size: f64, max_width: f64) -> Vec<Vec<InlineAtom>> {
+fn break_inline_atoms(
+    widths: &TextMeasure<'_>,
+    atoms: Vec<InlineAtom>,
+    size: f64,
+    max_width: f64,
+    first_indent: f64,
+) -> Vec<Vec<InlineAtom>> {
     let mut lines: Vec<Vec<InlineAtom>> = Vec::new();
     let mut current: Vec<InlineAtom> = Vec::new();
     let mut width = 0.0f64;
     for atom in atoms {
+        let line_width = (max_width - if lines.is_empty() { first_indent } else { 0.0 }).max(24.0);
         match atom {
             InlineAtom::Break => finish_inline_line(&mut lines, &mut current, &mut width),
             InlineAtom::Text { text, face, href, title } => {
@@ -1329,19 +1652,19 @@ fn break_inline_atoms(widths: &TextMeasure<'_>, atoms: Vec<InlineAtom>, size: f6
                 let cross = tail.zip(text.chars().next()).map_or(0.0, |(left, right)| widths.kern(left, right, face, size));
                 if text.trim().is_empty() {
                     // A space never starts a line and never widens past the column.
-                    if !current.is_empty() && width + atom_width + cross <= max_width {
+                    if !current.is_empty() && width + atom_width + cross <= line_width {
                         current.push(InlineAtom::Text { text, face, href, title });
                         width += atom_width + cross;
                     }
                     continue;
                 }
                 let mut cross = cross;
-                if !current.is_empty() && width + atom_width + cross > max_width {
+                if !current.is_empty() && width + atom_width + cross > line_width {
                     finish_inline_line(&mut lines, &mut current, &mut width);
                     // Nothing is painted across the line break, so no pair.
                     cross = 0.0;
                 }
-                if atom_width > max_width && current.is_empty() {
+                if atom_width > line_width && current.is_empty() {
                     // Break an oversized word or URL character by character.
                     let mut chunk = String::new();
                     let mut chunk_width = 0.0;
@@ -1349,7 +1672,7 @@ fn break_inline_atoms(widths: &TextMeasure<'_>, atoms: Vec<InlineAtom>, size: f6
                     for ch in text.chars() {
                         let advance =
                             widths.advance_em(ch, face) * size + previous.map_or(0.0, |left| widths.kern(left, ch, face, size));
-                        if !chunk.is_empty() && chunk_width + advance > max_width {
+                        if !chunk.is_empty() && chunk_width + advance > line_width {
                             lines.push(vec![InlineAtom::Text {
                                 text: chunk.trim_end().to_string(),
                                 face,
@@ -1375,10 +1698,10 @@ fn break_inline_atoms(widths: &TextMeasure<'_>, atoms: Vec<InlineAtom>, size: f6
                 width += atom_width + cross;
             }
             InlineAtom::Math(math) => {
-                if !current.is_empty() && width + math.width > max_width {
+                if !current.is_empty() && width + math.width > line_width {
                     finish_inline_line(&mut lines, &mut current, &mut width);
                 }
-                let oversized = math.width > max_width;
+                let oversized = math.width > line_width;
                 width += math.width;
                 current.push(InlineAtom::Math(math));
                 if oversized {
@@ -1390,6 +1713,20 @@ fn break_inline_atoms(widths: &TextMeasure<'_>, atoms: Vec<InlineAtom>, size: f6
     }
     finish_inline_line(&mut lines, &mut current, &mut width);
     lines
+}
+
+/// Whether a table cell holds a number and should align to the right.
+///
+/// A numeric cell has at least one digit and contains only digits, digit
+/// separators, signs, and currency or percent marks, so a sentence that merely
+/// mentions a number keeps its reading-position alignment.
+fn is_numeric_content(content: &[Inline]) -> bool {
+    let text: String = content.iter().map(Inline::plain_text).collect();
+    let text = text.trim();
+    text.chars().any(|ch| ch.is_ascii_digit())
+        && text.chars().all(|ch| {
+            ch.is_ascii_digit() || matches!(ch, '.' | ',' | '-' | '+' | '%' | '/' | ':' | ' ' | '(' | ')' | '$' | '¥' | '€')
+        })
 }
 
 /// Close one line: drop trailing spaces and keep it only when it has content.
@@ -1425,6 +1762,8 @@ fn clamp_inline_item(item: LayoutItem, origin_x: f64, baseline: f64, scale: f64)
             text: run.text,
             href: run.href,
             title: run.title,
+            color: run.color,
+            numeric: run.numeric,
         }),
         LayoutItem::Rule(rule) => LayoutItem::Rule(Rule {
             x1: origin_x + (rule.x1 - origin_x) * scale,
@@ -1432,6 +1771,7 @@ fn clamp_inline_item(item: LayoutItem, origin_x: f64, baseline: f64, scale: f64)
             x2: origin_x + (rule.x2 - origin_x) * scale,
             y2: baseline + (rule.y2 - baseline) * scale,
             thickness: rule.thickness * scale,
+            color: rule.color,
         }),
         other => other,
     }
@@ -1638,7 +1978,7 @@ mod kerning_tests {
         let max_width =
             widths.measure("A", size, BODY_FACE) + widths.measure(" ", size, BODY_FACE) + widths.measure("V", size, BODY_FACE)
                 - 0.01;
-        let lines = break_inline_atoms(&widths, vec![atom("A"), atom(" "), atom("V")], size, max_width);
+        let lines = break_inline_atoms(&widths, vec![atom("A"), atom(" "), atom("V")], size, max_width, 0.0);
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].len(), 3);
     }

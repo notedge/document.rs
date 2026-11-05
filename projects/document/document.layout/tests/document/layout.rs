@@ -61,9 +61,9 @@ fn lays_out_heading_paragraphs_and_list_on_one_a4_page() {
 
     assert_eq!(runs[1].text, "First paragraph.");
     assert_eq!(runs[2].text, "Second paragraph.");
-    assert_eq!(runs[3].text, "•");
+    assert_eq!(runs[3].text, "–");
     assert_eq!(runs[4].text, "Alpha");
-    assert_eq!(runs[5].text, "•");
+    assert_eq!(runs[5].text, "–");
     assert_eq!(runs[6].text, "Beta");
 
     // List content is indented past its marker, and later lines move down the page.
@@ -139,8 +139,7 @@ fn inline_math_limits_misuse_reaches_the_document_diagnostics() {
         }],
     });
 
-    let (plan, diagnostics) =
-        layout_with_diagnostics(&graph, &LayoutHint::a4(), &Diagrams::new(), &BodyMetrics::default());
+    let (plan, diagnostics) = layout_with_diagnostics(&graph, &LayoutHint::a4(), &Diagrams::new(), &BodyMetrics::default());
     assert_eq!(diagnostics.len(), 1, "the misuse must be reported once: {diagnostics:?}");
     assert_eq!(diagnostics[0].code, "vutex.layout.math.limits_misuse");
     assert_eq!(diagnostics[0].severity, Severity::Warning);

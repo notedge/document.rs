@@ -35,6 +35,10 @@ pub struct DisplayTextRun {
     /// Only link display content carries a title; all other runs keep `None`.
     /// Renderers emit it with the anchor, never for a dropped destination.
     pub title: Option<String>,
+    /// Ink colour the theme asked for, or `None` for the renderer default.
+    pub color: Option<&'static str>,
+    /// Whether the digits in this run should use tabular figures.
+    pub numeric: bool,
 }
 
 /// One stroked line in display coordinates.
@@ -50,6 +54,8 @@ pub struct DisplayRule {
     pub y2: f64,
     /// Stroke width in points.
     pub thickness: f64,
+    /// Stroke colour, or `None` for the renderer default.
+    pub color: Option<&'static str>,
 }
 
 /// One box in display coordinates.
@@ -65,6 +71,12 @@ pub struct DisplayRect {
     pub height: f64,
     /// Filled boxes carry a light background, unfilled boxes only an outline.
     pub filled: bool,
+    /// Explicit fill colour, or `None` for the renderer's filled default.
+    pub fill: Option<&'static str>,
+    /// Outline colour, or `None` for no outline.
+    pub stroke: Option<&'static str>,
+    /// Outline width in points.
+    pub stroke_width: f64,
 }
 
 /// One reserved image slot in display coordinates.
