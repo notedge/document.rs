@@ -73,7 +73,7 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
             if extracted.spacing_adjustments {
                 graph.push_loss(LossMarker {
                     code: "import.pdf.text_spacing".into(),
-                    message: "TJ numeric spacing adjustments are ignored while preserving the adjacent text strings".into(),
+                    message: "TJ numeric spacing adjustments narrower than the word-gap threshold are kerning and are not turned into whitespace".into(),
                     status: SemanticStatus::Partial,
                 });
             }

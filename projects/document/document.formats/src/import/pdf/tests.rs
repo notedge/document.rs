@@ -131,6 +131,44 @@ fn compressed_font_object_stream() -> (Vec<u8>, u32) {
 }
 
 #[test]
+fn text_line_moves_rebuild_line_breaks() {
+    let font = "/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding";
+    let pdf = single_page_font_pdf(
+        font,
+        "/Font << /F1 4 0 R >>",
+        None,
+        "BT /F1 12 Tf 20 800 Td (first line) Tj 0 -16 Td (second line) Tj ET",
+    );
+    let graph = import_pdf_bytes("line-break", &pdf).expect("pdf import");
+    let texts = paragraph_texts(&graph);
+
+    assert_eq!(texts, ["first line\nsecond line"], "a baseline move wider than 0.7 em starts a new line");
+    assert_eq!(
+        texts.iter().map(|text| text.chars().filter(|character| !character.is_whitespace()).count()).sum::<usize>(),
+        19,
+        "line-break reconstruction must not change the visible characters"
+    );
+}
+
+#[test]
+fn small_baseline_shift_stays_on_the_same_line() {
+    let font = "/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding";
+    let pdf = single_page_font_pdf(font, "/Font << /F1 4 0 R >>", None, "BT /F1 12 Tf 20 800 Td (x) Tj 0 5 Td (2) Tj ET");
+    let graph = import_pdf_bytes("superscript", &pdf).expect("pdf import");
+
+    assert_eq!(paragraph_texts(&graph), ["x2"], "a superscript shift must not split the line");
+}
+
+#[test]
+fn tj_word_gap_becomes_a_space() {
+    let font = "/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding";
+    let pdf = single_page_font_pdf(font, "/Font << /F1 4 0 R >>", None, "BT /F1 10 Tf 20 800 Td [(alpha)-250(beta)] TJ ET");
+    let graph = import_pdf_bytes("tj-gap", &pdf).expect("pdf import");
+
+    assert_eq!(paragraph_texts(&graph), ["alpha beta"], "a `TJ` gap wider than 0.2 em is a word gap");
+}
+
+#[test]
 fn font_inside_object_stream_is_scanned() {
     let (stream, first) = compressed_font_object_stream();
     let pdf = objstm_font_pdf(&stream, 1, first);
