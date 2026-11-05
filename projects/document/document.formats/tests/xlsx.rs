@@ -1,10 +1,10 @@
 //! XLSX read, IR projection and grid view acceptance.
 
-use std::fs;
-use std::path::PathBuf;
+use std::{fs, path::PathBuf};
 
 use document_formats::import::xlsx::{
-    CellValue, DateKind, RenderOptions, SheetVisibility, import_xlsx_bytes, render_workbook_html, workbook_to_graph, GraphOptions,
+    CellValue, DateKind, GraphOptions, RenderOptions, SheetVisibility, import_xlsx_bytes, render_workbook_html,
+    workbook_to_graph,
 };
 use document_ir::{Block, Inline, SemanticStatus};
 
@@ -93,7 +93,8 @@ fn refused_constructs_carry_structured_codes() {
 fn ir_projection_keeps_tables_and_reports_hidden_sheet_loss() {
     let workbook = workbook();
     let graph = workbook_to_graph(&workbook, &GraphOptions::default());
-    let tables: Vec<&Block> = graph.blocks.iter().map(|node| &node.block).filter(|block| matches!(block, Block::Table { .. })).collect();
+    let tables: Vec<&Block> =
+        graph.blocks.iter().map(|node| &node.block).filter(|block| matches!(block, Block::Table { .. })).collect();
     assert_eq!(tables.len(), 2, "visible sheets become tables");
     let data = tables[0];
     let Block::Table { caption, rows } = data
