@@ -191,6 +191,16 @@ fn lower_children(children: &[HtmlNode], graph: &mut DocumentGraph, source: &str
                 result.extend(lower_blocks(element, graph, source));
             }
             HtmlNode::Element(element) if is_unsupported_element(element) => {}
+            HtmlNode::Element(element) if element.tag_name.eq_ignore_ascii_case("template") => {
+                flush_inline_run(&mut result, &mut pending, &mut pending_span);
+                // `<template>` content is inert and never rendered, so only the
+                // empty shell is kept. The contents stay out of the document
+                // and the drop is recorded as `import.html.template_contents`.
+                result.push((
+                    Block::RawHtml { html: "<template></template>".to_string() },
+                    element.span.clone().into(),
+                ));
+            }
             HtmlNode::Element(element) => {
                 if pending_span.is_none() {
                     pending_span = Some(element.span.clone().into());
@@ -259,6 +269,13 @@ fn collect_unsupported_losses(document: &HtmlDocument, graph: &mut DocumentGraph
 
 fn collect_unsupported_element_losses(element: &Element, graph: &mut DocumentGraph) {
     let tag = element.tag_name.to_ascii_lowercase();
+    if tag == "template" {
+        graph.push_loss(LossMarker {
+            code: "import.html.template_contents".into(),
+            message: "`<template>` content is inert and never rendered, so only the empty shell is kept".into(),
+            status: SemanticStatus::Unsupported,
+        });
+    }
     if matches!(
         tag.as_str(),
         "script" | "style" | "form" | "input" | "select" | "textarea" | "button" | "canvas" | "video" | "audio" | "iframe"
@@ -337,7 +354,17 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                 span,
             )]
         }
-        "p" => vec![(Block::Paragraph { content: lower_inlines(element, graph, source) }, span)],
+        "p" => {
+            // HTML closes an open `<p>` as soon as another paragraph-level
+            // element starts, so a nested `<p>` is a sibling paragraph rather
+            // than inline text inside the first one.
+            if element.children.iter().filter_map(as_element).any(is_block_element) {
+                lower_children(&element.children, graph, source)
+            }
+            else {
+                vec![(Block::Paragraph { content: lower_inlines(element, graph, source) }, span)]
+            }
+        }
         "blockquote" => {
             let mut content = Vec::new();
             let mut children = Vec::new();
@@ -392,11 +419,13 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                 .filter(|value| ordered && *value > 0)
                 .unwrap_or(1);
             let mut number = start;
-            let items = element
-                .children
-                .iter()
-                .filter_map(as_element)
-                .filter(|child| child.tag_name.eq_ignore_ascii_case("li"))
+            let mut items = Vec::new();
+            // HTML closes an open `<li>` when another item starts, so a nested
+            // `<li>` is a sibling in the same list instead of content of the
+            // previous item.
+            collect_list_items(element, &mut items);
+            let items = items
+                .into_iter()
                 .map(|item| {
                     let item_number = ordered.then_some(number);
                     number += 1;
@@ -459,7 +488,31 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                     status: SemanticStatus::Partial,
                 });
             }
-            vec![(Block::Table { caption, rows }, span)]
+            let mut blocks = Vec::new();
+            // Text placed directly inside `<table>` is foster parented before
+            // the table by browsers, so it becomes a preceding paragraph
+            // instead of being dropped.
+            let stray: Vec<Inline> = element
+                .children
+                .iter()
+                .filter_map(|child| match child {
+                    HtmlNode::Text(text) => {
+                        let content = text.content.trim();
+                        (!content.is_empty()).then(|| Inline::Text { text: content.to_string() })
+                    }
+                    HtmlNode::Element(inner) if !is_table_structure(inner) => {
+                        let content = text_content(inner);
+                        let content = content.trim();
+                        (!content.is_empty()).then(|| Inline::Text { text: content.to_string() })
+                    }
+                    _ => None,
+                })
+                .collect();
+            if !stray.is_empty() {
+                blocks.push((Block::Paragraph { content: stray }, span.clone()));
+            }
+            blocks.push((Block::Table { caption, rows }, span));
+            blocks
         }
         "hr" => vec![(
             Block::Opaque { kind: "thematic_break".into(), payload_hint: "---".into(), status: SemanticStatus::Partial },
@@ -785,6 +838,27 @@ fn lower_list_item(item: &Element, graph: &mut DocumentGraph, number: Option<u32
     }
 }
 
+/// Items of a list, including items the author wrote nested inside a previous
+/// item: HTML closes an open `<li>` when the next one starts, so both belong to
+/// the same list.
+fn collect_list_items<'a>(element: &'a Element, items: &mut Vec<&'a Element>) {
+    for child in element.children.iter().filter_map(as_element) {
+        if child.tag_name.eq_ignore_ascii_case("li") {
+            items.push(child);
+            collect_list_items(child, items);
+        }
+    }
+}
+
+/// Elements that belong to a table's own structure rather than being foster
+/// parented outside it.
+fn is_table_structure(element: &Element) -> bool {
+    matches!(
+        element.tag_name.to_ascii_lowercase().as_str(),
+        "caption" | "colgroup" | "col" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th"
+    )
+}
+
 fn is_block_element(element: &Element) -> bool {
     matches!(
         element.tag_name.to_ascii_lowercase().as_str(),
@@ -816,6 +890,7 @@ fn lower_list_item_inlines(item: &Element, graph: &mut DocumentGraph, source: &s
     for child in &item.children {
         match child {
             HtmlNode::Text(text) => push_text(&mut result, text.content.clone()),
+            HtmlNode::Element(element) if element.tag_name.eq_ignore_ascii_case("li") => {}
             HtmlNode::Element(element) if !is_block_element(element) && !is_unsupported_element(element) => {
                 result.extend(lower_inline_element(element, graph, source));
             }
@@ -944,6 +1019,11 @@ fn inline_attributes(element: &Element) -> Attributes {
         else if attribute.name.eq_ignore_ascii_case("class") {
             attributes.classes =
                 attribute.value.as_deref().unwrap_or_default().split_whitespace().map(str::to_string).collect();
+        }
+        else if attribute.value.is_none() {
+            // Boolean attribute: HTML spells it without a value. Keeping it as
+            // an empty valued pair means the exporter can still write it.
+            attributes.pairs.push(AttributePair { key: attribute.name.to_ascii_lowercase(), value: String::new() });
         }
         else if element.tag_name.eq_ignore_ascii_case("img")
             && (attribute.name.eq_ignore_ascii_case("width") || attribute.name.eq_ignore_ascii_case("height"))

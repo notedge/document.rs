@@ -70,6 +70,68 @@ mod typst_local_degradation_smoke {
     }
 }
 
+/// HTML structures the importer used to lose or merge.
+#[cfg(feature = "html")]
+mod html_structure_smoke {
+    use document_formats::{export::html::export_html, import::html::import_html_text};
+
+    fn html(source: &str) -> String {
+        let graph = import_html_text("html-structure", source).expect("html import");
+        export_html(&graph).expect("html export")
+    }
+
+    #[test]
+    fn unquoted_attribute_value_stays_in_the_tag() {
+        let output = html("<a href=/x>x</a>");
+        assert!(output.contains(r#"href="/x""#), "{output}");
+    }
+
+    #[test]
+    fn boolean_attribute_keeps_its_spelling() {
+        let output = html(r#"<a hidden href="/x">x</a>"#);
+        assert!(output.contains("hidden"), "{output}");
+    }
+
+    #[test]
+    fn table_sections_keep_their_cells() {
+        let output = html("<table><colgroup><col span=2></colgroup><thead><tr><th>h</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>");
+        assert!(output.contains("<th>h</th>"), "{output}");
+        assert!(output.contains("<td>b</td>"), "{output}");
+    }
+
+    #[test]
+    fn foster_parented_text_precedes_the_table() {
+        let output = html("<table>stray<tr><td>x</td></tr></table>");
+        assert!(output.contains("<p>stray</p>"), "{output}");
+    }
+
+    #[test]
+    fn implied_paragraph_close_splits_paragraphs() {
+        let output = html("<p>a<p>b");
+        assert_eq!(output.matches("<p>").count(), 2, "{output}");
+    }
+
+    #[test]
+    fn implied_list_item_close_splits_items() {
+        let output = html("<ul><li>a<li>b</ul>");
+        assert!(output.contains("<li>a</li>"), "{output}");
+        assert!(output.contains("<li>b</li>"), "{output}");
+    }
+
+    #[test]
+    fn template_content_stays_inert() {
+        let output = html("<template><p>x</p></template>");
+        assert!(output.contains("<template></template>"), "{output}");
+        assert!(!output.contains("<p>x</p>"), "{output}");
+    }
+
+    #[test]
+    fn trailing_text_after_self_closed_non_void_element_survives() {
+        let output = html("<div></div>after");
+        assert!(output.contains("after"), "{output}");
+    }
+}
+
 /// A link whose text is an image keeps both the outer link and the image.
 #[cfg(all(feature = "html", feature = "markdown"))]
 mod markdown_export_smoke {
