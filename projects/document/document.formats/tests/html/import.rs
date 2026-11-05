@@ -216,13 +216,26 @@ fn html_import_keeps_inline_svg_as_raw_markup_without_leaking_label_text() {
 #[test]
 fn html_import_keeps_block_svg_verbatim_and_reopens_it() {
     let markup = r#"<svg viewBox="0 0 100 40"><rect width="100" height="40"/><text x="4" y="20">gauge</text></svg>"#;
-    let graph =
-        import_html_text("block-svg.html", &format!("<body><figure>{markup}</figure></body>")).expect("import block svg");
-    let Block::RawHtml { html } = &graph.blocks[0].block
+    let graph = import_html_text(
+        "block-svg.html",
+        &format!("<body><p>before</p><figure>{markup}</figure><p>after</p></body>"),
+    )
+    .expect("import block svg");
+    let Block::Paragraph { content } = &graph.blocks[0].block
+    else {
+        panic!("leading paragraph expected, got {:?}", graph.blocks)
+    };
+    assert!(content.iter().map(Inline::plain_text).collect::<String>().contains("before"));
+    let Block::RawHtml { html } = &graph.blocks[1].block
     else {
         panic!("raw html block expected, got {:?}", graph.blocks)
     };
     assert_eq!(html, markup);
+    let Block::Paragraph { content } = &graph.blocks[2].block
+    else {
+        panic!("a self-closing SVG child must not swallow the following block, got {:?}", graph.blocks)
+    };
+    assert!(content.iter().map(Inline::plain_text).collect::<String>().contains("after"));
 
     let output = export_html(&graph).expect("export html");
     assert!(output.contains(markup), "{output}");

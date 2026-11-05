@@ -69,6 +69,344 @@ pub(crate) fn normalize_self_closing_math_elements(text: &str) -> Cow<'_, str> {
     }
 }
 
+/// Rewrite self-closing elements into void HTML placeholders before parsing.
+///
+/// `oak-html` applies HTML tree construction rules, where a trailing slash on a
+/// non-void element is ignored. MathML empty elements and SVG children both
+/// rely on the slash to stay empty, so without this pass they remain open and
+/// swallow every following sibling. Placeholders keep the byte length, which
+/// keeps source spans pointing at the original text.
+pub(crate) fn normalize_self_closing_elements(text: &str) -> Cow<'_, str> {
+    let math = normalize_self_closing_math_elements(text);
+    let svg = normalize_self_closing_svg_elements(math.as_ref());
+    if let Cow::Owned(owned) = svg {
+        return Cow::Owned(owned);
+    }
+    match math {
+        Cow::Owned(owned) => Cow::Owned(owned),
+        Cow::Borrowed(_) => Cow::Borrowed(text),
+    }
+}
+
+/// Rewrite self-closing elements into explicit end tags before parsing.
+///
+/// The XHTML reader keeps the element tree, so it cannot use the placeholder
+/// pass: expanding `<rect .../>` to `<rect ...></rect>` keeps the attributes
+/// and children visible while `</svg>` closes the subtree again. Offsets shift,
+/// which is fine because the EPUB reader only walk the tree and restores
+/// whitespace against the same expanded text.
+pub(crate) fn normalize_self_closing_elements_expanded(text: &str) -> Cow<'_, str> {
+    let math = normalize_self_closing_math_elements(text);
+    let svg = expand_self_closing_svg_elements(math.as_ref());
+    if let Cow::Owned(owned) = svg {
+        return Cow::Owned(owned);
+    }
+    match math {
+        Cow::Owned(owned) => Cow::Owned(owned),
+        Cow::Borrowed(_) => Cow::Borrowed(text),
+    }
+}
+
+/// Rewrite self-closing SVG elements into void HTML placeholders.
+///
+/// An authored `<svg><rect .../></svg>` is valid HTML: inside foreign content
+/// the trailing slash closes the element. `oak-html` ignores it, so `<rect>`
+/// stays open, `</svg>` no longer closes the subtree, and the rest of the
+/// document is swallowed into the raw SVG markup. A self-closing `<svg/>`
+/// swallows the same way. Both shapes are replaced by a void `<br>`, padded to
+/// the authored byte length so every span keeps pointing at the original text.
+pub(crate) fn normalize_self_closing_svg_elements(text: &str) -> Cow<'_, str> {
+    let mut replacements = Vec::new();
+    collect_svg_replacements(text, &mut replacements);
+    if replacements.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    replacements.sort_unstable();
+    replacements.dedup();
+    let mut owned = String::with_capacity(text.len());
+    let mut copied = 0usize;
+    for (start, end) in replacements {
+        owned.push_str(&text[copied..start]);
+        owned.push_str("<br>");
+        owned.push_str(&" ".repeat((end - start).saturating_sub("<br>".len())));
+        copied = end;
+    }
+    owned.push_str(&text[copied..]);
+    Cow::Owned(owned)
+}
+
+fn collect_svg_replacements(text: &str, out: &mut Vec<(usize, usize)>) {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let Some(offset) = text[index..].find('<') else {
+            break;
+        };
+        let start = index + offset;
+        if text[start..].starts_with("<!--") {
+            match text[start..].find("-->") {
+                Some(end) => {
+                    index = start + end + 3;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        let Some((name, name_end)) = tag_name(text, start) else {
+            index = start + 1;
+            continue;
+        };
+        let Some(tag_end) = find_tag_end(text, name_end) else {
+            break;
+        };
+        if name.eq_ignore_ascii_case("svg") {
+            if is_self_closing_start_tag(text, name_end, tag_end) {
+                out.push((start, tag_end + 1));
+            }
+            else if let Some(region_end) = find_svg_close_end(text, tag_end + 1) {
+                collect_self_closing_tags(text, tag_end + 1, region_end, out);
+                index = region_end;
+                continue;
+            }
+        }
+        index = tag_end + 1;
+    }
+}
+
+fn expand_self_closing_svg_elements(text: &str) -> Cow<'_, str> {
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+    collect_svg_expansions(text, &mut replacements);
+    if replacements.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    replacements.sort_by(|left, right| left.0.cmp(&right.0));
+    replacements.dedup_by(|left, right| left.0 == right.0 && left.1 == right.1);
+    let mut owned = String::with_capacity(text.len() + replacements.len() * 8);
+    let mut copied = 0usize;
+    for (start, end, replacement) in replacements {
+        if start < copied {
+            continue;
+        }
+        owned.push_str(&text[copied..start]);
+        owned.push_str(&replacement);
+        copied = end;
+    }
+    owned.push_str(&text[copied..]);
+    Cow::Owned(owned)
+}
+
+fn collect_svg_expansions(text: &str, out: &mut Vec<(usize, usize, String)>) {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let Some(offset) = text[index..].find('<') else {
+            break;
+        };
+        let start = index + offset;
+        if text[start..].starts_with("<!--") {
+            match text[start..].find("-->") {
+                Some(end) => {
+                    index = start + end + 3;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        let Some((name, name_end)) = tag_name(text, start) else {
+            index = start + 1;
+            continue;
+        };
+        let Some(tag_end) = find_tag_end(text, name_end) else {
+            break;
+        };
+        if name.eq_ignore_ascii_case("svg") {
+            if is_self_closing_start_tag(text, name_end, tag_end) {
+                out.push((start, tag_end + 1, expanded_tag(text, start, name_end, tag_end)));
+            }
+            else if let Some(region_end) = find_svg_close_end(text, tag_end + 1) {
+                collect_inner_expansions(text, tag_end + 1, region_end, out);
+                index = region_end;
+                continue;
+            }
+        }
+        index = tag_end + 1;
+    }
+}
+
+fn collect_inner_expansions(text: &str, from: usize, to: usize, out: &mut Vec<(usize, usize, String)>) {
+    let mut index = from;
+    while index < to {
+        let Some(offset) = text[index..to].find('<') else {
+            break;
+        };
+        let start = index + offset;
+        if text[start..].starts_with("<!--") {
+            match text[start..to].find("-->") {
+                Some(end) => {
+                    index = start + end + 3;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        let Some((name, name_end)) = tag_name(text, start) else {
+            index = start + 1;
+            continue;
+        };
+        let Some(tag_end) = find_tag_end(text, name_end) else {
+            break;
+        };
+        if tag_end >= to {
+            break;
+        }
+        if is_self_closing_start_tag(text, name_end, tag_end) && !is_void_html_element(&name) {
+            out.push((start, tag_end + 1, expanded_tag(text, start, name_end, tag_end)));
+        }
+        index = tag_end + 1;
+    }
+}
+
+/// `<rect .../>` becomes `<rect ...></rect>`, keeping attributes and casing.
+fn expanded_tag(text: &str, start: usize, name_end: usize, tag_end: usize) -> String {
+    let name = &text[start + 1..name_end];
+    let mut slash = tag_end;
+    while slash > name_end && text.as_bytes()[slash - 1].is_ascii_whitespace() {
+        slash -= 1;
+    }
+    format!("{}{}</{}>", &text[start..slash - 1], &text[slash..tag_end + 1], name)
+}
+
+fn is_void_html_element(name: &str) -> bool {
+    matches!(
+        name,
+        "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input" | "link" | "meta" | "param" | "source" | "track" | "wbr"
+    )
+}
+
+fn collect_self_closing_tags(text: &str, from: usize, to: usize, out: &mut Vec<(usize, usize)>) {
+    let mut index = from;
+    while index < to {
+        let Some(offset) = text[index..to].find('<') else {
+            break;
+        };
+        let start = index + offset;
+        if text[start..].starts_with("<!--") {
+            match text[start..to].find("-->") {
+                Some(end) => {
+                    index = start + end + 3;
+                    continue;
+                }
+                None => break,
+            }
+        }
+        let Some((_, name_end)) = tag_name(text, start) else {
+            index = start + 1;
+            continue;
+        };
+        let Some(tag_end) = find_tag_end(text, name_end) else {
+            break;
+        };
+        if tag_end >= to {
+            break;
+        }
+        if is_self_closing_start_tag(text, name_end, tag_end) {
+            out.push((start, tag_end + 1));
+        }
+        index = tag_end + 1;
+    }
+}
+
+/// The lowercase tag name and the offset just past it.
+fn tag_name(text: &str, start: usize) -> Option<(String, usize)> {
+    let bytes = text.as_bytes();
+    let mut index = start + 1;
+    if bytes.get(index) == Some(&b'/') {
+        return None;
+    }
+    let name_start = index;
+    while index < bytes.len() && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'-' || bytes[index] == b':') {
+        index += 1;
+    }
+    if index == name_start {
+        return None;
+    }
+    Some((text[name_start..index].to_ascii_lowercase(), index))
+}
+
+fn is_self_closing_start_tag(text: &str, name_end: usize, tag_end: usize) -> bool {
+    text[name_end..tag_end].trim_end().ends_with('/')
+}
+
+/// The offset of the `>` that ends the start tag, ignoring quoted attributes.
+pub(crate) fn find_tag_end(text: &str, from: usize) -> Option<usize> {
+    let mut quote: Option<u8> = None;
+    for (offset, byte) in text[from..].bytes().enumerate() {
+        match byte {
+            b'"' | b'\'' => {
+                if quote == Some(byte) {
+                    quote = None;
+                }
+                else if quote.is_none() {
+                    quote = Some(byte);
+                }
+            }
+            b'>' if quote.is_none() => return Some(from + offset),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The offset just past the `</svg>` that closes the region opening at `from`.
+fn find_svg_close_end(text: &str, from: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let mut depth = 0usize;
+    let mut index = from;
+    while index < bytes.len() {
+        let Some(offset) = text[index..].find('<') else {
+            return None;
+        };
+        let start = index + offset;
+        if text[start..].starts_with("<!--") {
+            match text[start..].find("-->") {
+                Some(end) => {
+                    index = start + end + 3;
+                    continue;
+                }
+                None => return None,
+            }
+        }
+        if bytes.get(start + 1) == Some(&b'/') {
+            let name_start = start + 2;
+            let mut name_end = name_start;
+            while name_end < bytes.len()
+                && (bytes[name_end].is_ascii_alphanumeric() || bytes[name_end] == b'-' || bytes[name_end] == b':')
+            {
+                name_end += 1;
+            }
+            if text[name_start..name_end].eq_ignore_ascii_case("svg") {
+                let tag_end = find_tag_end(text, name_end)?;
+                if depth == 0 {
+                    return Some(tag_end + 1);
+                }
+                depth -= 1;
+                index = tag_end + 1;
+                continue;
+            }
+        }
+        else if let Some((name, name_end)) = tag_name(text, start) {
+            let tag_end = find_tag_end(text, name_end)?;
+            if name.eq_ignore_ascii_case("svg") && !is_self_closing_start_tag(text, name_end, tag_end) {
+                depth += 1;
+            }
+            index = tag_end + 1;
+            continue;
+        }
+        index = start + 1;
+    }
+    None
+}
+
 /// Lower one `<math>` element into the document math representation.
 ///
 /// Returns the formula plus the MathML constructs that had no mapping. Callers

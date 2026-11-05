@@ -15,7 +15,7 @@ pub fn parse_html_bytes(html: &[u8]) -> Result<HtmlDocument, FormatError> {
 
 /// Parses XHTML or HTML text into a typed `oak-html` document.
 pub fn parse_html_text(text: &str) -> Result<HtmlDocument, FormatError> {
-    let normalized = crate::import::math_ml::normalize_self_closing_math_elements(text);
+    let normalized = crate::import::math_ml::normalize_self_closing_elements_expanded(text);
     let text = normalized.as_ref();
     let language = HtmlLanguage::default();
     let source = SourceText::new(text);

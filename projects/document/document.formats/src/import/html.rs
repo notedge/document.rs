@@ -74,7 +74,8 @@ pub fn import_html_text(label: &str, text: &str) -> Result<DocumentGraph, Format
 
 /// Import HTML from a UTF-8 string with link candidates.
 pub fn import_html_with_links(label: &str, text: &str) -> Result<HtmlImport, FormatError> {
-    let normalized = crate::import::math_ml::normalize_self_closing_math_elements(text);
+    let authored = text;
+    let normalized = crate::import::math_ml::normalize_self_closing_elements(text);
     let text = normalized.as_ref();
     let source = SourceText::new(text);
     let builder = HtmlBuilder::new(HtmlLanguage::default());
@@ -99,7 +100,7 @@ pub fn import_html_with_links(label: &str, text: &str) -> Result<HtmlImport, For
         .map(|href| href.trim().to_string())
         .filter(|href| !href.is_empty());
     let links = collect_links(&document);
-    for (block, span) in lower_children(body_children(&document), &mut graph, text) {
+    for (block, span) in lower_children(body_children(&document), &mut graph, authored) {
         push_block_with_source(&mut graph, block, span);
     }
     register_image_assets(&mut graph);
@@ -191,6 +192,13 @@ fn lower_children(children: &[HtmlNode], graph: &mut DocumentGraph, source: &str
     let mut pending = Vec::new();
     let mut pending_span: Option<std::ops::Range<usize>> = None;
     for child in children {
+        if let HtmlNode::Element(element) = child {
+            if let Some((html, authored_span)) = self_closing_svg_markup(element, source) {
+                flush_inline_run(&mut result, &mut pending, &mut pending_span);
+                result.push((Block::RawHtml { html }, authored_span));
+                continue;
+            }
+        }
         match child {
             HtmlNode::Element(element) if is_block_element(element) || is_display_math(element) => {
                 flush_inline_run(&mut result, &mut pending, &mut pending_span);
@@ -907,6 +915,32 @@ fn raw_element_markup(element: &Element, source: &str) -> String {
     source.get(element.span.clone()).map(str::to_string).unwrap_or_else(|| text_content(element))
 }
 
+/// Recover a self-closing `<svg .../>` lowered to a void `<br>` placeholder.
+///
+/// The placeholder keeps the authored byte length, but its own span only covers
+/// the `<br>` tag. The authored start tag is read back from the original text,
+/// so the raw markup keeps the attributes the parser never saw.
+fn self_closing_svg_markup(element: &Element, source: &str) -> Option<(String, std::ops::Range<usize>)> {
+    if !element.tag_name.eq_ignore_ascii_case("br") {
+        return None;
+    }
+    let start = element.span.start;
+    let authored = source.get(start..)?;
+    if !authored.get(..4).is_some_and(|head| head.eq_ignore_ascii_case("<svg")) {
+        return None;
+    }
+    let next = authored.as_bytes().get(4).copied();
+    if !matches!(next, Some(b' ') | Some(b'\t') | Some(b'\r') | Some(b'\n') | Some(b'/') | Some(b'>')) {
+        return None;
+    }
+    let tag_end = start + crate::import::math_ml::find_tag_end(authored, 4)? + 1;
+    let tag = source.get(start..tag_end)?;
+    if !tag.trim_end().ends_with("/>") {
+        return None;
+    }
+    Some((tag.to_string(), start..tag_end))
+}
+
 /// Decode the character references real diagram and code sources carry.
 /// Unknown or malformed references stay verbatim instead of being dropped.
 fn decode_character_references(raw: &str) -> String {
@@ -1090,6 +1124,11 @@ fn is_unsupported_element(element: &Element) -> bool {
 
 fn lower_inline_element(element: &Element, graph: &mut DocumentGraph, source: &str) -> Vec<Inline> {
     let tag = element.tag_name.to_ascii_lowercase();
+    // A self-closing `<svg/>` arrives as a void placeholder so the parser closes
+    // it. The authored markup is recovered from the original text.
+    if let Some((html, _)) = self_closing_svg_markup(element, source) {
+        return vec![Inline::RawHtml { html }];
+    }
     // Inline-position SVG keeps its exact markup instead of leaking label text.
     if tag == "svg" {
         return vec![Inline::RawHtml { html: raw_element_markup(element, source) }];

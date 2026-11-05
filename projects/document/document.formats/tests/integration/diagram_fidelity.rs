@@ -159,6 +159,69 @@ fn rendered_diagram_figures_round_trip_the_authored_source() {
 }
 
 #[test]
+fn rendered_diagram_svg_with_self_closing_children_keeps_the_following_block() {
+    let markdown = "```mermaid\nflowchart TD\n  A --> B\n```\n\nClosing paragraph.\n";
+    let graph = import_markdown_bytes("rendered.md", markdown).expect("import rendered markdown");
+    let diagrams = graph
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::Diagram { .. } => Some((
+                node.id,
+                RenderedDiagram {
+                    svg: "<svg viewBox=\"0 0 20 20\"><rect width=\"20\" height=\"20\"/><text x=\"4\" y=\"12\">A</text></svg>"
+                        .to_string(),
+                },
+            )),
+            _ => None,
+        })
+        .collect::<HashMap<NodeId, RenderedDiagram>>();
+    let html = export_html_with_diagrams(&graph, &diagrams).expect("export rendered diagram html");
+    let reopened = import_html_bytes("rendered.html", html.as_bytes()).expect("reopen rendered diagram html");
+    assert_eq!(diagram_block(&reopened, "mermaid"), "flowchart TD\n  A --> B");
+    let Block::Paragraph { content } = &reopened.blocks.last().expect("closing paragraph").block
+    else {
+        panic!("a self-closing SVG child must not swallow the closing paragraph: {:?}", reopened.blocks)
+    };
+    assert!(content.iter().map(Inline::plain_text).collect::<String>().contains("Closing paragraph"));
+}
+
+#[test]
+fn mixed_diagram_languages_keep_typed_fences_through_html() {
+    let markdown = "```mermaid\nflowchart LR\n  A --> B\n```\n\n```plantuml\n@startuml\nAlice -> Bob\n@enduml\n```\n\n```dot\ndigraph { a -> b }\n```\n";
+    let graph = import_markdown_bytes("mixed.md", markdown).expect("import mixed diagram markdown");
+    let diagrams = graph
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::Diagram { .. } => Some((
+                node.id,
+                RenderedDiagram {
+                    svg: "<svg viewBox=\"0 0 20 20\"><rect width=\"20\" height=\"20\"/><text x=\"4\" y=\"12\">A</text></svg>"
+                        .to_string(),
+                },
+            )),
+            _ => None,
+        })
+        .collect::<HashMap<NodeId, RenderedDiagram>>();
+    let html = export_html_with_diagrams(&graph, &diagrams).expect("export mixed diagram html");
+    let reopened = import_html_bytes("mixed.html", html.as_bytes()).expect("reopen mixed diagram html");
+    let languages = reopened
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::Diagram { language, .. } => Some(language.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(languages, vec!["mermaid", "plantuml", "dot"], "{:?}", reopened.blocks);
+    let back = export_markdown(&reopened).expect("export mixed diagram markdown");
+    assert!(back.contains("```mermaid\n"), "{back}");
+    assert!(back.contains("```plantuml\n"), "{back}");
+    assert!(back.contains("```dot\n"), "{back}");
+}
+
+#[test]
 fn docx_diagram_paragraphs_preserve_language_and_source() {
     for &(language, corpus) in DIAGRAM_CORPORA {
         for (name, source) in corpus {
