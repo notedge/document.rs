@@ -242,7 +242,7 @@ fn html_image_size_is_a_recorded_loss() {
 /// `<ol start>` and nested lists, so the graph validates.
 #[test]
 fn epub_ordered_list_items_carry_numbers() {
-    let graph = import_epub_bytes("ordered-list.epub", &read_fixture("epub/ordered-list.epub")).expect("epub import");
+    let graph = import_epub_bytes("ordered-list.epub", &epub_fixture("ordered-list")).expect("epub import");
     assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
     let lists: Vec<&Block> = collect_blocks(&graph, &|block| matches!(block, Block::List { ordered: true, .. }));
     let main = lists
@@ -290,12 +290,12 @@ fn epub_ordered_list_items_carry_numbers() {
 /// still keep the chapter text.
 #[test]
 fn epub_css_stylesheets_stay_fail_closed_with_diagnostics() {
-    let linked = import_epub_bytes("css-link.epub", &read_fixture("epub/css-link.epub")).expect("epub import");
+    let linked = import_epub_bytes("css-link.epub", &epub_fixture("css-link")).expect("epub import");
     assert_eq!(loss(&linked, "import.epub.css_link_unsupported"), SemanticStatus::Unsupported);
     let markdown = export_markdown(&linked).expect("markdown export");
     assert!(markdown.contains("Styled paragraph."), "{markdown}");
 
-    let embedded = import_epub_bytes("inline-style.epub", &read_fixture("epub/inline-style.epub")).expect("epub import");
+    let embedded = import_epub_bytes("inline-style.epub", &epub_fixture("inline-style")).expect("epub import");
     assert_eq!(loss(&embedded, "import.epub.css_inline_block_unsupported"), SemanticStatus::Unsupported);
     let markdown = export_markdown(&embedded).expect("markdown export");
     assert!(markdown.contains("Styled paragraph."), "{markdown}");
@@ -307,7 +307,7 @@ fn epub_css_stylesheets_stay_fail_closed_with_diagnostics() {
 #[test]
 fn epub_list_value_and_reversed_are_explicit() {
     let graph =
-        import_epub_bytes("list-value-reversed.epub", &read_fixture("epub/list-value-reversed.epub")).expect("epub import");
+        import_epub_bytes("list-value-reversed.epub", &epub_fixture("list-value-reversed")).expect("epub import");
     assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
 
     let shifted = ordered_list_starting_with(&graph, "two");
@@ -329,7 +329,7 @@ fn epub_list_value_and_reversed_are_explicit() {
 /// definition bodies.
 #[test]
 fn epub_structural_footnotes_become_notes_and_definitions() {
-    let graph = import_epub_bytes("footnotes.epub", &read_fixture("epub/footnotes.epub")).expect("epub import");
+    let graph = import_epub_bytes("footnotes.epub", &epub_fixture("footnotes")).expect("epub import");
     assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
     assert_eq!(note_labels(&graph), vec!["1".to_string(), "2".to_string(), "3".to_string()], "{:?}", graph.blocks);
     assert_eq!(
@@ -364,7 +364,7 @@ fn epub_structural_footnotes_become_notes_and_definitions() {
 /// stay explicit definition blocks instead of being merged or dropped.
 #[test]
 fn epub_footnote_reference_without_definition_stays_a_note() {
-    let graph = import_epub_bytes("footnotes-edge.epub", &read_fixture("epub/footnotes-edge.epub")).expect("epub import");
+    let graph = import_epub_bytes("footnotes-edge.epub", &epub_fixture("footnotes-edge")).expect("epub import");
     assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
     let notes = note_labels(&graph);
     assert!(notes.iter().any(|label| label == "9"), "{notes:?}");
@@ -382,3 +382,144 @@ fn epub_footnote_reference_without_definition_stays_a_note() {
     assert!(markdown.contains("[^3]: First copy."), "{markdown}");
     assert!(markdown.contains("[^3]: Second copy."), "{markdown}");
 }
+
+// --- in-memory EPUB packages ------------------------------------------------
+
+fn epub_fixture(name: &str) -> Vec<u8> {
+    match name {
+        "ordered-list" => build_epub(
+            "ordered-list",
+            "Fixture ordered-list.epub",
+            &[("chapter1.xhtml", ORDERED_LIST_CHAPTER)],
+            false,
+        ),
+        "css-link" => build_epub(
+            "css-link",
+            "Fixture css-link.epub",
+            &[("chapter1.xhtml", CSS_LINK_CHAPTER)],
+            true,
+        ),
+        "inline-style" => build_epub(
+            "inline-style",
+            "Fixture inline-style.epub",
+            &[("chapter1.xhtml", INLINE_STYLE_CHAPTER)],
+            false,
+        ),
+        "list-value-reversed" => build_epub(
+            "list-value-reversed",
+            "Fixture list value reversed",
+            &[("chapter1.xhtml", LIST_VALUE_REVERSED_CHAPTER)],
+            false,
+        ),
+        "footnotes" => build_epub(
+            "footnotes",
+            "Fixture footnotes.epub",
+            &[("chapter1.xhtml", FOOTNOTES_CHAPTER)],
+            false,
+        ),
+        "footnotes-edge" => build_epub(
+            "footnotes-edge",
+            "Fixture footnotes-edge.epub",
+            &[("chapter1.xhtml", FOOTNOTES_EDGE_MISSING), ("chapter2.xhtml", FOOTNOTES_EDGE_DUPLICATE)],
+            false,
+        ),
+        other => panic!("unknown epub fixture `{other}`"),
+    }
+}
+
+fn build_epub(identifier: &str, title: &str, chapters: &[(&str, &str)], linked_css: bool) -> Vec<u8> {
+    let mut manifest =
+        String::from(r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#);
+    let mut spine = String::new();
+    let mut nav_items = String::new();
+    for (index, (href, _)) in chapters.iter().enumerate() {
+        let id = format!("c{}", index + 1);
+        manifest.push_str(&format!(r#"<item id="{id}" href="{href}" media-type="application/xhtml+xml"/>"#));
+        spine.push_str(&format!(r#"<itemref idref="{id}"/>"#));
+        nav_items.push_str(&format!(r#"<li><a href="{href}">Chapter {}</a></li>"#, index + 1));
+    }
+    if linked_css {
+        manifest.push_str(r#"<item id="css" href="style.css" media-type="text/css"/>"#);
+    }
+    let opf = format!(
+        r##"<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="bookid">fixture-{identifier}.epub</dc:identifier><dc:title>{title}</dc:title><dc:language>en</dc:language></metadata><manifest>{manifest}</manifest><spine>{spine}</spine></package>"##
+    );
+    let nav = format!(
+        r##"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>nav</title></head><body><nav epub:type="toc" xmlns:epub="http://www.idpf.org/2007/ops"><ol>{nav_items}</ol></nav></body></html>"##
+    );
+    let mut parts: Vec<(String, Vec<u8>)> = vec![
+        ("mimetype".to_string(), b"application/epub+zip".to_vec()),
+        ("META-INF/container.xml".to_string(), CONTAINER.to_vec()),
+    ];
+    for (href, body) in chapters {
+        parts.push((format!("OEBPS/{href}"), body.as_bytes().to_vec()));
+    }
+    parts.push(("OEBPS/content.opf".to_string(), opf.into_bytes()));
+    parts.push(("OEBPS/nav.xhtml".to_string(), nav.into_bytes()));
+    zip_stored(&parts)
+}
+
+fn zip_stored(parts: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut directory = Vec::new();
+    for (name, bytes) in parts {
+        let crc = crc32(bytes);
+        let offset = output.len() as u32;
+        output.extend_from_slice(b"PK\x03\x04");
+        output.extend_from_slice(&[20, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        output.extend_from_slice(&crc.to_le_bytes());
+        output.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        output.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        output.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        output.extend_from_slice(&0u16.to_le_bytes());
+        output.extend_from_slice(name.as_bytes());
+        output.extend_from_slice(bytes);
+        directory.extend_from_slice(b"PK\x01\x02");
+        directory.extend_from_slice(&[20, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        directory.extend_from_slice(&crc.to_le_bytes());
+        directory.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        directory.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        directory.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        directory.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        directory.extend_from_slice(&offset.to_le_bytes());
+        directory.extend_from_slice(name.as_bytes());
+    }
+    let directory_offset = output.len() as u32;
+    output.extend_from_slice(&directory);
+    output.extend_from_slice(b"PK\x05\x06");
+    output.extend_from_slice(&[0, 0, 0, 0]);
+    output.extend_from_slice(&(parts.len() as u16).to_le_bytes());
+    output.extend_from_slice(&(parts.len() as u16).to_le_bytes());
+    output.extend_from_slice(&(directory.len() as u32).to_le_bytes());
+    output.extend_from_slice(&directory_offset.to_le_bytes());
+    output.extend_from_slice(&[0, 0]);
+    output
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in bytes {
+        crc ^= *byte as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+const CONTAINER: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+
+const ORDERED_LIST_CHAPTER: &str = r##"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>ordered</title></head><body><h1>Ordered</h1><ol><li><p>one</p></li><li><p>two</p></li></ol><ol start="3"><li><p>three</p></li><li><ul><li>nested a</li><li>nested b</li></ul></li></ol></body></html>"##;
+
+const CSS_LINK_CHAPTER: &str = r##"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>css link</title><link rel="stylesheet" type="text/css" href="style.css"/></head><body><p>Styled paragraph.</p></body></html>"##;
+
+const INLINE_STYLE_CHAPTER: &str = r##"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>css block</title><style>p { color: red; }</style></head><body><p>Styled paragraph.</p></body></html>"##;
+
+const LIST_VALUE_REVERSED_CHAPTER: &str = r##"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>lists</title></head><body><h1>Lists</h1><ol start="2"><li><p>two</p></li><li value="5"><p>five</p></li><li><p>six</p></li></ol><ol><li value="1"><p>one</p></li><li value="1"><p>duplicate</p></li></ol><ol reversed><li><p>a</p></li><li><p>b</p></li></ol></body></html>"##;
+
+const FOOTNOTES_CHAPTER: &str = r##"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>footnotes</title></head><body><h1>Footnotes</h1><p>Body with a single note<a epub:type="noteref" href="#fn1" id="fnref1">1</a>, a note with two paragraphs<a epub:type="noteref" href="#fn2" id="fnref2">2</a>, and a note with inline markup<a epub:type="noteref" href="#fn3" id="fnref3">3</a>.</p><aside epub:type="footnote" id="fn1"><p>Single paragraph note.<a href="#fnref1">↩</a></p></aside><aside epub:type="footnote" id="fn2"><p>First paragraph.<a href="#fnref2">↩︎</a></p><p>Second paragraph.</p></aside><aside epub:type="footnote" id="fn3"><p>Inline <strong>bold</strong>, <code>code</code>, and <a href="https://example.com">link</a>.<a href="#fnref3">return</a></p></aside></body></html>"##;
+
+const FOOTNOTES_EDGE_MISSING: &str = r##"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>missing</title></head><body><h1>Missing definition</h1><p>Lonely reference<a epub:type="noteref" href="#fn9" id="fnref9">9</a>.</p></body></html>"##;
+
+const FOOTNOTES_EDGE_DUPLICATE: &str = r##"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>duplicate</title></head><body><h1>Duplicate definition</h1><p>Repeated reference<a epub:type="noteref" href="#fn3" id="fnref3">3</a>.</p><aside epub:type="footnote" id="fn3"><p>First copy.</p></aside><aside epub:type="footnote" id="fn3"><p>Second copy.</p></aside></body></html>"##;

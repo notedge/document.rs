@@ -44,19 +44,32 @@ workspace，按产品域分目录：
 - 门面 `plotter` / `document` / `crawler` 只允许 `pub mod xx { pub use …::*; }`（或同等再导出）形态，禁止业务逻辑塞进门面模块树；编排入口可留在
   `crawler` 根 API。
 
-### 资产边界（实现仓干净）
+### 资产边界（零二进制入库）
 
-本仓 **不进** 二进制字体、视觉 golden（PNG / SVG / fingerprint）、大型 fixtures：
+本仓 **入库零二进制**。`git ls-files` 里不得出现任何二进制文件，判定按内容而不按扩展名。点名范围：
 
-| 内容                                         | 归属                                           |
-|----------------------------------------------|------------------------------------------------|
-| 字体解析 / metrics / variants 逻辑           | `document.text` 等处理 crate                   |
-| `.otf` / `.ttf` 字节                         | **下游**（如 VuTeX，`install_math_font` 注入） |
-| diagram/chart 像素黄金与 fingerprint         | **下游**或 CI artifact                         |
-| 文本合同（如拒绝目录 JSON）                  | 可留在实现仓（`src` 合同，非测试套件）         |
-| 数据驱动合同 JSON / 视觉 golden / 浏览器门禁 | **下游**；实现仓 tests 只留冒烟                |
+- 字体字节：`.ttf` `.otf` `.woff` `.woff2` 等。
+- 图片与视觉资产：`.png` `.jpg` `.jpeg` `.gif` `.webp` `.bmp` `.tiff` `.ico`，作为资产使用的 `.svg`。
+- 文档样本：`.pdf` `.doc` `.docx` `.xlsx` `.pptx` `.epub` `.odt` 等。
+- 容器与编译产物：`.zip` `.bin` `.wasm` `.so` `.dylib` `.dll` `.exe` `.rlib` `.a` `.o` `.class` 等。
 
-改代码时不要把资产重新拷回 `projects/**`。
+| 内容                              | 归属                                                                 | 实现仓允许形态                                     |
+|-----------------------------------|----------------------------------------------------------------------|----------------------------------------------------|
+| 字体解析 / metrics / variants 逻辑 | `document.text` 等处理 crate                                          | 源码                                               |
+| 字体字节                          | **下游**（VuTeX 或其独立字体资产包），调用方注入                      | 无字节，只接调用方传入的字节                       |
+| 文档样本（含整包 EPUB / OPC）     | **下游** panduck fixtures（`projects/panduck.ts/packages/panduck-fixtures/fixtures/formats/`） | 无文件，测试内内存构造或运行期生成                 |
+| 视觉 golden / fingerprint          | **下游**或 CI artifact                                                | 无文件                                             |
+| 文本合同（如拒绝目录 JSON）       | 可留在实现仓                                                          | `src` 合同，非测试套件                             |
+| 数据驱动合同 JSON / 浏览器门禁    | **下游**                                                              | 实现仓 tests 只留冒烟                              |
+
+实现仓 tests 的 fixtures **只允许两种形态**：
+
+1. 代码构造：测试内用字符串或最小字节流在内存中拼出样本，ZIP / OPC / EPUB 包也按字节写入，不落盘。
+2. 运行期生成：脚本或测试按需产出到 `CARGO_TARGET_TMPDIR` 或系统临时目录，不写入仓内、不入库。
+
+真实语料一律留在下游。禁止把任何二进制拷回 `projects/**`，禁止把运行期生成物写进仓内，禁止以「大型文本 fixture」替代二进制样本入库。
+
+强制检查：`cargo test -p document-formats --test no_binary_assets` 扫描 `git ls-files`，任何非文本文件即失败。
 
 ### 编码与工具
 
