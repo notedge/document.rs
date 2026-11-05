@@ -44,7 +44,7 @@ pub use inspect::{
 pub use publish::{PublishedMarkdownProject, publish_bytes, publish_markdown_project, publish_text};
 pub use readers::{
     read_doc, read_doc_bytes, read_html, read_html_bytes, read_markdown, read_markdown_bytes, read_notedown,
-    read_notedown_bytes, read_pdf, read_pdf_bytes,
+    read_notedown_bytes, read_pdf, read_pdf_bytes, read_tex, read_tex_bytes, read_typst, read_typst_bytes,
 };
 pub use structure::MAX_STRUCTURE_DEPTH;
 pub use transform::{TransformOutcome, TransformPassReport, TransformPassStatus, apply_transform_passes};
@@ -58,7 +58,7 @@ pub use writers::{
 /// This list only says a reader implementation exists. It does not by itself
 /// make a route available — [`supports_route`] also requires the `Import`
 /// capability in `document_formats::capabilities()` to be routable.
-pub const READERS: &[&str] = &["docx", "doc", "pdf", "epub", "html", "markdown", "notedown"];
+pub const READERS: &[&str] = &["docx", "doc", "pdf", "epub", "html", "markdown", "notedown", "tex", "typst"];
 
 /// Writer handlers wired into this build (lowercase).
 ///
@@ -458,6 +458,24 @@ fn read_source(from: &str, label: &str, bytes: Vec<u8>) -> Result<DocumentGraph>
                 }
             };
             read_notedown_bytes(label, text)
+        }
+        "tex" => {
+            let text = match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(error) => {
+                    return format_error::fail(AdapterError::invalid_input(format!("tex input is not valid UTF-8: {error}")));
+                }
+            };
+            read_tex_bytes(label, text)
+        }
+        "typst" => {
+            let text = match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(error) => {
+                    return format_error::fail(AdapterError::invalid_input(format!("typst input is not valid UTF-8: {error}")));
+                }
+            };
+            read_typst_bytes(label, text)
         }
         other => format_error::fail(AdapterError::unsupported_format(other, "read")),
     }
