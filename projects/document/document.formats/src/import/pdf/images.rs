@@ -47,7 +47,7 @@ pub(crate) fn page_images(
                 PdfImage { bytes: stream.data.to_vec(), media_type: "image/jpeg", source }
             }
             else if image_body.windows(12).any(|window| window == b"/FlateDecode") {
-                let Ok(bytes) = decode_pdf_image_png(image_body, stream.data)
+                let Ok(bytes) = decode_pdf_image_png(image_body, stream.data, bodies)
                 else {
                     // Keep text import available when one embedded image uses an
                     // unsupported colorspace. The content stream reports the
@@ -65,7 +65,11 @@ pub(crate) fn page_images(
     Ok(result)
 }
 
-pub(crate) fn decode_pdf_image_png(dictionary: &[u8], stream: &[u8]) -> Result<Vec<u8>, FormatError> {
+pub(crate) fn decode_pdf_image_png(
+    dictionary: &[u8],
+    stream: &[u8],
+    bodies: &[(u32, Vec<u8>)],
+) -> Result<Vec<u8>, FormatError> {
     let width = dictionary_value(dictionary, b"/Width")
         .and_then(|value| u32::try_from(value).ok())
         .ok_or_else(|| FormatError::parse("pdf", "Flate image has invalid /Width"))?;
@@ -91,10 +95,20 @@ pub(crate) fn decode_pdf_image_png(dictionary: &[u8], stream: &[u8]) -> Result<V
     else {
         color_end
     };
-    let colors = match &dictionary[color_start..color_end] {
-        b"/DeviceGray" => 1,
-        b"/DeviceRGB" => 3,
-        _ => return Err(FormatError::unsupported("pdf", "Flate image requires a direct grayscale or RGB colorspace")),
+    let colors = if let Some(icc) = icc_based_components(dictionary, bodies)? {
+        icc
+    }
+    else {
+        match &dictionary[color_start..color_end] {
+            b"/DeviceGray" => 1,
+            b"/DeviceRGB" => 3,
+            _ => {
+                return Err(FormatError::unsupported(
+                    "pdf",
+                    "Flate image requires a direct grayscale or RGB colorspace",
+                ));
+            }
+        }
     };
     if dictionary_value(dictionary, b"/Colors").is_some_and(|value| value != colors) {
         return Err(FormatError::unsupported("pdf", "Flate image predictor colors disagree with colorspace"));
@@ -138,6 +152,33 @@ pub(crate) fn decode_pdf_image_png(dictionary: &[u8], stream: &[u8]) -> Result<V
     };
     let raw = rows.into_iter().flatten().collect::<Vec<_>>();
     Ok(encode_png(width, height, colors as u8, &raw))
+}
+
+/// Components declared by an `/ICCBased` colorspace, resolved through its
+/// stream object. Chromium always wraps RGB PNG data in an ICC profile, so
+/// rejecting that form would drop every screenshot-style figure.
+fn icc_based_components(dictionary: &[u8], bodies: &[(u32, Vec<u8>)]) -> Result<Option<usize>, FormatError> {
+    let Some(position) = dictionary.windows(9).position(|window| window == b"/ICCBased") else {
+        return Ok(None);
+    };
+    let start = skip_space(dictionary, position + 9);
+    let digits = dictionary[start..].iter().take_while(|byte| byte.is_ascii_digit()).count();
+    if digits == 0 {
+        return Err(FormatError::parse("pdf", "`/ICCBased` colorspace is missing a object reference"));
+    }
+    let object_id = dictionary[start..start + digits]
+        .iter()
+        .fold(0u32, |value, byte| value * 10 + u32::from(byte - b'0'));
+    let Some((_, profile)) = bodies.iter().find(|(id, _)| *id == object_id)
+    else {
+        return Err(FormatError::parse("pdf", "`/ICCBased` colorspace references a missing object"));
+    };
+    match dictionary_value(profile, b"/N") {
+        Some(1) => Ok(Some(1)),
+        Some(3) => Ok(Some(3)),
+        Some(_) => Err(FormatError::unsupported("pdf", "`/ICCBased` colorspace is not grayscale or RGB")),
+        None => Err(FormatError::parse("pdf", "`/ICCBased` profile is missing `/N`")),
+    }
 }
 
 fn unfilter_png_rows(filtered: &[u8], row_bytes: usize, bytes_per_pixel: usize) -> Result<Vec<Vec<u8>>, FormatError> {

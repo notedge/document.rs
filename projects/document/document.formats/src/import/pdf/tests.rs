@@ -153,7 +153,7 @@ fn compressed_font_object_stream() -> (Vec<u8>, u32) {
 }
 
 #[test]
-fn text_line_moves_rebuild_line_breaks() {
+fn line_moves_build_one_paragraph_text() {
     let font = "/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding";
     let pdf = single_page_font_pdf(
         font,
@@ -164,11 +164,90 @@ fn text_line_moves_rebuild_line_breaks() {
     let graph = import_pdf_bytes("line-break", &pdf).expect("pdf import");
     let texts = paragraph_texts(&graph);
 
-    assert_eq!(texts, ["first line\nsecond line"], "a baseline move wider than 0.7 em starts a new line");
+    assert_eq!(texts, ["first line second line"], "adjacent lines of one size belong to one paragraph");
     assert_eq!(
         texts.iter().map(|text| text.chars().filter(|character| !character.is_whitespace()).count()).sum::<usize>(),
         19,
         "line-break reconstruction must not change the visible characters"
+    );
+}
+
+#[test]
+fn a_wider_baseline_gap_starts_a_new_paragraph() {
+    let font = "/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding";
+    let pdf = single_page_font_pdf(
+        font,
+        "/Font << /F1 4 0 R >>",
+        None,
+        "BT /F1 10 Tf 20 800 Td (one) Tj 0 -14 Td (two) Tj 0 -46 Td (three) Tj ET",
+    );
+    let graph = import_pdf_bytes("paragraph-gap", &pdf).expect("pdf import");
+
+    assert_eq!(paragraph_texts(&graph), ["one two", "three"], "a gap past the leading splits paragraphs");
+}
+
+#[test]
+fn a_larger_font_size_becomes_a_heading_level() {
+    let font = "/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding";
+    let pdf = single_page_font_pdf(
+        font,
+        "/Font << /F1 4 0 R >>",
+        None,
+        "BT /F1 20 Tf 20 820 Td (Report title) Tj /F1 10 Tf 20 780 Td (Body text carries the body font size for the whole document.) Tj ET",
+    );
+    let graph = import_pdf_bytes("heading-size", &pdf).expect("pdf import");
+
+    assert!(
+        graph.blocks.iter().any(|node| matches!(&node.block, document_ir::Block::Section { level: 1, .. })),
+        "the largest font size becomes level one"
+    );
+    assert!(
+        graph.coverage.loss.iter().any(|loss| loss.code == "import.pdf.heading_level_inferred"),
+        "an inferred heading level must be reported"
+    );
+}
+
+#[test]
+fn bullet_lines_become_a_list() {
+    let font = "/Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding";
+    let pdf = single_page_font_pdf(
+        font,
+        "/Font << /F1 4 0 R >>",
+        None,
+        "BT /F1 10 Tf 20 800 Td (- Alpha) Tj 0 -14 Td (- Beta) Tj ET",
+    );
+    let graph = import_pdf_bytes("bullet-list", &pdf).expect("pdf import");
+
+    let items = graph.blocks.iter().find_map(|node| match &node.block {
+        document_ir::Block::List { ordered: false, items } => Some(items.len()),
+        _ => None,
+    });
+    assert_eq!(items, Some(2), "two bullet lines become two list items");
+    assert!(
+        graph.coverage.loss.iter().any(|loss| loss.code == "import.pdf.list_structure_inferred"),
+        "an inferred list must be reported"
+    );
+}
+
+#[test]
+fn column_gaps_become_a_table() {
+    let font = "/Type /Font /Subtype /Type1 /BaseFont /Test /Encoding /WinAnsiEncoding /FirstChar 65 /LastChar 70 /Widths [500 500 500 500 500 500]";
+    let pdf = width_font_pdf(
+        font,
+        None,
+        &[],
+        "BT /F1 10 Tf 1 0 0 1 20 800 Tm (A) Tj 1 0 0 1 100 800 Tm (B) Tj 1 0 0 1 20 786 Tm (C) Tj 1 0 0 1 100 786 Tm (D) Tj ET",
+    );
+    let graph = import_pdf_bytes("table-gap", &pdf).expect("pdf import");
+
+    let table = graph.blocks.iter().find_map(|node| match &node.block {
+        document_ir::Block::Table { rows, .. } => Some(rows.len()),
+        _ => None,
+    });
+    assert_eq!(table, Some(2), "two rows of two cells become a table");
+    assert!(
+        graph.coverage.loss.iter().any(|loss| loss.code == "import.pdf.table_structure_inferred"),
+        "an inferred table must be reported"
     );
 }
 

@@ -8,7 +8,7 @@ use super::{
         hex_bytes, is_pdf_number_start, literal_close, pdf_delimiter, pdf_operator_at, skip_content_space, skip_pdf_comment,
         skip_pdf_number, skip_space,
     },
-    types::{ContentEvent, ExtractedText},
+    types::{ExtractedLine, ExtractedText, LineRun, PageItem},
 };
 
 /// Separation owed to the next text run because the previous operator moved the
@@ -42,8 +42,88 @@ const WORD_SPACE_EM: f32 = 0.2;
 // widths rather than gaps. The geometric check therefore subtracts the
 // previous run's declared advance instead of treating a `Td` move as a gap.
 
-pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, ToUnicodeMap>) -> ExtractedText {
-    let mut events = Vec::new();
+/// Geometry of one emitted run, used to rebuild visual lines.
+#[derive(Clone, Copy)]
+struct RunGeometry {
+    x: Option<f32>,
+    y: Option<f32>,
+    size: f32,
+    end: Option<f32>,
+}
+
+/// Rebuilds visual lines from glyph runs while a page is walked.
+///
+/// Text operators only move a pen, so lines are lost unless every run brings
+/// its own baseline and size. The sink keeps the current line open across the
+/// `BT`/`ET` blocks and content streams that writers split a line into.
+pub(crate) struct PageSink {
+    items: Vec<PageItem>,
+    current: Option<ExtractedLine>,
+}
+
+impl PageSink {
+    pub(crate) fn new() -> Self {
+        Self { items: Vec::new(), current: None }
+    }
+
+    fn text(&mut self, text: String, geometry: RunGeometry) {
+        for (index, segment) in text.split('\n').enumerate() {
+            if index > 0 {
+                self.flush_line();
+            }
+            if segment.is_empty() {
+                continue;
+            }
+            let run = LineRun { text: segment.to_owned(), x: geometry.x, end: geometry.end };
+            match &mut self.current {
+                Some(line) => {
+                    line.text.push_str(segment);
+                    line.size = line.size.max(geometry.size);
+                    line.x = line.x.or(geometry.x);
+                    line.y = line.y.or(geometry.y);
+                    line.runs.push(run);
+                }
+                None => {
+                    self.current = Some(ExtractedLine {
+                        text: segment.to_owned(),
+                        x: geometry.x,
+                        y: geometry.y,
+                        size: geometry.size,
+                        runs: vec![run],
+                    });
+                }
+            }
+        }
+    }
+
+    pub(crate) fn image(&mut self, item: PageItem) {
+        self.flush_line();
+        self.items.push(item);
+    }
+
+    pub(crate) fn finish(mut self) -> Vec<PageItem> {
+        self.flush_line();
+        self.items
+    }
+
+    fn flush_line(&mut self) {
+        let Some(mut line) = self.current.take()
+        else {
+            return;
+        };
+        line.text = line.text.trim_end().to_owned();
+        if line.text.is_empty() {
+            return;
+        }
+        self.items.push(PageItem::Line(line));
+    }
+}
+
+pub(crate) fn extract_text_operators(
+    stream: &[u8],
+    font_maps: &HashMap<String, ToUnicodeMap>,
+    sink: &mut PageSink,
+) -> ExtractedText {
     let mut spacing_adjustments = false;
     let mut unresolved_fonts = std::collections::BTreeSet::new();
     let mut cursor = 0;
@@ -66,7 +146,7 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
             && stream.get(cursor + 2).is_some_and(|byte| byte.is_ascii_whitespace())
         {
             if let Some((image, end)) = parse_inline_jpeg(stream, cursor) {
-                events.push(ContentEvent::InlineImage(image));
+                sink.image(PageItem::InlineImage(image));
                 cursor = end;
                 continue;
             }
@@ -79,7 +159,7 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                     cursor = end;
                 }
                 else if let Some((name, end)) = resource_operator(stream, cursor, "Do") {
-                    events.push(ContentEvent::NamedImage(name));
+                    sink.image(PageItem::NamedImage(name));
                     cursor = end;
                 }
                 else {
@@ -97,13 +177,16 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                     let start = run_start(positioned, text_position, pen_end);
                     note_geometric_gap(start, pen_end, font_size, &mut separation);
                     let advance = push_decoded_text(
-                        &mut events,
+                        sink,
                         &mut unresolved_fonts,
                         current_font.as_deref(),
                         decoded,
                         Separation::None,
                         &mut separation,
                         &mut last_char,
+                        start,
+                        text_position.map(|(_, y)| y),
+                        font_size,
                     );
                     pen_end = pen_after_run(start, advance, font_size);
                     positioned = false;
@@ -111,13 +194,16 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                 else if pdf_operator_at(stream, after, b"'") || pdf_operator_at(stream, after, b"\"") {
                     let decoded = decode_with_font(&stream[cursor + 1..close], current_font.as_deref(), font_maps, true);
                     push_decoded_text(
-                        &mut events,
+                        sink,
                         &mut unresolved_fonts,
                         current_font.as_deref(),
                         decoded,
                         Separation::Line,
                         &mut separation,
                         &mut last_char,
+                        None,
+                        None,
+                        font_size,
                     );
                     text_position = None;
                     pen_end = None;
@@ -138,13 +224,16 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                     let start = run_start(positioned, text_position, pen_end);
                     note_geometric_gap(start, pen_end, font_size, &mut separation);
                     let advance = push_decoded_text(
-                        &mut events,
+                        sink,
                         &mut unresolved_fonts,
                         current_font.as_deref(),
                         decoded,
                         Separation::None,
                         &mut separation,
                         &mut last_char,
+                        start,
+                        text_position.map(|(_, y)| y),
+                        font_size,
                     );
                     pen_end = pen_after_run(start, advance, font_size);
                     positioned = false;
@@ -152,13 +241,16 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                 else if pdf_operator_at(stream, after, b"'") || pdf_operator_at(stream, after, b"\"") {
                     let decoded = decode_with_font(&hex_bytes(text), current_font.as_deref(), font_maps, false);
                     push_decoded_text(
-                        &mut events,
+                        sink,
                         &mut unresolved_fonts,
                         current_font.as_deref(),
                         decoded,
                         Separation::Line,
                         &mut separation,
                         &mut last_char,
+                        None,
+                        None,
+                        font_size,
                     );
                     text_position = None;
                     pen_end = None;
@@ -233,8 +325,15 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                 if position < stream.len() && pdf_operator_at(stream, skip_content_space(stream, position + 1), b"TJ") {
                     let start = run_start(positioned, text_position, pen_end);
                     note_geometric_gap(start, pen_end, font_size, &mut separation);
-                    push_text_event(&mut events, run, &mut separation, &mut last_char);
-                    pen_end = pen_after_run(start, advance, font_size);
+                    let end = pen_after_run(start, advance, font_size);
+                    push_text_event(
+                        sink,
+                        run,
+                        &mut separation,
+                        &mut last_char,
+                        RunGeometry { x: start, y: text_position.map(|(_, y)| y), size: font_size, end },
+                    );
+                    pen_end = end;
                     positioned = false;
                 }
                 cursor = position.saturating_add(1);
@@ -291,7 +390,7 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
             _ => cursor += 1,
         }
     }
-    ExtractedText { events, spacing_adjustments, unresolved_fonts }
+    ExtractedText { spacing_adjustments, unresolved_fonts }
 }
 
 /// Where the next run starts on the current baseline.
@@ -341,18 +440,22 @@ fn pen_after_run(start: Option<f32>, advance: Option<f32>, font_size: f32) -> Op
 /// A decoded run with an unknown advance also returns `None`, which makes the
 /// caller clear the pen end and stop geometric gap detection.
 fn push_decoded_text(
-    events: &mut Vec<ContentEvent>,
+    sink: &mut PageSink,
     unresolved_fonts: &mut std::collections::BTreeSet<String>,
     font: Option<&str>,
     decoded: Option<DecodedRun>,
     owed: Separation,
     separation: &mut Separation,
     last_char: &mut Option<char>,
+    start: Option<f32>,
+    y: Option<f32>,
+    font_size: f32,
 ) -> Option<f32> {
     match decoded {
         Some(DecodedRun { text, advance }) => {
             *separation = (*separation).max(owed);
-            push_text_event(events, text, separation, last_char);
+            let end = pen_after_run(start, advance, font_size);
+            push_text_event(sink, text, separation, last_char, RunGeometry { x: start, y, size: font_size, end });
             advance
         }
         None => {
@@ -452,10 +555,11 @@ fn resource_operator(stream: &[u8], cursor: usize, expected: &str) -> Option<(St
     pdf_operator_at(stream, operator_start, expected.as_bytes()).then_some((name, operator_end))
 }
 fn push_text_event(
-    events: &mut Vec<ContentEvent>,
+    sink: &mut PageSink,
     mut text: String,
     separation: &mut Separation,
     last_char: &mut Option<char>,
+    geometry: RunGeometry,
 ) {
     if text.is_empty() {
         return;
@@ -469,5 +573,5 @@ fn push_text_event(
     }
     *separation = Separation::None;
     *last_char = text.chars().last();
-    events.push(ContentEvent::Text(text));
+    sink.text(text, geometry);
 }

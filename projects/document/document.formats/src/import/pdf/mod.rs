@@ -4,6 +4,7 @@ mod content;
 mod encoding;
 mod fonts;
 mod images;
+mod layout;
 mod metadata;
 mod objects;
 mod streams;
@@ -15,18 +16,20 @@ mod types;
 #[doc(hidden)]
 pub mod test_support;
 
-use document_ir::{Block, DocumentGraph, DocumentId, Inline, LossMarker, SemanticStatus};
+use std::collections::BTreeSet;
+
+use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, NodeId, SemanticStatus, TableCell, TableRow};
 
 use crate::FormatError;
 
 use self::{
-    content::extract_text_operators,
+    content::{extract_text_operators, PageSink},
     fonts::page_font_maps,
     images::page_images,
+    layout::{page_flow, FlowBlock, FlowList, StyleProfile},
     metadata::{append_image_asset, pdf_metadata, report_unsupported_pdf_structures},
     objects::{page_content_groups, scan_object_bodies},
     streams::stream_contents,
-    types::ContentEvent,
 };
 
 /// Import basic page text from a PDF into semantic paragraphs.
@@ -63,46 +66,32 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
     else {
         vec![streams.iter().collect::<Vec<_>>()]
     };
-    let mut unresolved_fonts = std::collections::BTreeSet::new();
+    let mut unresolved_fonts = BTreeSet::new();
+    let mut spacing_adjustments = false;
+    let mut pages = Vec::new();
     for streams_in_page in page_streams {
-        let mut page_text = String::new();
+        let mut sink = PageSink::new();
         for stream in streams_in_page {
             let decoded = streams::decode_stream(stream.dictionary, stream.data)?;
-            let mut extracted = extract_text_operators(&decoded, &font_maps);
-            unresolved_fonts.append(&mut extracted.unresolved_fonts);
-            if extracted.spacing_adjustments {
-                graph.push_loss(LossMarker {
-                    code: "import.pdf.text_spacing".into(),
-                    message: "TJ numeric spacing adjustments narrower than the word-gap threshold are kerning and are not turned into whitespace".into(),
-                    status: SemanticStatus::Partial,
-                });
-            }
-            for event in extracted.events {
-                match event {
-                    ContentEvent::Text(text) => page_text.push_str(&text),
-                    ContentEvent::NamedImage(image_name) => {
-                        flush_page_text(&mut graph, &mut page_text);
-                        if let Some(image) = images.get(&image_name) {
-                            append_image_asset(&mut graph, image);
-                        }
-                        else {
-                            graph.push_loss(LossMarker {
-                                code: "import.pdf.unresolved_xobject".into(),
-                                message: format!(
-                                    "content stream references named XObject `/{image_name}` that is not a supported image"
-                                ),
-                                status: SemanticStatus::Unresolved,
-                            });
-                        }
-                    }
-                    ContentEvent::InlineImage(image) => {
-                        flush_page_text(&mut graph, &mut page_text);
-                        append_image_asset(&mut graph, &image);
-                    }
-                }
-            }
+            let extracted = extract_text_operators(&decoded, &font_maps, &mut sink);
+            unresolved_fonts.extend(extracted.unresolved_fonts);
+            spacing_adjustments |= extracted.spacing_adjustments;
         }
-        flush_page_text(&mut graph, &mut page_text);
+        pages.push(sink.finish());
+    }
+    if spacing_adjustments {
+        graph.push_loss(LossMarker {
+            code: "import.pdf.text_spacing".into(),
+            message: "TJ numeric spacing adjustments narrower than the word-gap threshold are kerning and are not turned into whitespace".into(),
+            status: SemanticStatus::Partial,
+        });
+    }
+    let profile = StyleProfile::from_pages(&pages);
+    let mut inferred = InferredStructure::default();
+    for page in &pages {
+        for block in page_flow(page, &profile) {
+            emit_flow_block(&mut graph, &images, block, &mut inferred);
+        }
     }
     for font in unresolved_fonts {
         graph.push_loss(LossMarker {
@@ -120,22 +109,104 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
             status: SemanticStatus::Partial,
         });
     }
-    graph.push_loss(LossMarker { code: "import.pdf.partial_coverage".into(), message: "PDF import preserves basic page text and JPEG or 8-bit grayscale/RGB Flate image assets in content-stream order, but not general layout, fonts, indexed or alpha images, annotations, forms, or encryption".into(), status: SemanticStatus::Partial });
+    if inferred.headings {
+        graph.push_loss(LossMarker {
+            code: "import.pdf.heading_level_inferred".into(),
+            message: "heading levels are inferred from font-size rank, the PDF text layer carries no authored heading semantics".into(),
+            status: SemanticStatus::Partial,
+        });
+    }
+    if inferred.lists {
+        graph.push_loss(LossMarker {
+            code: "import.pdf.list_structure_inferred".into(),
+            message: "list items and nesting are inferred from bullet or numeral markers and indentation".into(),
+            status: SemanticStatus::Partial,
+        });
+    }
+    if inferred.tables {
+        graph.push_loss(LossMarker {
+            code: "import.pdf.table_structure_inferred".into(),
+            message: "table rows are detected from column gaps, header rows and cell spans are not recoverable".into(),
+            status: SemanticStatus::Partial,
+        });
+    }
+    graph.push_loss(LossMarker {
+        code: "import.pdf.footnote_semantics".into(),
+        message: "the PDF text layer carries no footnote references or bodies, so footnote semantics cannot be linked".into(),
+        status: SemanticStatus::Partial,
+    });
+    graph.push_loss(LossMarker { code: "import.pdf.partial_coverage".into(), message: "PDF import rebuilds paragraphs, headings, lists, tables and image order from glyph geometry and font sizes, but not authored structure, general layout, fonts, indexed or alpha images, annotations, forms, or encryption".into(), status: SemanticStatus::Partial });
     Ok(graph)
 }
 
-/// Emit the text accumulated for one source page as a single paragraph.
-///
-/// The text operators in a PDF page are glyph-positioned runs, not paragraphs,
-/// so every run is concatenated in content-stream order. The source page is the
-/// chunk boundary because the page tree is the only structure the object model
-/// carries without interpreting glyph geometry.
-fn flush_page_text(graph: &mut DocumentGraph, page_text: &mut String) {
-    if page_text.is_empty() {
-        return;
+#[derive(Default)]
+struct InferredStructure {
+    headings: bool,
+    lists: bool,
+    tables: bool,
+}
+
+fn emit_flow_block(
+    graph: &mut DocumentGraph,
+    images: &std::collections::HashMap<String, types::PdfImage>,
+    block: FlowBlock,
+    inferred: &mut InferredStructure,
+) {
+    match block {
+        FlowBlock::Section { level, text } => {
+            inferred.headings = true;
+            graph.push_block(Block::Section { level, title: vec![Inline::Text { text }], children: Vec::new() });
+        }
+        FlowBlock::Paragraph { text } => {
+            graph.push_block(Block::Paragraph { content: vec![Inline::Text { text }] });
+        }
+        FlowBlock::List(list) => {
+            inferred.lists = true;
+            emit_list(graph, list);
+        }
+        FlowBlock::Table { rows } => {
+            inferred.tables = true;
+            let rows = rows
+                .into_iter()
+                .map(|cells| TableRow {
+                    is_header: false,
+                    cells: cells
+                        .into_iter()
+                        .map(|text| TableCell { content: vec![Inline::Text { text }], colspan: 1, rowspan: 1 })
+                        .collect(),
+                })
+                .collect();
+            graph.push_block(Block::Table { caption: None, rows });
+        }
+        FlowBlock::NamedImage(name) => match images.get(&name) {
+            Some(image) => append_image_asset(graph, image),
+            None => graph.push_loss(LossMarker {
+                code: "import.pdf.unresolved_xobject".into(),
+                message: format!("content stream references named XObject `/{name}` that is not a supported image"),
+                status: SemanticStatus::Unresolved,
+            }),
+        },
+        FlowBlock::InlineImage(image) => append_image_asset(graph, &image),
     }
-    let text = std::mem::take(page_text);
-    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text }] });
+}
+
+/// Emit a list after its nested lists, so each item can reference them.
+fn emit_list(graph: &mut DocumentGraph, list: FlowList) -> NodeId {
+    let mut items = Vec::new();
+    for item in list.items {
+        let mut children = Vec::new();
+        for child in item.children {
+            children.push(emit_list(graph, child));
+        }
+        items.push(ListItem {
+            content: vec![Inline::Text { text: item.text }],
+            children,
+            number: item.number,
+            is_task: false,
+            is_checked: None,
+        });
+    }
+    graph.push_block(Block::List { ordered: list.ordered, items })
 }
 
 /// Import a PDF file from disk.
