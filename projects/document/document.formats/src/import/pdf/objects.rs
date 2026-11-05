@@ -108,20 +108,25 @@ pub(crate) fn object_id(bytes: &[u8], dictionary_start: usize) -> Option<u32> {
     std::str::from_utf8(tokens.next()?).ok()?.parse().ok()
 }
 
-pub(crate) fn page_content_ids(bytes: &[u8]) -> Vec<u32> {
+/// Content-stream object ids grouped by source page, in page-tree order.
+///
+/// Each inner vector is one source page. This keeps the `/Pages` boundary
+/// visible to the importer so text from different pages is never merged into
+/// one paragraph and text on one page is never split per glyph run.
+pub(crate) fn page_content_groups(bytes: &[u8]) -> Vec<Vec<u32>> {
     if let Some(catalog) = object_bodies(bytes).into_iter().find(|(_, body)| dictionary_type_is(body, b"/Catalog")) {
         if let Some(pages) = body_reference(&catalog.1, b"/Pages") {
             let mut result = Vec::new();
-            collect_page_contents(bytes, pages, &mut result, &mut Vec::new());
+            collect_page_content_groups(bytes, pages, &mut result, &mut Vec::new());
             if !result.is_empty() {
                 return result;
             }
         }
     }
-    page_content_ids_by_scan(bytes)
+    page_content_groups_by_scan(bytes)
 }
 
-fn collect_page_contents(bytes: &[u8], object: u32, result: &mut Vec<u32>, visited: &mut Vec<u32>) {
+fn collect_page_content_groups(bytes: &[u8], object: u32, result: &mut Vec<Vec<u32>>, visited: &mut Vec<u32>) {
     if visited.contains(&object) {
         return;
     }
@@ -131,18 +136,19 @@ fn collect_page_contents(bytes: &[u8], object: u32, result: &mut Vec<u32>, visit
         return;
     };
     if dictionary_type_is(&body, b"/Page") {
-        if let Some(contents) = body_reference_values(&body, b"/Contents") {
-            for id in contents {
-                if !result.contains(&id) {
-                    result.push(id);
-                }
+        let contents = body_reference_values(&body, b"/Contents").unwrap_or_default();
+        let mut group = Vec::new();
+        for id in contents {
+            if !group.contains(&id) {
+                group.push(id);
             }
         }
+        result.push(group);
         return;
     }
     if let Some(kids) = body_reference_values(&body, b"/Kids") {
         for child in kids {
-            collect_page_contents(bytes, child, result, visited);
+            collect_page_content_groups(bytes, child, result, visited);
         }
     }
 }
@@ -207,16 +213,15 @@ pub(crate) fn object_bodies(bytes: &[u8]) -> Vec<(u32, Vec<u8>)> {
     result
 }
 
-pub(crate) fn page_content_ids_by_scan(bytes: &[u8]) -> Vec<u32> {
+fn page_content_groups_by_scan(bytes: &[u8]) -> Vec<Vec<u32>> {
     let mut result = Vec::new();
     let mut search = 0;
     while let Some(relative) = bytes[search..].windows(4).position(|window| window == b" obj") {
         let marker = search + relative;
-        let Some(id) = object_id_before_obj(bytes, marker)
-        else {
+        if object_id_before_obj(bytes, marker).is_none() {
             search = marker + 4;
             continue;
-        };
+        }
         let object_start = marker + 4;
         let end = bytes[marker + 4..]
             .windows(6)
@@ -224,15 +229,16 @@ pub(crate) fn page_content_ids_by_scan(bytes: &[u8]) -> Vec<u32> {
             .map_or(bytes.len(), |position| marker + 4 + position);
         let body = &bytes[object_start..end];
         if dictionary_type_is(body, b"/Page") {
+            let mut group = Vec::new();
             if let Some(contents) = body.windows(9).position(|window| window == b"/Contents") {
                 for id in reference_ids(&body[contents + 9..]) {
-                    if !result.contains(&id) {
-                        result.push(id);
+                    if !group.contains(&id) {
+                        group.push(id);
                     }
                 }
             }
+            result.push(group);
         }
-        let _ = id;
         search = end.saturating_add(6);
         if search >= bytes.len() {
             break;

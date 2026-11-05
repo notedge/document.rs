@@ -8,6 +8,8 @@ mod metadata;
 mod objects;
 mod streams;
 mod syntax;
+#[cfg(test)]
+mod tests;
 mod types;
 
 #[doc(hidden)]
@@ -21,8 +23,8 @@ use self::{
     content::extract_text_operators,
     fonts::page_font_maps,
     images::page_images,
-    metadata::{append_image_asset, pdf_metadata, report_unsupported_pdf_structures, split_pdf_paragraphs},
-    objects::page_content_ids,
+    metadata::{append_image_asset, pdf_metadata, report_unsupported_pdf_structures},
+    objects::page_content_groups,
     streams::stream_contents,
     types::ContentEvent,
 };
@@ -37,51 +39,60 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
         graph.metadata = metadata;
     }
     report_unsupported_pdf_structures(bytes, &mut graph);
-    let page_content_ids = page_content_ids(bytes);
+    let page_groups = page_content_groups(bytes);
     let streams = stream_contents(bytes);
     let font_maps = page_font_maps(bytes, &streams)?;
     let images = page_images(bytes, &streams)?;
-    let use_page_filter = !page_content_ids.is_empty();
-    let selected = if use_page_filter {
-        page_content_ids.iter().filter_map(|id| streams.iter().find(|stream| stream.object_id == Some(*id))).collect::<Vec<_>>()
+    let use_page_filter = !page_groups.is_empty();
+    let page_streams = if use_page_filter {
+        page_groups
+            .iter()
+            .map(|ids| {
+                ids.iter().filter_map(|id| streams.iter().find(|stream| stream.object_id == Some(*id))).collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
     }
     else {
-        streams.iter().collect::<Vec<_>>()
+        vec![streams.iter().collect::<Vec<_>>()]
     };
-    for stream in selected {
-        let decoded = streams::decode_stream(stream.dictionary, stream.data)?;
-        let extracted = extract_text_operators(&decoded, &font_maps);
-        if extracted.spacing_adjustments {
-            graph.push_loss(LossMarker {
-                code: "import.pdf.text_spacing".into(),
-                message: "TJ numeric spacing adjustments are ignored while preserving the adjacent text strings".into(),
-                status: SemanticStatus::Partial,
-            });
-        }
-        for event in extracted.events {
-            match event {
-                ContentEvent::Text(text) => {
-                    for paragraph in split_pdf_paragraphs(&text) {
-                        graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: paragraph.to_string() }] });
+    for streams_in_page in page_streams {
+        let mut page_text = String::new();
+        for stream in streams_in_page {
+            let decoded = streams::decode_stream(stream.dictionary, stream.data)?;
+            let extracted = extract_text_operators(&decoded, &font_maps);
+            if extracted.spacing_adjustments {
+                graph.push_loss(LossMarker {
+                    code: "import.pdf.text_spacing".into(),
+                    message: "TJ numeric spacing adjustments are ignored while preserving the adjacent text strings".into(),
+                    status: SemanticStatus::Partial,
+                });
+            }
+            for event in extracted.events {
+                match event {
+                    ContentEvent::Text(text) => page_text.push_str(&text),
+                    ContentEvent::NamedImage(image_name) => {
+                        flush_page_text(&mut graph, &mut page_text);
+                        if let Some(image) = images.get(&image_name) {
+                            append_image_asset(&mut graph, image);
+                        }
+                        else {
+                            graph.push_loss(LossMarker {
+                                code: "import.pdf.unresolved_xobject".into(),
+                                message: format!(
+                                    "content stream references named XObject `/{image_name}` that is not a supported image"
+                                ),
+                                status: SemanticStatus::Unresolved,
+                            });
+                        }
+                    }
+                    ContentEvent::InlineImage(image) => {
+                        flush_page_text(&mut graph, &mut page_text);
+                        append_image_asset(&mut graph, &image);
                     }
                 }
-                ContentEvent::NamedImage(image_name) => {
-                    if let Some(image) = images.get(&image_name) {
-                        append_image_asset(&mut graph, image);
-                    }
-                    else {
-                        graph.push_loss(LossMarker {
-                            code: "import.pdf.unresolved_xobject".into(),
-                            message: format!(
-                                "content stream references named XObject `/{image_name}` that is not a supported image"
-                            ),
-                            status: SemanticStatus::Unresolved,
-                        });
-                    }
-                }
-                ContentEvent::InlineImage(image) => append_image_asset(&mut graph, &image),
             }
         }
+        flush_page_text(&mut graph, &mut page_text);
     }
     if graph.blocks.is_empty() {
         graph.push_loss(LossMarker {
@@ -92,6 +103,20 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
     }
     graph.push_loss(LossMarker { code: "import.pdf.partial_coverage".into(), message: "PDF import preserves basic page text and JPEG or 8-bit grayscale/RGB Flate image assets in content-stream order, but not general layout, fonts, indexed or alpha images, annotations, forms, or encryption".into(), status: SemanticStatus::Partial });
     Ok(graph)
+}
+
+/// Emit the text accumulated for one source page as a single paragraph.
+///
+/// The text operators in a PDF page are glyph-positioned runs, not paragraphs,
+/// so every run is concatenated in content-stream order. The source page is the
+/// chunk boundary because the page tree is the only structure the object model
+/// carries without interpreting glyph geometry.
+fn flush_page_text(graph: &mut DocumentGraph, page_text: &mut String) {
+    if page_text.is_empty() {
+        return;
+    }
+    let text = std::mem::take(page_text);
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text }] });
 }
 
 /// Import a PDF file from disk.
