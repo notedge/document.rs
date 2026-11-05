@@ -20,7 +20,7 @@
         {"construct": "edge statement and chained operands", "sample": "digraph {\n  A -> B -> C\n}\n"},
         {"construct": "node [...] and edge [...] defaults, scoped to the subgraph they appear in"},
         {"construct": "subgraph cluster_* with a label attribute", "sample": "digraph {\n  subgraph cluster_core {\n    label=\"Core\"\n    A -> B\n  }\n}\n"},
-        {"construct": "subgraph rank=same"},
+        {"construct": "named subgraph declaring rank=same", "sample": "digraph {\n  subgraph same { rank=same; A; B; }\n}\n", "note": "rank=same becomes a SameRank constraint and draws no frame. A braces-only group `{rank=same; ...}` has no id, so it is an anonymous subgraph and stays refused"},
         {"construct": "compass ports n / e / s / w"},
         {"construct": "shapes box / rect / rectangle / square / plaintext / diamond / circle"},
         {"construct": "style=rounded on a node", "sample": "digraph {\n  A [style=rounded]\n}\n"}
@@ -39,7 +39,7 @@
         {"construct": "HTML-like label", "code": "davinci.diagram.unsupported"},
         {"construct": "named port", "code": "davinci.diagram.unsupported"},
         {"construct": "subgraph as an edge operand", "code": "davinci.diagram.unsupported", "gap": "downstream has no cluster endpoint"},
-        {"construct": "anonymous subgraph", "code": "davinci.diagram.unsupported", "gap": "downstream has no id-less cluster"},
+        {"construct": "anonymous subgraph, including a braces-only `rank=same` group", "code": "davinci.diagram.unsupported", "gap": "downstream has no id-less cluster"},
         {"construct": "nested subgraph", "code": "davinci.diagram.unsupported", "gap": "downstream has no nested cluster frame"},
         {"construct": "subgraph that is neither cluster_* nor rank=same", "code": "davinci.diagram.unsupported"},
         {"construct": "rank other than same", "code": "davinci.diagram.unsupported"},
@@ -67,7 +67,7 @@
       "approximated": [
         {"construct": "dotted edge style", "code": "davinci.diagram.approximated", "loss": "drawn as a dashed line"},
         {"construct": "nested subgraph", "code": "davinci.diagram.approximated", "loss": "inner clusters flatten into the outer frame"},
-        {"construct": "composite state regions", "code": "davinci.diagram.approximated", "loss": "each region becomes one flat frame and nested states join every ancestor frame"},
+        {"construct": "composite state regions", "code": "davinci.diagram.approximated", "loss": "the state keeps its own node as the transition endpoint, each region becomes one flat frame titled with the state label, and nested states join every ancestor frame"},
         {"construct": "erDiagram non-identifying relation", "code": "davinci.diagram.approximated", "loss": "drawn as a dashed line"}
       ],
       "refused": [
@@ -103,7 +103,7 @@
         {"construct": "activity decision branch gate label", "code": "davinci.diagram.approximated", "loss": "the spec has no gate primitive, so the label rides the edge leaving the rhombus"},
         {"construct": "activity fork construct", "code": "davinci.diagram.approximated", "loss": "drawn as a plain box node because the spec has no bar primitive"},
         {"construct": "activity swimlane colour |#color|", "code": "davinci.diagram.approximated", "loss": "the cluster frame keeps the theme colour"},
-        {"construct": "state composite region", "code": "davinci.diagram.approximated", "loss": "each region becomes one untitled flat frame and nested states join every ancestor frame"},
+        {"construct": "state composite region", "code": "davinci.diagram.approximated", "loss": "the state keeps its own node as the transition endpoint, each region becomes one flat frame titled with the state label, and nested states join every ancestor frame"},
         {"construct": "state start / end / entryPoint / exitPoint stereotypes", "code": "davinci.diagram.approximated", "loss": "they share the circle outline because the spec has one circle shape"},
         {"construct": "component port", "code": "davinci.diagram.approximated", "loss": "drawn as a standalone round node because the AST records no owning component"},
         {"construct": "nested component package", "code": "davinci.diagram.approximated", "loss": "inner packages flatten into the outer frame"}
@@ -134,6 +134,7 @@
         {"construct": "node[options]{text} inside a path"},
         {"construct": "standalone `\\node[options] at (x,y) {text}`", "sample": "\\node[above, text=red] at (0,0) {label};\n"},
         {"construct": "options dashed / thin / thick / very thick / line width / opacity / fill opacity / fill / color / draw / text"},
+        {"construct": "draw on a node strokes its label box", "sample": "\\node[draw=red] at (0,0) {label};\n", "note": "the box wraps the label extent plus the default inner sep, a third of the font size. Bare draw uses the enclosing path colour, draw=<colour> strokes the box in that colour"},
         {"construct": "xcolor base colour names black / white / red / green / blue / cyan / magenta / yellow / gray / darkgray / lightgray / brown / lime / olive / orange / pink / purple / teal / violet"},
         {"construct": "scale and node placement above / below / left / right"},
         {"construct": "units cm / mm / pt"}

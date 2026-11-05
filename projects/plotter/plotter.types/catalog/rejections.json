@@ -41,22 +41,22 @@
       "code": "davinci.diagram.ast-unavailable",
       "severity": "error",
       "meaning": "The frontend ran but produced no AST the lowering can walk.",
-      "trigger": "An Oak frontend returns an empty or unusable document tree.",
+      "trigger": "An Oak frontend returns an empty document tree that names no known family header, so no construct can be blamed. A known family without an AST is reported as `davinci.diagram.unsupported` at its header instead.",
       "span": "The whole fence body, because there is no construct to name."
     },
     {
       "code": "davinci.diagram.unsupported",
       "severity": "error",
-      "meaning": "The source parsed, but this family or construct has no lowering into a DaVinci scene.",
-      "trigger": "A Mermaid family outside flowchart, sequence, class, or state, a second diagram header, an illegal orientation, a sequence block or note that would be dropped, a DOT HTML-like label, record shape, named port, `pos`, `splines`, `URL`, or a second graph, a PlantUML `skinparam`, missing terminator, or missing header.",
+      "meaning": "The source parsed, but this family or construct has no lowering, so the whole source is refused and no scene is produced.",
+      "trigger": "A Mermaid family outside flowchart, sequence, class, state, or entity-relationship, a second diagram header, an illegal orientation, a sequence block or note that would be dropped, a DOT HTML-like label, record shape, named port, `pos`, `splines`, `URL`, or a second graph, a PlantUML `skinparam`, missing terminator, or missing header.",
       "span": "The rejected statement or attribute when the frontend can point at it, otherwise the whole fence body."
     },
     {
       "code": "davinci.diagram.approximated",
       "severity": "warning",
-      "meaning": "A construct is drawn with a different scene primitive than the one it names.",
-      "trigger": "A DOT node shape or arrowhead with no exact primitive, which is drawn as box or plain line.",
-      "span": "The attribute that names the approximated shape or arrowhead."
+      "meaning": "The diagram is accepted and a scene exists, but a construct lost or changed authored meaning.",
+      "trigger": "A DOT node shape or arrowhead with no exact primitive, a reference that cannot be placed, a skipped or reversed edge, a flattened frame, or a composite state region.",
+      "span": "The attribute or statement that names the approximated construct."
     },
     {
       "code": "davinci.diagram.empty-diagram",
@@ -395,12 +395,12 @@
     {"id": "diagram-37", "area": "diagram", "item": "PlantUML rejected statements", "status": "rejected", "code": "davinci.diagram.unsupported", "cases": ["diagram-plantuml-skinparam"]},
     {"id": "diagram-38", "area": "diagram", "item": "class and sequence mixed in one PlantUML source", "status": "rejected", "code": "davinci.diagram.unsupported", "reason": "`mixed_class_and_sequence_sources_are_refused_at_the_contradicting_marker` pins the contradicting marker span"},
     {"id": "diagram-39", "area": "diagram", "item": "nested Mermaid subgraphs", "status": "approximated"},
-    {"id": "diagram-40", "area": "diagram", "item": "self edges (DOT `a -> a`, Mermaid `A->>A`, PlantUML self message)", "status": "rejected", "code": "davinci.diagram.unsupported", "reason": "neither the layered layout nor the time-ordered layout has a loop route, so the edge is skipped with an error located on its own statement and the rest of the scene still renders. `a_self_edge_is_refused_at_its_own_statement` pins the DOT case"},
+    {"id": "diagram-40", "area": "diagram", "item": "self edges (DOT `a -> a`, Mermaid `A->>A`, PlantUML self message)", "status": "approximated", "code": "davinci.diagram.approximated", "reason": "neither the layered layout nor the time-ordered layout has a loop route, so the edge is skipped with a warning located on its own statement and the rest of the scene still renders. `a_self_edge_is_refused_at_its_own_statement` pins the DOT case"},
     {"id": "diagram-41", "area": "diagram", "item": "four-corner and centre DOT compass ports", "status": "approximated"},
     {"id": "diagram-42", "area": "diagram", "item": "non-equivalent DOT shapes", "status": "approximated"},
     {"id": "diagram-43", "area": "diagram", "item": "cycle broken by layered placement", "status": "approximated", "code": "davinci.diagram.approximated", "reason": "`a_cycle_reports_the_back_edge_and_its_authored_span` pins the DOT label, span = the edge statement that no longer advances to a later layer (`b -> a`), and the message names every reversed edge. The layout still routes every edge, so the row has no rejection fixture"},
-    {"id": "diagram-44", "area": "diagram", "item": "dangling edge", "status": "rejected", "code": "davinci.diagram.unsupported", "reason": "DOT, Mermaid and PlantUML all create an implicit node for an unknown endpoint, so authored source never reaches this branch. It fires only for a hand-built `DiagramSpec`, which carries no token, and `an_edge_to_an_undeclared_node_is_refused_at_its_statement` covers it"},
-    {"id": "diagram-45", "area": "diagram", "item": "duplicate id (node, cluster, or sequence participant)", "status": "rejected", "code": "davinci.diagram.unsupported", "reason": "`a_duplicate_participant_is_reported_at_its_second_declaration` pins the PlantUML label, span = the second declaration statement (`participant Alice`). Node and cluster ids are deduplicated by every frontend, so those two keep the same hand-built guard as `an_edge_to_an_undeclared_node_is_refused_at_its_statement`"},
+    {"id": "diagram-44", "area": "diagram", "item": "dangling edge", "status": "approximated", "code": "davinci.diagram.approximated", "reason": "DOT, Mermaid and PlantUML all create an implicit node for an unknown endpoint, so authored source never reaches this branch. It fires only for a hand-built `DiagramSpec`, which carries no token, the edge is skipped with a warning and the rest of the scene still renders, covered by `an_edge_to_an_undeclared_node_is_refused_at_its_statement`"},
+    {"id": "diagram-45", "area": "diagram", "item": "duplicate id (node, cluster, or sequence participant)", "status": "approximated", "code": "davinci.diagram.approximated", "reason": "`a_duplicate_participant_is_reported_at_its_second_declaration` pins the PlantUML label, span = the second declaration statement (`participant Alice`). Node and cluster ids are deduplicated by every frontend, so those two keep the same hand-built guard as `an_edge_to_an_undeclared_node_is_refused_at_its_statement`, which warns and keeps rendering"},
     {"id": "diagram-46", "area": "diagram", "item": "unknown port", "status": "approximated", "code": "davinci.diagram.approximated", "reason": "an unknown port keeps the route and falls back to the default anchor for the layout direction. DOT refuses named ports before lowering and registers every compass port, so only a hand-built `DiagramSpec` reaches the fallback, covered by `an_edge_to_an_undeclared_port_keeps_its_route_on_the_default_anchor`"}
   ]
 }

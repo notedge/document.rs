@@ -381,12 +381,14 @@ fn compile_time_ordered(
 ) -> DiagramLayoutPlan {
     let mut diagnostics = Vec::new();
     if !spec.clusters.is_empty() {
-        diagnostics
-            .push(warning(codes::UNSUPPORTED, format!("sequence layout ignores {} cluster declarations", spec.clusters.len())));
+        diagnostics.push(warning(
+            codes::APPROXIMATED,
+            format!("sequence layout ignores {} cluster declarations", spec.clusters.len()),
+        ));
     }
     if !spec.constraints.is_empty() {
         diagnostics.push(warning(
-            codes::UNSUPPORTED,
+            codes::APPROXIMATED,
             format!("sequence layout ignores {} ordering constraints", spec.constraints.len()),
         ));
     }
@@ -398,7 +400,7 @@ fn compile_time_ordered(
         let node = &spec.nodes[spec_index];
         if node.id.is_empty() {
             diagnostics.push(located(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 "sequence participant with an empty id is ignored",
                 source.node(spec_index),
                 source,
@@ -407,7 +409,7 @@ fn compile_time_ordered(
         }
         if indices.contains_key(&node.id) {
             diagnostics.push(located(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!("duplicate participant id `{}`, the first declaration is kept", node.id),
                 source.node(spec_index),
                 source,
@@ -459,7 +461,7 @@ fn compile_time_ordered(
         else {
             let missing = if indices.contains_key(&edge.from.node) { edge.to.node.as_str() } else { edge.from.node.as_str() };
             diagnostics.push(located(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!(
                     "sequence message `{}->{}` references unknown participant `{missing}` and is skipped",
                     edge.from.node, edge.to.node
@@ -471,7 +473,7 @@ fn compile_time_ordered(
         };
         if from_index == to_index {
             diagnostics.push(located(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!("self sequence message `{}->{}` is not routed and is skipped", edge.from.node, edge.to.node),
                 source.edge(edge_index),
                 source,
@@ -518,14 +520,14 @@ fn compile_time_ordered(
         let Some(&participant_index) = indices.get(&activation.participant)
         else {
             diagnostics.push(warning(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!("activation on unknown participant `{}` is ignored", activation.participant),
             ));
             continue;
         };
         if activation.from_message > activation.to_message || activation.to_message >= row_centers.len() {
             diagnostics.push(warning(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!(
                     "activation on `{}` spans messages {}..={} outside the {} routed rows and is ignored",
                     activation.participant,
@@ -594,7 +596,7 @@ fn declared_axis(spec: &DiagramSpec, sequence: &SequenceLayout, diagnostics: &mu
                 ordered.push(index);
             }
             None => diagnostics
-                .push(warning(codes::UNSUPPORTED, format!("sequence axis names unknown participant `{id}` and is ignored"))),
+                .push(warning(codes::APPROXIMATED, format!("sequence axis names unknown participant `{id}` and is ignored"))),
         }
     }
     ordered.extend((0..spec.nodes.len()).filter(|&index| !consumed.contains(&index)));
@@ -611,7 +613,7 @@ fn declared_messages(spec: &DiagramSpec, sequence: &SequenceLayout, diagnostics:
     for &index in &sequence.messages {
         if index >= spec.edges.len() {
             diagnostics.push(warning(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!("sequence message index {index} is outside the {} declared edges and is ignored", spec.edges.len()),
             ));
         }
@@ -629,13 +631,13 @@ fn resolve_nodes(spec: &DiagramSpec, diagnostics: &mut Vec<Diagnostic>, source: 
 
     for (spec_index, node) in spec.nodes.iter().enumerate() {
         if node.id.is_empty() {
-            diagnostics.push(located(codes::UNSUPPORTED, "node with an empty id is ignored", source.node(spec_index), source));
+            diagnostics.push(located(codes::APPROXIMATED, "node with an empty id is ignored", source.node(spec_index), source));
             continue;
         }
         match indices.get(&node.id) {
             Some(&index) => {
                 diagnostics.push(located(
-                    codes::UNSUPPORTED,
+                    codes::APPROXIMATED,
                     format!(
                         "duplicate node id `{}`, the first definition is kept and later port declarations are merged",
                         node.id
@@ -675,7 +677,7 @@ fn resolve_clusters(
     for cluster in &spec.clusters {
         if !declared.insert(cluster.id.clone()) {
             diagnostics.push(warning(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!("duplicate cluster id `{}`, later definitions are ignored", cluster.id),
             ));
             continue;
@@ -686,7 +688,7 @@ fn resolve_clusters(
             match index_by_id.get(member) {
                 Some(&index) => member_flags[index] = true,
                 None => diagnostics.push(warning(
-                    codes::UNSUPPORTED,
+                    codes::APPROXIMATED,
                     format!("cluster `{}` references unknown node `{member}`, the reference is ignored", cluster.id),
                 )),
             }
@@ -701,7 +703,7 @@ fn resolve_clusters(
             member_flags.iter().enumerate().filter_map(|(index, &present)| present.then_some(index)).collect();
         if members.is_empty() {
             diagnostics
-                .push(warning(codes::UNSUPPORTED, format!("cluster `{}` has no members and produces no frame", cluster.id)));
+                .push(warning(codes::APPROXIMATED, format!("cluster `{}` has no members and produces no frame", cluster.id)));
             continue;
         }
         clusters.push(ResolvedCluster { id: cluster.id.clone(), label: cluster.label.clone(), members });
@@ -711,7 +713,7 @@ fn resolve_clusters(
         if let Some(cluster) = &node.cluster {
             if !declared.contains(cluster) {
                 diagnostics.push(located(
-                    codes::UNSUPPORTED,
+                    codes::APPROXIMATED,
                     format!("node `{}` references unknown cluster `{cluster}`, the reference is ignored", node.id),
                     source.node(node.spec_index),
                     source,
@@ -724,7 +726,7 @@ fn resolve_clusters(
     for (index, members) in memberships.iter().enumerate() {
         if members.len() > 1 {
             diagnostics.push(located(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!("node `{}` belongs to multiple clusters, the first declared frame is used", nodes[index].id),
                 source.node(nodes[index].spec_index),
                 source,
@@ -751,7 +753,7 @@ fn resolve_edges(
             (Some(from), Some(to)) => (from, to),
             (None, _) => {
                 diagnostics.push(located(
-                    codes::UNSUPPORTED,
+                    codes::APPROXIMATED,
                     format!(
                         "edge `{}->{}` references unknown node `{}` and is skipped",
                         edge.from.node, edge.to.node, edge.from.node
@@ -763,7 +765,7 @@ fn resolve_edges(
             }
             (_, None) => {
                 diagnostics.push(located(
-                    codes::UNSUPPORTED,
+                    codes::APPROXIMATED,
                     format!(
                         "edge `{}->{}` references unknown node `{}` and is skipped",
                         edge.from.node, edge.to.node, edge.to.node
@@ -777,7 +779,7 @@ fn resolve_edges(
 
         if from_index == to_index {
             diagnostics.push(located(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!("self edge `{}->{}` is not routed and is skipped", edge.from.node, edge.to.node),
                 span,
                 source,
@@ -883,14 +885,14 @@ fn assign_layers(
                             }
                         }
                         None => diagnostics.push(warning(
-                            codes::UNSUPPORTED,
+                            codes::APPROXIMATED,
                             format!("same-rank constraint references unknown node `{id}`, the reference is ignored"),
                         )),
                     }
                 }
                 if group.is_empty() {
                     diagnostics
-                        .push(warning(codes::UNSUPPORTED, "same-rank constraint references no known nodes and is ignored"));
+                        .push(warning(codes::APPROXIMATED, "same-rank constraint references no known nodes and is ignored"));
                 }
                 else {
                     groups.push(group);
@@ -900,7 +902,7 @@ fn assign_layers(
                 (Some(&before_index), Some(&after_index)) => {
                     if before_index == after_index {
                         diagnostics.push(warning(
-                            codes::UNSUPPORTED,
+                            codes::APPROXIMATED,
                             format!("place-before constraint relates node `{before}` to itself and is ignored"),
                         ));
                     }
@@ -909,11 +911,11 @@ fn assign_layers(
                     }
                 }
                 (None, _) => diagnostics.push(warning(
-                    codes::UNSUPPORTED,
+                    codes::APPROXIMATED,
                     format!("place-before constraint references unknown node `{before}`, the constraint is ignored"),
                 )),
                 (_, None) => diagnostics.push(warning(
-                    codes::UNSUPPORTED,
+                    codes::APPROXIMATED,
                     format!("place-before constraint references unknown node `{after}`, the constraint is ignored"),
                 )),
             },
@@ -934,7 +936,7 @@ fn assign_layers(
                 if reachable(&successors, after, before) {
                     blocked[index] = true;
                     diagnostics.push(warning(
-                        codes::UNSUPPORTED,
+                        codes::APPROXIMATED,
                         format!(
                             "place-before constraint between `{}` and `{}` conflicts with edge order and is ignored",
                             nodes[before].id, nodes[after].id
@@ -1108,7 +1110,7 @@ fn build_ports(
     for port in &node.ports {
         if port.id.is_empty() {
             diagnostics.push(located(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!("node `{}` declares a port with an empty id, the declaration is ignored", node.id),
                 source.node(node.spec_index),
                 source,
@@ -1117,7 +1119,7 @@ fn build_ports(
         }
         if ports.contains_key(&port.id) {
             diagnostics.push(located(
-                codes::UNSUPPORTED,
+                codes::APPROXIMATED,
                 format!("node `{}` declares duplicate port id `{}`, the first declaration is kept", node.id, port.id),
                 source.node(node.spec_index),
                 source,

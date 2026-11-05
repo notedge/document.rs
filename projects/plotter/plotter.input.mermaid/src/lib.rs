@@ -14,6 +14,10 @@ use oak_mermaid::{
 };
 use oak_uml::model::{Class, RelationKind};
 use plotter_scene::SceneResolver;
+use plotter_types::{
+    ByteRange, Diagnostic, DiagnosticLabel, DiagnosticLocation, DiagnosticSeverity, LabelRole, Message, NAMESPACE, SourceRef,
+    codes, diagnostic,
+};
 
 use plotter_diagram::{
     LoweredDiagram,
@@ -113,19 +117,8 @@ const DROPPED_STATE_STATEMENTS: &[&str] = &[
 /// The ER parser treats every non-relationship line as an entity, so a styling
 /// or accessibility statement would become a phantom entity. The guard names
 /// them before that happens.
-const DROPPED_ER_STATEMENTS: &[&str] = &[
-    "title",
-    "acctitle",
-    "accTitle",
-    "accDescr",
-    "direction",
-    "style",
-    "classDef",
-    "click",
-    "linkStyle",
-    "note",
-    "Note",
-];
+const DROPPED_ER_STATEMENTS: &[&str] =
+    &["title", "acctitle", "accTitle", "accDescr", "direction", "style", "classDef", "click", "linkStyle", "note", "Note"];
 
 /// Diagram families `oak-mermaid` reports no AST for.
 ///
@@ -197,9 +190,10 @@ impl Collector {
                 StateElement::State(state) => {
                     let id = require_id(&state.id)?;
                     let label = state.text.as_deref().map(str::trim).filter(|text| !text.is_empty()).map(str::to_string);
-                    self.upsert_node(&id, label, Some(state_shape(state.kind)), ancestors);
+                    self.upsert_node(&id, label.clone(), Some(state_shape(state.kind)), ancestors);
+                    let frame_label = label.clone().unwrap_or_else(|| id.clone());
                     for (index, region) in state.regions.iter().enumerate() {
-                        let frame = self.register_cluster(Some(&format!("{id}:region{index}")), "");
+                        let frame = self.register_cluster(Some(&format!("{id}:region{index}")), &frame_label);
                         let mut nested = ancestors.to_vec();
                         nested.push(frame.clone());
                         self.collect_states(&region.elements, &nested, &frame)?;
@@ -306,11 +300,12 @@ impl Collector {
 /// Parse Mermaid source through the `oak-mermaid` frontend.
 ///
 /// The frontend recognises `graph`/`flowchart`, `sequenceDiagram`,
-/// `classDiagram`, `stateDiagram`, and `erDiagram` sections. Source without any
-/// diagram header produces an empty root. This function rejects an empty AST with an explicit
-/// `davinci.diagram.ast-unavailable` diagnostic instead of reporting a
-/// successful parse with no semantics. Family-specific lowering rules live in
-/// the functions below.
+/// `classDiagram`, `stateDiagram`, and `erDiagram` sections. A known family
+/// header that the frontend parses without an AST is refused as
+/// `davinci.diagram.unsupported` with the header span, so every public entry
+/// that reaches this parser reports the same code for the same source. Source
+/// with no diagram at all is refused as `davinci.diagram.ast-unavailable`.
+/// Family-specific lowering rules live in the functions below.
 pub fn parse_mermaid(source: &str) -> Result<MermaidRoot, DiagramError> {
     let text = SourceText::new(source);
     let language = MermaidLanguage::default();
@@ -320,10 +315,18 @@ pub fn parse_mermaid(source: &str) -> Result<MermaidRoot, DiagramError> {
     let oak_diagnostics = output.diagnostics.len();
 
     match output.result {
-        Ok(root) if root.diagrams.is_empty() => Err(DiagramError::ast_unavailable(format!(
-            "`oak-mermaid` accepted {} bytes with {oak_diagnostics} Oak parser diagnostics but produced no diagrams",
-            source.len()
-        ))),
+        Ok(root) if root.diagrams.is_empty() => {
+            if let Some((range, header)) = locate_unsupported_family(source) {
+                return Err(DiagramError::unsupported(format!(
+                    "Mermaid diagram family `{header}` is not lowered, the diagram falls back to its source"
+                ))
+                .with_span(range));
+            }
+            Err(DiagramError::ast_unavailable(format!(
+                "`oak-mermaid` accepted {} bytes with {oak_diagnostics} Oak parser diagnostics but produced no diagrams",
+                source.len()
+            )))
+        }
         Ok(root) => Ok(root),
         Err(error) => Err(spanned_parse_error(source, &error)),
     }
@@ -375,13 +378,10 @@ pub fn mermaid_to_spec(source: &str) -> Result<DiagramSpec, DiagramError> {
 /// surface because every plan construct has a deterministic scene mapping.
 /// Unsupported sequence statements fail before compilation so the host keeps
 /// the authored source visible instead of dropping the diagram silently.
+///
+/// A known family header without an AST is already refused by [`parse_mermaid`],
+/// so this entry reports the same code as [`mermaid_to_spec`] for that source.
 pub fn mermaid_to_scene(source: &str) -> Result<LoweredDiagram, DiagramError> {
-    if let Some((range, header)) = locate_unsupported_family(source) {
-        return Err(DiagramError::unsupported(format!(
-            "Mermaid diagram family `{header}` is not lowered, the diagram falls back to its source"
-        ))
-        .with_span(range));
-    }
     let root = parse_mermaid(source)?;
     match single_diagram(&root, source)? {
         MermaidDiagram::Flowchart(flowchart) => lower_graph(flowchart_spec(flowchart, source)?),
@@ -390,7 +390,13 @@ pub fn mermaid_to_scene(source: &str) -> Result<LoweredDiagram, DiagramError> {
             lower_graph(sequence_spec(sequence)?)
         }
         MermaidDiagram::Class(class) => lower_graph(class_spec(class, source)?),
-        MermaidDiagram::State(state) => lower_graph(state_spec(state, source)?),
+        MermaidDiagram::State(state) => {
+            let mut lowered = lower_graph(state_spec(state, source)?)?;
+            let mut diagnostics = composite_state_diagnostics(state, source);
+            diagnostics.append(&mut lowered.diagnostics);
+            lowered.diagnostics = diagnostics;
+            Ok(lowered)
+        }
         MermaidDiagram::EntityRelationship(er) => lower_graph(er_spec(er, source)?),
     }
 }
@@ -647,9 +653,13 @@ fn class_edge_style(kind: &RelationKind) -> EdgeStyle {
 /// level diagram and every concurrent region keep their own initial and final
 /// pseudo state, because `[*]` is relative to its region.
 ///
-/// A composite state stays a node and each of its regions becomes a cluster
-/// frame. Nested states join every enclosing frame, the same flattening rule as
-/// nested flowchart subgraphs.
+/// A composite state stays a node, each of its regions becomes a cluster
+/// frame titled with the state label, and nested states join every enclosing
+/// frame, the same flattening rule as nested flowchart subgraphs.
+///
+/// The flat frame level means the state node and its region frames are siblings
+/// instead of a containment, so the lowering records that loss as
+/// `davinci.diagram.approximated`; it is never dropped without a diagnostic.
 fn state_spec(diagram: &StateDiagram, source: &str) -> Result<DiagramSpec, DiagramError> {
     if let Some((range, keyword)) = locate_dropped_statement(source, DROPPED_STATE_STATEMENTS, false) {
         return Err(DiagramError::unsupported(format!(
@@ -679,6 +689,81 @@ fn state_shape(kind: StateKind) -> NodeShape {
         StateKind::Choice => NodeShape::Rhombus,
         StateKind::EntryPoint | StateKind::ExitPoint => NodeShape::Circle,
     }
+}
+
+/// Approximation records for every composite state in one diagram.
+///
+/// The state node survives as an edge endpoint and its regions become flat
+/// frames, so the containment between the state and its regions is the loss.
+/// One record per composite state names the state and the region count.
+fn composite_state_diagnostics(diagram: &StateDiagram, source: &str) -> Vec<Diagnostic> {
+    let mut records = Vec::new();
+    collect_composite_states(&diagram.elements, source, &mut records);
+    records
+}
+
+fn collect_composite_states(elements: &[StateElement], source: &str, out: &mut Vec<Diagnostic>) {
+    for element in elements {
+        let StateElement::State(state) = element
+        else {
+            continue;
+        };
+        if !state.regions.is_empty() {
+            let label = state.text.as_deref().map(str::trim).filter(|text| !text.is_empty()).unwrap_or(&state.id);
+            out.push(approximated_at(
+                format!(
+                    "composite state `{label}` keeps its own node and its {} region(s) become separate flat frames, the containment is not represented",
+                    state.regions.len()
+                ),
+                locate_composite_state(source, &state.id),
+            ));
+        }
+        for region in &state.regions {
+            collect_composite_states(&region.elements, source, out);
+        }
+    }
+}
+
+/// The authored `state <id> {` line of one composite state.
+fn locate_composite_state(source: &str, id: &str) -> Option<std::ops::Range<usize>> {
+    for (range, line) in trimmed_lines(source) {
+        let Some(rest) = line.strip_prefix("state")
+        else {
+            continue;
+        };
+        if !rest.starts_with(char::is_whitespace) || !rest.contains('{') {
+            continue;
+        }
+        let head = rest.split('{').next().unwrap_or_default().trim();
+        let name = head.rsplit(" as ").next().unwrap_or(head).trim().trim_matches('"').trim();
+        if name == id {
+            return Some(range);
+        }
+    }
+    None
+}
+
+/// Build an approximation warning that points at the authored line.
+fn approximated_at(message: impl Into<String>, span: Option<std::ops::Range<usize>>) -> Diagnostic {
+    let message = message.into();
+    let record = diagnostic("diagram", codes::APPROXIMATED, DiagnosticSeverity::Warning, message.clone());
+    let Some(span) = span
+    else {
+        return record;
+    };
+    let Ok(source) = SourceRef::new(NAMESPACE, "mermaid")
+    else {
+        return record;
+    };
+    let Ok(range) = ByteRange::new(span.start as u64, span.end as u64)
+    else {
+        return record;
+    };
+    record.with_primary(DiagnosticLabel::new(
+        DiagnosticLocation::Text { source, range },
+        Message::new(codes::APPROXIMATED).with_fallback(message),
+        LabelRole::Primary,
+    ))
 }
 
 /// Lower one `erDiagram` AST into the graph spec used by layered layout.
@@ -910,7 +995,10 @@ const DIAGRAM_HEADERS: &[&str] = &[
 fn locate_unsupported_family(source: &str) -> Option<(std::ops::Range<usize>, &'static str)> {
     for (range, line) in trimmed_lines(source) {
         let found = DIAGRAM_HEADERS.iter().find(|header| starts_with_keyword(line, header));
-        let Some(header) = found else { continue };
+        let Some(header) = found
+        else {
+            continue;
+        };
         if SUPPORTED_FAMILIES.contains(header) {
             return None;
         }
@@ -925,8 +1013,7 @@ fn locate_unsupported_family(source: &str) -> Option<(std::ops::Range<usize>, &'
 /// the message and silently drop the activation. The shorthand is refused at
 /// its authored line instead.
 fn activation_suffix(line: &str) -> Option<&'static str> {
-    const SHORTHANDS: &[&str] =
-        &["-->>+", "-->>-", "->>+", "->>-", "-->+", "-->-", "->+", "->-"];
+    const SHORTHANDS: &[&str] = &["-->>+", "-->>-", "->>+", "->>-", "-->+", "-->-", "->+", "->-"];
     SHORTHANDS.iter().find(|token| line.contains(**token)).copied()
 }
 

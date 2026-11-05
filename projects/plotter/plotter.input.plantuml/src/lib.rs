@@ -12,8 +12,8 @@ use oak_plantuml::{
     ast::{
         ActivityDecision, ActivityDiagram, ActivityEndpoint, ActivityFork, ActivityNode, ActivitySwimlane, ActivityTransition,
         ClassDeclaration, ClassDiagram, ClassKeyword, ClassMember, ClassRelation, ClassRelationKind, ComponentDiagram,
-        ComponentElement, ComponentNode, ComponentPackage, PortDirection, MemberVisibility, MessageArrow, ParticipantKind,
-        PlantUmlDiagram, PlantUmlRoot, SequenceDiagram, StateDiagram, StateElement, StateEndpoint, StateKind,
+        ComponentElement, ComponentNode, ComponentPackage, MemberVisibility, MessageArrow, ParticipantKind, PlantUmlDiagram,
+        PlantUmlRoot, PortDirection, SequenceDiagram, StateDiagram, StateElement, StateEndpoint, StateKind,
     },
 };
 use plotter_scene::SceneResolver;
@@ -279,7 +279,9 @@ fn single_diagram(root: &PlantUmlRoot) -> Result<&PlantUmlDiagram, DiagramError>
 fn plantuml_root_to_spec(root: &PlantUmlRoot, source: &str) -> Result<(DiagramSpec, Vec<Diagnostic>, SourceMap), DiagramError> {
     match single_diagram(root)? {
         PlantUmlDiagram::Class(class) => class_spec(class, source),
-        PlantUmlDiagram::Sequence(sequence) => sequence_spec(sequence, source).map(|(spec, sources)| (spec, Vec::new(), sources)),
+        PlantUmlDiagram::Sequence(sequence) => {
+            sequence_spec(sequence, source).map(|(spec, sources)| (spec, Vec::new(), sources))
+        }
         PlantUmlDiagram::Activity(activity) => activity_spec(activity, source),
         PlantUmlDiagram::State(state) => state_spec(state, source),
         PlantUmlDiagram::Component(component) => component_spec(component, source),
@@ -499,13 +501,7 @@ impl Graph {
             None => {
                 let index = self.nodes.len();
                 self.indices.insert(id.to_string(), index);
-                self.nodes.push(GraphNode {
-                    id: id.to_string(),
-                    label,
-                    shape,
-                    cluster: ancestors.last().cloned(),
-                    span,
-                });
+                self.nodes.push(GraphNode { id: id.to_string(), label, shape, cluster: ancestors.last().cloned(), span });
             }
         }
 
@@ -596,14 +592,7 @@ impl Flow {
         id
     }
 
-    fn emit(
-        &mut self,
-        id: String,
-        label: Option<String>,
-        shape: NodeShape,
-        ancestors: &[String],
-        span: Option<Range<usize>>,
-    ) {
+    fn emit(&mut self, id: String, label: Option<String>, shape: NodeShape, ancestors: &[String], span: Option<Range<usize>>) {
         self.graph.upsert(&id, label, Some(shape), ancestors, span.clone());
         self.connect(&id, span);
         self.tails = vec![id];
@@ -654,14 +643,9 @@ impl Flow {
 
         let mut tails = Vec::new();
         for (index, branch) in decision.branches.iter().enumerate() {
-            let label = if index == 0 {
-                branch.label.as_ref()
-            }
-            else {
-                branch.condition.as_ref().or(branch.label.as_ref())
-            }
-            .map(|text| text.trim().to_string())
-            .filter(|text| !text.is_empty());
+            let label = if index == 0 { branch.label.as_ref() } else { branch.condition.as_ref().or(branch.label.as_ref()) }
+                .map(|text| text.trim().to_string())
+                .filter(|text| !text.is_empty());
             self.tails = vec![id.clone()];
             self.pending = label;
             self.walk(&branch.nodes, ancestors)?;
@@ -738,10 +722,7 @@ impl Flow {
 /// order of the flow across lane boundaries. Branch conditions ride the edge
 /// that leaves the decision because the spec carries one label per edge and no
 /// gate primitive.
-fn activity_spec(
-    diagram: &ActivityDiagram,
-    source: &str,
-) -> Result<(DiagramSpec, Vec<Diagnostic>, SourceMap), DiagramError> {
+fn activity_spec(diagram: &ActivityDiagram, source: &str) -> Result<(DiagramSpec, Vec<Diagnostic>, SourceMap), DiagramError> {
     refuse_dropped(source, DROPPED_ACTIVITY_STATEMENTS, false, "activity")?;
     let mut flow = Flow::default();
     flow.walk(&diagram.nodes, &[])?;
@@ -762,8 +743,13 @@ fn activity_spec(
 ///
 /// A state keeps its stereotype outline, a transition keeps its event text, and
 /// `[*]` keeps a circle per scope so every concurrent region owns its initial
-/// and final pseudo state. A composite state stays a node with one cluster frame
-/// per region, and nested states join every enclosing frame.
+/// and final pseudo state. A composite state stays a node, each of its regions
+/// becomes a cluster frame titled with the state label, and nested states join
+/// every enclosing frame.
+///
+/// The flat frame level makes the state node and its region frames siblings
+/// instead of a containment, so the lowering records that loss as
+/// `davinci.diagram.approximated` on the authored `state` line.
 fn state_spec(diagram: &StateDiagram, source: &str) -> Result<(DiagramSpec, Vec<Diagnostic>, SourceMap), DiagramError> {
     refuse_dropped(source, DROPPED_STATE_STATEMENTS, false, "state")?;
     if let Some((range, token)) = locate_unsupported_stereotype(source) {
@@ -774,7 +760,7 @@ fn state_spec(diagram: &StateDiagram, source: &str) -> Result<(DiagramSpec, Vec<
     }
 
     let mut graph = Graph::default();
-    collect_states(&mut graph, &diagram.elements, &[], "")?;
+    collect_states(&mut graph, &diagram.elements, &[], "", source)?;
     if graph.nodes.is_empty() {
         return Err(DiagramError::empty_diagram("state diagram contains no states or transitions"));
     }
@@ -792,6 +778,7 @@ fn collect_states(
     elements: &[StateElement],
     ancestors: &[String],
     scope: &str,
+    source: &str,
 ) -> Result<(), DiagramError> {
     for element in elements {
         match element {
@@ -804,12 +791,23 @@ fn collect_states(
                     .filter(|text| !text.is_empty())
                     .map(str::to_string)
                     .or_else(|| Some(id.clone()));
-                graph.upsert(&id, label, Some(state_shape(state.kind)), ancestors, None);
+                graph.upsert(&id, label.clone(), Some(state_shape(state.kind)), ancestors, None);
+                if !state.regions.is_empty() {
+                    let frame_label = label.clone().unwrap_or_else(|| id.clone());
+                    graph.diagnostics.push(approximated_when_located(
+                        format!(
+                            "composite state `{frame_label}` keeps its own node and its {} region(s) become separate flat frames, the containment is not represented",
+                            state.regions.len()
+                        ),
+                        locate_composite_state(source, &id),
+                    ));
+                }
+                let frame_label = label.unwrap_or_else(|| id.clone());
                 for (index, region) in state.regions.iter().enumerate() {
-                    let frame = graph.register_cluster(Some(&format!("{id}:region{index}")), "");
+                    let frame = graph.register_cluster(Some(&format!("{id}:region{index}")), &frame_label);
                     let mut nested = ancestors.to_vec();
                     nested.push(frame.clone());
-                    collect_states(graph, &region.elements, &nested, &frame)?;
+                    collect_states(graph, &region.elements, &nested, &frame, source)?;
                 }
             }
             StateElement::Transition(transition) => {
@@ -844,6 +842,36 @@ fn state_endpoint(
     }
 }
 
+/// The authored `state <id> {` line of one composite state.
+fn locate_composite_state(source: &str, id: &str) -> Option<Range<usize>> {
+    for (range, line) in source_lines(source) {
+        let Some(rest) = line.strip_prefix("state")
+        else {
+            continue;
+        };
+        if !rest.starts_with(char::is_whitespace) || !rest.contains('{') {
+            continue;
+        }
+        let head = rest.split('{').next().unwrap_or_default().trim();
+        let name = head.rsplit(" as ").next().unwrap_or(head).trim().trim_matches('"').trim();
+        if name == id {
+            return Some(range);
+        }
+    }
+    None
+}
+
+/// Build a warning that points at the authored line when one was located.
+fn approximated_when_located(message: impl Into<String>, span: Option<Range<usize>>) -> Diagnostic {
+    match span {
+        Some(span) => approximated_at(message, span),
+        None => {
+            let message = message.into();
+            diagnostic("diagram", codes::APPROXIMATED, DiagnosticSeverity::Warning, message)
+        }
+    }
+}
+
 fn state_shape(kind: StateKind) -> NodeShape {
     match kind {
         StateKind::Normal => NodeShape::Round,
@@ -859,10 +887,7 @@ fn state_shape(kind: StateKind) -> NodeShape {
 /// and a port becomes a standalone round node. Relations reuse the class
 /// relation styles; both multiplicities and the authored label fold into the
 /// single edge label the spec carries.
-fn component_spec(
-    diagram: &ComponentDiagram,
-    source: &str,
-) -> Result<(DiagramSpec, Vec<Diagnostic>, SourceMap), DiagramError> {
+fn component_spec(diagram: &ComponentDiagram, source: &str) -> Result<(DiagramSpec, Vec<Diagnostic>, SourceMap), DiagramError> {
     refuse_dropped(source, DROPPED_COMPONENT_STATEMENTS, false, "component")?;
     let mut graph = Graph::default();
     collect_components(&mut graph, &diagram.elements, &[], 0, source)?;
@@ -874,11 +899,8 @@ fn component_spec(
             graph.upsert(name, None, None, &[], Some(oak_span(&relation.span)));
         }
         let (from, to) = if relation.marker_at_left { (right, left) } else { (left, right) };
-        let label = folded_label(
-            relation.left_multiplicity.as_ref(),
-            relation.right_multiplicity.as_ref(),
-            relation.label.as_ref(),
-        );
+        let label =
+            folded_label(relation.left_multiplicity.as_ref(), relation.right_multiplicity.as_ref(), relation.label.as_ref());
         graph.push_edge(from, to, label, class_edge_style(&relation.kind), Some(oak_span(&relation.span)));
     }
 
@@ -905,11 +927,23 @@ fn collect_components(
         match element {
             ComponentElement::Component(node) => {
                 let id = require_id(&node.name)?;
-                graph.upsert(&id, Some(component_label(node, false, source)), Some(NodeShape::Box), ancestors, Some(oak_span(&node.span)));
+                graph.upsert(
+                    &id,
+                    Some(component_label(node, false, source)),
+                    Some(NodeShape::Box),
+                    ancestors,
+                    Some(oak_span(&node.span)),
+                );
             }
             ComponentElement::Interface(node) => {
                 let id = require_id(&node.name)?;
-                graph.upsert(&id, Some(component_label(node, true, source)), Some(NodeShape::Box), ancestors, Some(oak_span(&node.span)));
+                graph.upsert(
+                    &id,
+                    Some(component_label(node, true, source)),
+                    Some(NodeShape::Box),
+                    ancestors,
+                    Some(oak_span(&node.span)),
+                );
             }
             ComponentElement::Port(port) => {
                 let id = require_id(&port.name)?;
@@ -921,8 +955,7 @@ fn collect_components(
                 ));
             }
             ComponentElement::Package(package) => {
-                let cluster =
-                    graph.register_cluster(Some(&format!("package:{}", package.span.start)), &package_label(package));
+                let cluster = graph.register_cluster(Some(&format!("package:{}", package.span.start)), &package_label(package));
                 if depth > 0 {
                     graph.diagnostics.push(approximated_at(
                         "a nested component package is flattened into its enclosing frame",
@@ -981,13 +1014,7 @@ fn authored_component_display(authored: &str) -> Option<String> {
 }
 
 fn package_label(package: &ComponentPackage) -> String {
-    package
-        .display
-        .as_deref()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| package.name.trim())
-        .to_string()
+    package.display.as_deref().map(str::trim).filter(|text| !text.is_empty()).unwrap_or_else(|| package.name.trim()).to_string()
 }
 
 fn port_direction(direction: PortDirection) -> &'static str {
@@ -1218,11 +1245,7 @@ fn member_text(member: &ClassMember) -> String {
 
 /// Fold multiplicities and the authored label into the one edge label.
 fn relation_label(relation: &ClassRelation) -> Option<String> {
-    folded_label(
-        relation.left_multiplicity.as_ref(),
-        relation.right_multiplicity.as_ref(),
-        relation.label.as_ref(),
-    )
+    folded_label(relation.left_multiplicity.as_ref(), relation.right_multiplicity.as_ref(), relation.label.as_ref())
 }
 
 fn class_edge_style(kind: &ClassRelationKind) -> EdgeStyle {
@@ -1298,8 +1321,9 @@ fn reject_unsupported(source: &str) -> Result<(), DiagramError> {
             if lower.starts_with("@startuml") {
                 let rest = &lower["@startuml".len()..];
                 if !rest.is_empty() && !rest.starts_with(char::is_whitespace) && !rest.starts_with('(') {
-                    return Err(DiagramError::unsupported(format!("unknown PlantUML marker `{line}`"))
-                        .with_span(line_start..line_end));
+                    return Err(
+                        DiagramError::unsupported(format!("unknown PlantUML marker `{line}`")).with_span(line_start..line_end)
+                    );
                 }
                 if start.is_some() {
                     return Err(DiagramError::unsupported("a PlantUML source declares more than one `@startuml`")

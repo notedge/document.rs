@@ -35,6 +35,15 @@ pub mod render;
 pub mod source;
 pub mod spec;
 
+/// Stable diagram diagnostic codes.
+///
+/// The constants are defined once in `plotter_types::codes`; this module is the
+/// single import path a consumer uses, so a diagram frontend and a host binding
+/// cannot drift onto two spellings of the same code.
+pub mod codes {
+    pub use plotter_types::codes::*;
+}
+
 pub use error::DiagramError;
 pub use source::SourceMap;
 
