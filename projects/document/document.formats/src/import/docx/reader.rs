@@ -9,6 +9,7 @@ use super::{
     map_opc_error,
     numbering::{NumberingCatalog, parse_numbering_xml_lossy},
     rels::read_document_relationships,
+    styles::{StyleDefaults, parse_styles_xml_lossy},
     xml,
     xml_extensions::{document_root, element_text, elements_by_local_name, parse_xml_bytes},
 };
@@ -16,6 +17,7 @@ use crate::FormatError;
 
 const DOCUMENT_XML: &str = "word/document.xml";
 const NUMBERING_XML: &str = "word/numbering.xml";
+const STYLES_XML: &str = "word/styles.xml";
 
 /// Import a DOCX file from disk into `notedown-ir`.
 pub fn import_docx(path: impl AsRef<Path>) -> Result<DocumentGraph, FormatError> {
@@ -43,8 +45,9 @@ pub fn import_docx_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
     let rels = read_document_relationships(&package, &document_part, &mut ledger)?;
     let numbering = read_numbering_catalog(&package, &mut ledger);
     let footnotes = read_footnote_catalog(&package, &mut ledger);
+    let style_defaults = read_style_defaults(&package, &mut ledger);
     let mut graph = xml::new_graph(label);
-    let referenced_footnotes = xml::parse_document_xml(&xml, &rels, &numbering, &footnotes, &mut graph)?;
+    let referenced_footnotes = xml::parse_document_xml(&xml, &rels, &numbering, &footnotes, &style_defaults, &mut graph)?;
     append_footnote_definitions(&mut graph, &footnotes, &referenced_footnotes);
     hydrate_embedded_assets(&package, &mut ledger, &mut graph);
     hydrate_core_metadata(&package, &mut ledger, &mut graph);
@@ -113,6 +116,14 @@ fn read_numbering_catalog(package: &OpcPackage, ledger: &mut BudgetTracker) -> N
 
 fn read_footnote_catalog(package: &OpcPackage, ledger: &mut BudgetTracker) -> FootnoteCatalog {
     package.read_part(footnotes_part_path(), ledger).ok().map(|xml| parse_footnotes_xml_lossy(&xml)).unwrap_or_default()
+}
+
+/// Body size and line spacing inherited from `word/styles.xml`.
+///
+/// `styles.xml` is optional, and an unreadable one only loses the defaults, so
+/// it never fails the import.
+fn read_style_defaults(package: &OpcPackage, ledger: &mut BudgetTracker) -> StyleDefaults {
+    package.read_part(STYLES_XML, ledger).ok().map(|xml| parse_styles_xml_lossy(&xml)).unwrap_or_default()
 }
 
 fn hydrate_embedded_assets(package: &OpcPackage, ledger: &mut BudgetTracker, graph: &mut DocumentGraph) {

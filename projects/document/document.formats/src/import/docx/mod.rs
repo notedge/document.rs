@@ -8,6 +8,8 @@ pub(crate) mod math;
 pub mod numbering;
 mod reader;
 mod rels;
+/// Document defaults declared by `word/styles.xml`.
+pub mod styles;
 mod table;
 /// WordprocessingML body import.
 pub mod xml;

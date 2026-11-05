@@ -85,6 +85,41 @@ fn docx_zip_with_footnotes(document_xml: &[u8], footnotes_xml: &[u8]) -> Vec<u8>
 }
 
 #[test]
+fn docx_section_properties_become_page_setup() {
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>Body</w:t></w:r></w:p>
+    <w:sectPr>
+      <w:pgSz w:w="11906" w:h="16838"/>
+      <w:pgMar w:top="680" w:right="666" w:bottom="680" w:left="666"/>
+      <w:cols w:num="2"/>
+    </w:sectPr>
+  </w:body>
+</w:document>"#;
+    let styles_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault><w:rPr><w:sz w:val="25"/></w:rPr></w:rPrDefault>
+    <w:pPrDefault><w:pPr><w:spacing w:line="302"/></w:pPr></w:pPrDefault>
+  </w:docDefaults>
+</w:styles>"#;
+    let zip = stored_zip(&[("word/document.xml", document_xml), ("word/styles.xml", styles_xml)]);
+    let graph = import_docx_bytes("page-setup.docx", &zip).expect("import DOCX");
+    let page = graph.page_setup.expect("page setup");
+    assert_eq!(page.page_width, Some(595.3), "twips become points");
+    assert_eq!(page.page_height, Some(841.9));
+    assert_eq!(page.margin_left, Some(33.3));
+    assert_eq!(page.columns, Some(2));
+    assert_eq!(page.base_font_size, Some(12.5), "half-points become points");
+    assert_eq!(page.line_height, Some(302.0 / 240.0));
+    assert!(
+        !graph.coverage.loss.iter().any(|loss| loss.code == "reader.docx.section_layout"),
+        "a represented section must not be reported as a loss"
+    );
+}
+
+#[test]
 fn docx_to_markdown_round_trip() {
     let zip = minimal_docx_zip();
     let graph = import_docx_bytes("sample.docx", &zip).expect("import docx");

@@ -58,7 +58,8 @@ fn contains_expression(expression: &MathExpression, predicate: &impl Fn(&MathExp
             contains_expression(numerator, predicate) || contains_expression(denominator, predicate)
         }
         MathExpression::Radical { index, radicand, .. } => {
-            index.as_deref().is_some_and(|item| contains_expression(item, predicate)) || contains_expression(radicand, predicate)
+            index.as_deref().is_some_and(|item| contains_expression(item, predicate))
+                || contains_expression(radicand, predicate)
         }
         MathExpression::Delimited { body, middles, .. } => {
             contains_expression(body, predicate) || middles.iter().any(|item| contains_expression(item, predicate))
@@ -67,15 +68,15 @@ fn contains_expression(expression: &MathExpression, predicate: &impl Fn(&MathExp
             contains_expression(body, predicate)
         }
         MathExpression::Accent { base, .. } => contains_expression(base, predicate),
-        MathExpression::StackAbove { over, base } => contains_expression(over, predicate) || contains_expression(base, predicate),
+        MathExpression::StackAbove { over, base } => {
+            contains_expression(over, predicate) || contains_expression(base, predicate)
+        }
         MathExpression::StackBelow { under, base } => {
             contains_expression(under, predicate) || contains_expression(base, predicate)
         }
-        MathExpression::Environment(environment) => environment
-            .rows
-            .iter()
-            .flat_map(|row| row.cells.iter())
-            .any(|cell| contains_expression(cell, predicate)),
+        MathExpression::Environment(environment) => {
+            environment.rows.iter().flat_map(|row| row.cells.iter()).any(|cell| contains_expression(cell, predicate))
+        }
         _ => false,
     }
 }
@@ -83,12 +84,19 @@ fn contains_expression(expression: &MathExpression, predicate: &impl Fn(&MathExp
 #[cfg(feature = "docx")]
 mod docx_omml {
     use super::*;
-    use document_formats::import::docx::{numbering::NumberingCatalog, xml};
+    use document_formats::import::docx::{numbering::NumberingCatalog, styles::StyleDefaults, xml};
 
     fn import(source: &str) -> DocumentGraph {
         let mut graph = xml::new_graph("math.docx");
-        xml::parse_document_xml(source.as_bytes(), &HashMap::new(), &NumberingCatalog::default(), &HashMap::new(), &mut graph)
-            .expect("docx body parse");
+        xml::parse_document_xml(
+            source.as_bytes(),
+            &HashMap::new(),
+            &NumberingCatalog::default(),
+            &HashMap::new(),
+            &StyleDefaults::default(),
+            &mut graph,
+        )
+        .expect("docx body parse");
         graph
     }
 
@@ -121,11 +129,26 @@ mod docx_omml {
         assert!(sources.iter().any(|source| source.contains("\\left[")), "{sources:?}");
         assert!(sources.iter().any(|source| source.contains("\\sum_{")), "{sources:?}");
         assert!(sources.iter().any(|source| source.contains("\\begin{matrix}")), "{sources:?}");
-        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(expression, MathExpression::Script { .. }))));
-        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(expression, MathExpression::Fraction { .. }))));
-        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(expression, MathExpression::Radical { .. }))));
-        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(expression, MathExpression::Delimited { .. }))));
-        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(expression, MathExpression::Environment(_)))));
+        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(
+            expression,
+            MathExpression::Script { .. }
+        ))));
+        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(
+            expression,
+            MathExpression::Fraction { .. }
+        ))));
+        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(
+            expression,
+            MathExpression::Radical { .. }
+        ))));
+        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(
+            expression,
+            MathExpression::Delimited { .. }
+        ))));
+        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(
+            expression,
+            MathExpression::Environment(_)
+        ))));
         assert!(!has_loss(&graph, "import.docx.math_unsupported"), "{:?}", graph.coverage.loss);
     }
 
@@ -169,20 +192,52 @@ mod html_mathml {
         assert_eq!(formulas.len(), 5, "{:?}", formulas.iter().map(|formula| &formula.source).collect::<Vec<_>>());
         assert_eq!(formulas[0].display, MathDisplay::Inline);
         assert_eq!(formulas[1].display, MathDisplay::Display);
-        assert!(formulas.iter().any(|formula| formula.source.contains("^{2}")), "{:?}", formulas.iter().map(|f| &f.source).collect::<Vec<_>>());
-        assert!(formulas.iter().any(|formula| formula.source.contains("\\frac{")), "{:?}", formulas.iter().map(|f| &f.source).collect::<Vec<_>>());
-        assert!(formulas.iter().any(|formula| formula.source.contains("\\sqrt{")), "{:?}", formulas.iter().map(|f| &f.source).collect::<Vec<_>>());
-        assert!(formulas.iter().any(|formula| formula.source.contains("\\left[")), "{:?}", formulas.iter().map(|f| &f.source).collect::<Vec<_>>());
+        assert!(
+            formulas.iter().any(|formula| formula.source.contains("^{2}")),
+            "{:?}",
+            formulas.iter().map(|f| &f.source).collect::<Vec<_>>()
+        );
+        assert!(
+            formulas.iter().any(|formula| formula.source.contains("\\frac{")),
+            "{:?}",
+            formulas.iter().map(|f| &f.source).collect::<Vec<_>>()
+        );
+        assert!(
+            formulas.iter().any(|formula| formula.source.contains("\\sqrt{")),
+            "{:?}",
+            formulas.iter().map(|f| &f.source).collect::<Vec<_>>()
+        );
+        assert!(
+            formulas.iter().any(|formula| formula.source.contains("\\left[")),
+            "{:?}",
+            formulas.iter().map(|f| &f.source).collect::<Vec<_>>()
+        );
         assert!(
             formulas.iter().any(|formula| formula.source.contains("\\int}") && formula.source.contains("_{0}^{1}")),
             "{:?}",
             formulas.iter().map(|f| &f.source).collect::<Vec<_>>()
         );
-        assert!(formulas.iter().any(|formula| formula.source.contains("\\begin{matrix}")), "{:?}", formulas.iter().map(|f| &f.source).collect::<Vec<_>>());
-        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(expression, MathExpression::Fraction { .. }))));
-        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(expression, MathExpression::Radical { .. }))));
-        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(expression, MathExpression::Delimited { .. }))));
-        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(expression, MathExpression::Environment(_)))));
+        assert!(
+            formulas.iter().any(|formula| formula.source.contains("\\begin{matrix}")),
+            "{:?}",
+            formulas.iter().map(|f| &f.source).collect::<Vec<_>>()
+        );
+        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(
+            expression,
+            MathExpression::Fraction { .. }
+        ))));
+        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(
+            expression,
+            MathExpression::Radical { .. }
+        ))));
+        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(
+            expression,
+            MathExpression::Delimited { .. }
+        ))));
+        assert!(formulas.iter().any(|formula| contains_expression(&formula.expression, &|expression| matches!(
+            expression,
+            MathExpression::Environment(_)
+        ))));
         assert!(!has_loss(&graph, "import.html.math_unsupported"), "{:?}", graph.coverage.loss);
     }
 
@@ -197,9 +252,14 @@ mod html_mathml {
         assert!(formula_source.contains("\\int}") && formula_source.contains("_{0}^{1}"), "{formula_source}");
         assert!(formula_source.contains("\\frac{1}{3}"), "{formula_source}");
         assert!(formula_source.contains("dx"), "{formula_source}");
-        assert!(contains_expression(&formulas[0].expression, &|expression| matches!(expression, MathExpression::Fraction { .. })), "{formula_source}");
+        assert!(
+            contains_expression(&formulas[0].expression, &|expression| matches!(expression, MathExpression::Fraction { .. })),
+            "{formula_source}"
+        );
         let tail = graph.blocks.iter().any(|node| match &node.block {
-            Block::Paragraph { content } => content.iter().any(|inline| matches!(inline, Inline::Text { text } if text.contains("tail survives"))),
+            Block::Paragraph { content } => {
+                content.iter().any(|inline| matches!(inline, Inline::Text { text } if text.contains("tail survives")))
+            }
             _ => false,
         });
         assert!(tail, "content after the formula must stay in the document");

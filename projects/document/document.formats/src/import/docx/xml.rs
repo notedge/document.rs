@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use document_ir::{
     Asset, AssetId, AssetKind, Block, BreakKind, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, MathDisplay,
-    RelationEndpoint, SemanticStatus, TableCell,
+    PageSetup, RelationEndpoint, SemanticStatus, TableCell,
 };
 use oak_xml::ast::{XmlElement, XmlValue};
 
@@ -10,14 +10,14 @@ use super::{
     footnotes::FootnoteCatalog,
     math::{lower_omml, omath_children},
     numbering::NumberingCatalog,
+    styles::StyleDefaults,
     table::{TableState, append_cell_paragraph, push_table_block},
     xml_extensions::{
         attribute_value, bool_from_element, child_element, document_root, element_is, element_text, elements_by_local_name,
         parse_xml_bytes, u32_attribute,
     },
 };
-use crate::import::math_latex::record_math_unsupported;
-use crate::FormatError;
+use crate::{FormatError, import::math_latex::record_math_unsupported};
 
 /// Parses `word/document.xml` body content into a flat `DocumentGraph`.
 pub fn parse_document_xml(
@@ -25,6 +25,7 @@ pub fn parse_document_xml(
     rels: &HashMap<String, String>,
     numbering: &NumberingCatalog,
     footnotes: &FootnoteCatalog,
+    defaults: &StyleDefaults,
     graph: &mut DocumentGraph,
 ) -> Result<HashSet<u32>, FormatError> {
     let value = parse_xml_bytes(xml)?;
@@ -106,15 +107,19 @@ pub fn parse_document_xml(
         });
     }
     if elements_by_local_name(root, "sectPr").iter().any(|element| {
-        ["pgSz", "pgMar", "cols", "docGrid", "headerReference", "footerReference"]
-            .iter()
-            .any(|name| !elements_by_local_name(element, name).is_empty())
+        ["docGrid", "headerReference", "footerReference"].iter().any(|name| !elements_by_local_name(element, name).is_empty())
     }) {
         graph.push_loss(LossMarker {
             code: "reader.docx.section_layout".into(),
-            message: "section page size, margins, columns, grid, or header/footer layout is detected but not represented in notedown-ir".into(),
+            message:
+                "document grid and header/footer references are detected but their layout is not represented in notedown-ir"
+                    .into(),
             status: SemanticStatus::Partial,
         });
+    }
+    let page = section_page_setup(body, defaults);
+    if page.has_values() {
+        graph.page_setup = Some(page);
     }
 
     let mut referenced_footnotes = HashSet::new();
@@ -143,6 +148,44 @@ pub fn parse_document_xml(
     }
 
     Ok(referenced_footnotes)
+}
+
+/// Reads the section properties declared at the end of `w:body`.
+///
+/// Word stores the last section's page size, margins and column count in the
+/// body-level `w:sectPr`. Those facts are presentation, so they travel on
+/// [`DocumentGraph::page_setup`] instead of a loss marker. The document
+/// defaults from `word/styles.xml` fill the body size and line height the
+/// section does not declare.
+fn section_page_setup(body: &XmlElement, defaults: &StyleDefaults) -> PageSetup {
+    let section = child_element(body, "sectPr").or_else(|| elements_by_local_name(body, "sectPr").last().copied());
+    let mut page = PageSetup::default();
+    if let Some(section) = section {
+        if let Some(size) = child_element(section, "pgSz") {
+            page.page_width = points_from_twips(attribute_value(size, "w"));
+            page.page_height = points_from_twips(attribute_value(size, "h"));
+        }
+        if let Some(margins) = child_element(section, "pgMar") {
+            page.margin_top = points_from_twips(attribute_value(margins, "top"));
+            page.margin_right = points_from_twips(attribute_value(margins, "right"));
+            page.margin_bottom = points_from_twips(attribute_value(margins, "bottom"));
+            page.margin_left = points_from_twips(attribute_value(margins, "left"));
+        }
+        if let Some(columns) = child_element(section, "cols") {
+            page.columns = u32_attribute(columns, "num").and_then(|count| u16::try_from(count).ok()).filter(|count| *count > 0);
+        }
+    }
+    page.base_font_size = defaults.base_font_size;
+    page.line_height = defaults.line_height;
+    page
+}
+
+/// Converts a WordprocessingML twip length to points.
+///
+/// Word declares page dimensions and margins in twentieths of a point, and
+/// treats a zero or negative length as unset.
+fn points_from_twips(value: Option<String>) -> Option<f64> {
+    value?.trim().parse::<f64>().ok().map(|twips| twips / 20.0).filter(|points| *points > 0.0)
 }
 
 fn parse_table_element(
