@@ -1651,9 +1651,13 @@ impl LayoutEngine {
         let den_width = den_layout.width();
         let den_height = den_layout.height();
 
-        // TeX pads a fraction by two `nulldelimspace`s (`2 × 0.12 em`), the
-        // side bearings a `\left.`/`\right.` pair would contribute.
-        let width = num_width.max(den_width) + Fixed::from_f64(2.0 * NULL_DELIMITER_SPACE_EM) * size;
+        // TeX's `make_fraction` sets the rule to the wider of the two parts,
+        // with no side bearing: `\nulldelimiterspace` belongs to the null side
+        // of a `\left.`/`\right.` pair and never pads a fractional rule.  A
+        // reference `\frac{\alpha}{\beta}` compiled by TeX puts the rule exactly
+        // on the numerator's advance width, so adding bearings would widen every
+        // display fraction beyond what TeX paints.
+        let width = num_width.max(den_width);
 
         let mut v_children = Vec::new();
 

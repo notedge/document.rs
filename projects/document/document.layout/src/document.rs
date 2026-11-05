@@ -42,34 +42,33 @@ const MONOSPACE_ADVANCE: f64 = 0.6;
 
 // ---- TeX display-math skips ----
 //
-// LaTeX's `size10.clo` defaults, the numbers every class inherits when the body
-// is 10 pt, are `\abovedisplayskip` and `\belowdisplayskip` = `10pt plus 2pt
-// minus 5pt`, `\abovedisplayshortskip` = `0pt plus 3pt`, and
-// `\belowdisplayshortskip` = `6pt plus 3pt minus 3pt`. They are expressed in
-// em of the body size so an 11 pt body keeps the ratio `size11.clo` derives
-// from them instead of inheriting a 10 pt absolute value.
+// A `Block::Math` always begins its own paragraph, so TeX applies the long
+// `\abovedisplayskip` / `\belowdisplayskip` pair, never the short forms that a
+// display sharing a paragraph with the preceding line would pick. The skips are
+// not a bare number: TeX's distance from the previous baseline to the formula
+// baseline is the skip plus the interline glue the body baselineskip supplies,
+// and it bottoms out at the skip alone once the formula is taller than a line.
+// This page builder has no interline glue, so the same visible distance is
+// reconstructed here from the line box and the formula's own height and depth.
 //
-// Only the natural width and the `minus` shrink are consumed: this page builder
-// fills pages top-down and never justifies them to the bottom margin, so the
-// `plus` stretch component would be invented vertical padding rather than TeX's
-// flush-bottom behaviour.
+// The constants below are the ratios measured from a `tectonic` reference at a
+// 12 pt body expressed in em: `1.0` is the 12 pt skip itself, `1.32` / `1.54`
+// are the visible gaps TeX keeps when interline glue no longer fits, and `1.11`
+// is the above-the-depth part of `\belowdisplayskip`. Only the natural width and
+// the `minus` shrink are consumed: this page builder fills pages top-down and
+// never justifies them to the bottom margin, so the `plus` stretch component
+// would be invented vertical padding rather than TeX's flush-bottom behaviour.
 
 /// Natural space above a display formula, in em of the body size.
 const ABOVE_DISPLAY_SKIP_EM: f64 = 1.0;
-/// How far the space above a display may shrink, in em of the body size.
-const ABOVE_DISPLAY_SKIP_SHRINK_EM: f64 = 0.5;
-/// Natural space below a display formula, in em of the body size.
-const BELOW_DISPLAY_SKIP_EM: f64 = 1.0;
-/// How far the space below a display may shrink, in em of the body size.
-const BELOW_DISPLAY_SKIP_SHRINK_EM: f64 = 0.5;
-/// Natural space above a display that follows a short line, in em.
-const ABOVE_DISPLAY_SHORT_SKIP_EM: f64 = 0.0;
-/// Natural space below a display that follows a short line, in em.
-const BELOW_DISPLAY_SHORT_SKIP_EM: f64 = 0.6;
-/// How far the space below a short display may shrink, in em.
-const BELOW_DISPLAY_SHORT_SKIP_SHRINK_EM: f64 = 0.3;
-/// TeX compares the display against the preceding line plus two quads.
-const SHORT_DISPLAY_MARGIN_EM: f64 = 2.0;
+/// Smallest visible gap above a display taller than a body line, in em.
+const ABOVE_DISPLAY_GAP_MIN_EM: f64 = 1.32;
+/// Natural gap from a display baseline down to the next line, in em.
+const BELOW_DISPLAY_GAP_EM: f64 = 1.11;
+/// Smallest gap below a display, less its depth, in em.
+const BELOW_DISPLAY_GAP_MIN_EM: f64 = 1.54;
+/// How far a display's space may shrink, in em of the body size.
+const DISPLAY_SKIP_SHRINK_EM: f64 = 0.5;
 
 /// Family and face style shared by consecutive inline text atoms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -492,22 +491,26 @@ struct DisplaySkip {
 
 /// The pair of skips TeX puts around a display formula.
 ///
-/// The short form applies when the display starts at least two quads to the
-/// right of where the preceding line ends, which is TeX's test for a display
-/// that does not collide with the line above it.
-fn display_skips(size: f64, short: bool) -> (DisplaySkip, DisplaySkip) {
-    if short {
-        (
-            DisplaySkip { natural: ABOVE_DISPLAY_SHORT_SKIP_EM * size, shrink: 0.0 },
-            DisplaySkip { natural: BELOW_DISPLAY_SHORT_SKIP_EM * size, shrink: BELOW_DISPLAY_SHORT_SKIP_SHRINK_EM * size },
-        )
-    }
-    else {
-        (
-            DisplaySkip { natural: ABOVE_DISPLAY_SKIP_EM * size, shrink: ABOVE_DISPLAY_SKIP_SHRINK_EM * size },
-            DisplaySkip { natural: BELOW_DISPLAY_SKIP_EM * size, shrink: BELOW_DISPLAY_SKIP_SHRINK_EM * size },
-        )
-    }
+/// A `Block::Math` always starts its own paragraph, so the preceding paragraph
+/// line can never be the line TeX's short-display test compares against. TeX
+/// applies `\abovedisplayskip` and `\belowdisplayskip` here, not their short
+/// forms, which is what `\par` followed by `\[...\]` produces.
+///
+/// The glue is measured from the previous text baseline, but the cursor sits at
+/// the bottom of that line box, already `pad` below the baseline. Subtracting
+/// that reserved padding from the distance TeX keeps is what makes the visible
+/// gap come out the same instead of inheriting the page builder's line box.
+fn display_skips(size: f64, line: f64, height: f64, depth: f64) -> (DisplaySkip, DisplaySkip) {
+    let pad = (line - ASCENT * size).max(0.0);
+    let above_gap = (ABOVE_DISPLAY_SKIP_EM * size + line - height).max(ABOVE_DISPLAY_GAP_MIN_EM * size);
+    let above = (above_gap - pad).max(0.0);
+    let below_gap = (BELOW_DISPLAY_GAP_MIN_EM * size - depth).max(BELOW_DISPLAY_GAP_EM * size);
+    let below = (below_gap - ASCENT * size).max(0.0);
+    let shrink = DISPLAY_SKIP_SHRINK_EM * size;
+    (
+        DisplaySkip { natural: above, shrink: shrink.min(above) },
+        DisplaySkip { natural: below, shrink: shrink.min(below) },
+    )
 }
 
 /// Page-filling state for one layout pass.
@@ -519,8 +522,6 @@ struct PageBuilder<'a> {
     diagrams: &'a Diagrams,
     /// Top edge of the next line box, in page coordinates.
     cursor: f64,
-    /// Right edge of the last painted line, used by TeX's short-display test.
-    last_line_right: Option<f64>,
     /// Degradations the pass applied, such as a math glyph without an outline.
     diagnostics: Vec<Diagnostic>,
 }
@@ -533,7 +534,6 @@ impl<'a> PageBuilder<'a> {
             pages: vec![blank_page(&hint)],
             diagrams,
             cursor: hint.margin.top,
-            last_line_right: None,
             diagnostics: Vec::new(),
         }
     }
@@ -771,8 +771,7 @@ impl<'a> PageBuilder<'a> {
         self.ensure_space(line_metrics.raise + line_metrics.height);
         let top = self.cursor + line_metrics.raise;
         let baseline = top + ASCENT * size;
-        let right = self.paint_line(line, size, self.left(indent), baseline, self.content_width(indent));
-        self.last_line_right = Some(right);
+        self.paint_line(line, size, self.left(indent), baseline, self.content_width(indent));
         self.cursor = top + line_metrics.height;
     }
 
@@ -1082,13 +1081,12 @@ impl<'a> PageBuilder<'a> {
     ///
     /// The formula is centred inside the content column like TeX display math
     /// and follows the document body size. Its vertical space comes from TeX's
-    /// display skips: `\abovedisplayskip` above and `\belowdisplayskip` below,
-    /// or the short forms when the preceding line ends at least two quads before
-    /// the centred formula starts. When the math engine cannot parse or lay out
+    /// display skips: `\abovedisplayskip` above and `\belowdisplayskip` below.
+    /// When the math engine cannot parse or lay out
     /// the source, the raw TeX is rendered as text with an `Error` diagnostic
     /// (`vutex.layout.math.not_typeset`): the formula stays visible, but the
     /// degradation is never reported as a clean layout.
-    fn emit_math(&mut self, formula: &document_ir::MathFormula, indent: f64, preceding_line_right: Option<f64>) {
+    fn emit_math(&mut self, formula: &document_ir::MathFormula, indent: f64) {
         let size = self.body_size();
         if !is_tex_formula(formula) {
             self.diagnostics.push(unsupported_math_language_diagnostic(formula));
@@ -1102,8 +1100,7 @@ impl<'a> PageBuilder<'a> {
                 let (width, height, depth) = (metrics.width.to_f64(), metrics.height.to_f64(), metrics.depth.to_f64());
                 let left = self.left(indent);
                 let offset = ((self.content_width(indent) - width) / 2.0).max(0.0);
-                let short = preceding_line_right.is_some_and(|right| right + SHORT_DISPLAY_MARGIN_EM * size <= left + offset);
-                let (above, below) = display_skips(size, short);
+                let (above, below) = display_skips(size, self.line_box(size), height, depth);
                 let (above_space, below_space) = self.fit_display(height + depth, above, below);
                 self.ensure_space(above_space + height + depth + below_space);
                 self.pad(above_space);
@@ -1167,17 +1164,11 @@ impl<'a> PageBuilder<'a> {
     }
 
     fn render_blocks(&mut self, graph: &DocumentGraph, ids: &[NodeId], indent: f64) {
-        // Right edge of the paragraph line directly above a display formula.
-        // TeX only considers a display short when the line in front of it ends
-        // well before the formula begins, so anything that is not a paragraph
-        // clears it.
-        let mut preceding_line_right = None;
         for (index, id) in ids.iter().enumerate() {
             let Some(node) = graph.block(*id)
             else {
                 continue;
             };
-            let line_right = preceding_line_right.take();
             match &node.block {
                 Block::Section { level, title, children } => {
                     self.emit_heading(*level, title, indent);
@@ -1189,7 +1180,6 @@ impl<'a> PageBuilder<'a> {
                         .and_then(|next| graph.block(*next))
                         .is_some_and(|next| matches!(next.block, Block::Math { .. }));
                     self.emit_paragraph(content, indent, before_display);
-                    preceding_line_right = self.last_line_right;
                 }
                 Block::List { ordered, items } => {
                     self.emit_list(*ordered, items, indent, graph);
@@ -1221,7 +1211,7 @@ impl<'a> PageBuilder<'a> {
                 // authored spec stays visible as code instead of disappearing
                 // from the page.
                 Block::Chart { source, .. } => self.emit_code(source, indent),
-                Block::Math { formula } => self.emit_math(formula, indent, line_right),
+                Block::Math { formula } => self.emit_math(formula, indent),
                 Block::Table { caption, rows } => self.emit_table(caption.as_deref(), rows, indent),
                 Block::Opaque { kind, .. } if kind == "thematic_break" => self.emit_thematic_break(indent),
                 // An imported TeX picture environment carries no geometry
