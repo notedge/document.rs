@@ -535,6 +535,150 @@ fn docx_rejects_cyclic_or_missing_containment_before_rendering() {
     assert!(export_docx_bytes(&graph).is_err());
 }
 
+fn omml_fraction(source: &str) -> document_ir::MathFormula {
+    document_ir::MathFormula {
+        source: source.into(),
+        language: Some("latex".into()),
+        display: document_ir::MathDisplay::Display,
+        expression: document_ir::MathExpression::Fraction {
+            numerator: Box::new(document_ir::MathExpression::Number { text: "1".into(), span: None }),
+            denominator: Box::new(document_ir::MathExpression::Number { text: "2".into(), span: None }),
+            line: document_ir::MathFractionLine::Solid,
+        },
+    }
+}
+
+#[test]
+fn docx_export_lowers_math_to_omml_and_reads_it_back() {
+    let mut graph = DocumentGraph::new(DocumentId(60));
+    graph.push_block(Block::Math { formula: omml_fraction("\\frac{1}{2}") });
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::InlineMath {
+            formula: document_ir::MathFormula {
+                source: "x^2".into(),
+                language: Some("latex".into()),
+                display: document_ir::MathDisplay::Inline,
+                expression: document_ir::MathExpression::Script {
+                    base: Box::new(document_ir::MathExpression::Atom(document_ir::MathAtom {
+                        text: "x".into(),
+                        class: document_ir::MathClass::Identifier,
+                        span: None,
+                    })),
+                    superscript: Some(Box::new(document_ir::MathExpression::Number { text: "2".into(), span: None })),
+                    subscript: None,
+                },
+            },
+        }],
+    });
+    let exported = export_docx_bytes(&graph).expect("export math");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\""), "the math namespace is declared");
+    assert!(xml.contains("<m:oMathPara><m:oMath><m:f>"), "display math becomes an OMML fraction");
+    assert!(xml.contains("<m:sSup>"), "inline math keeps its superscript");
+    let reopened = import_docx_bytes("math-round.docx", &exported).expect("reopen math");
+    let display_sources: Vec<String> = reopened
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::Math { formula } => Some(formula.source.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(display_sources.iter().any(|source| source.contains("\\frac")), "{display_sources:?}");
+    let inline_source = reopened.blocks.iter().find_map(|node| match &node.block {
+        Block::Paragraph { content } => content.iter().find_map(|inline| match inline {
+            Inline::InlineMath { formula } => Some(formula.source.clone()),
+            _ => None,
+        }),
+        _ => None,
+    });
+    let inline_source = inline_source.expect("inline math survives the round trip");
+    assert!(inline_source.contains('x'), "{inline_source:?}");
+    assert!(inline_source.contains('2'), "{inline_source:?}");
+}
+
+#[test]
+fn docx_export_keeps_cases_environment_rows_as_a_matrix() {
+    let mut graph = DocumentGraph::new(DocumentId(61));
+    graph.push_block(Block::Math {
+        formula: document_ir::MathFormula {
+            source: "\\begin{cases} x \\\\ y \\end{cases}".into(),
+            language: Some("latex".into()),
+            display: document_ir::MathDisplay::Display,
+            expression: document_ir::MathExpression::Environment(document_ir::MathEnvironment {
+                kind: document_ir::MathEnvironmentKind::Cases,
+                name: "cases".into(),
+                starred: false,
+                rows: ["x", "y"]
+                    .into_iter()
+                    .map(|text| document_ir::MathRow {
+                        cells: vec![document_ir::MathExpression::Atom(document_ir::MathAtom {
+                            text: text.into(),
+                            class: document_ir::MathClass::Identifier,
+                            span: None,
+                        })],
+                        placement: document_ir::MathRowPlacement::Normal,
+                        numbering: document_ir::MathRowNumbering::None,
+                    })
+                    .collect(),
+                column_alignment: vec![document_ir::MathColumnAlignment::Left],
+                column_pairs: None,
+                span: None,
+            }),
+        },
+    });
+    let exported = export_docx_bytes(&graph).expect("export cases");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("<m:d><m:dPr><m:begChr m:val=\"{\"/>"), "cases keep the left brace");
+    assert!(xml.contains("<m:m><m:mr>"), "cases rows become an OMML matrix");
+}
+
+#[test]
+fn docx_export_keeps_unsupported_math_fragments_as_visible_text() {
+    let mut graph = DocumentGraph::new(DocumentId(62));
+    graph.push_block(Block::Math {
+        formula: document_ir::MathFormula {
+            source: "\\foo{bar}".into(),
+            language: Some("latex".into()),
+            display: document_ir::MathDisplay::Display,
+            expression: document_ir::MathExpression::Unsupported {
+                kind: "unknown-command".into(),
+                source: "\\foo{bar}".into(),
+                span: None,
+            },
+        },
+    });
+    let exported = export_docx_bytes(&graph).expect("export unsupported math");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("\\foo{bar}"), "the authored fragment stays readable: {xml}");
+}
+
+#[test]
+fn docx_export_marks_images_without_bytes_instead_of_failing() {
+    let mut graph = DocumentGraph::new(DocumentId(63));
+    graph.push_asset(Asset {
+        id: AssetId(2),
+        kind: AssetKind::Image,
+        content_identity: None,
+        source: Some("media/missing.png".into()),
+        media_type: None,
+        status: SemanticStatus::Unresolved,
+        bytes: None,
+    });
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Image {
+            source: "media/missing.png".into(),
+            alt: vec![Inline::Text { text: "Logo".into() }],
+            title: None,
+            asset: Some(AssetId(2)),
+        }],
+    });
+    let exported = export_docx_bytes(&graph).expect("an unmaterialized image must not fail the export");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("[image unavailable: Logo (media/missing.png)]"), "the gap stays visible: {xml}");
+    assert!(!xml.contains("r:embed="), "no image part is attached without bytes");
+}
+
 #[test]
 fn docx_rejects_lists_deeper_than_numbering_definitions() {
     let mut graph = DocumentGraph::new(DocumentId(53));

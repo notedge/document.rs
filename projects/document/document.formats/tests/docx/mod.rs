@@ -551,7 +551,7 @@ fn docx_import_reports_paragraph_and_section_layout_breaks() {
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:body>
     <w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:t>Before</w:t><w:lastRenderedPageBreak/><w:t>After</w:t></w:r></w:p>
-    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/><w:cols w:num="2"/></w:sectPr>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/><w:cols w:num="2"/><w:docGrid w:linePitch="312"/></w:sectPr>
   </w:body>
 </w:document>"#;
     let graph = import_docx_bytes("layout-breaks.docx", &docx_zip(document_xml)).expect("import layout breaks");

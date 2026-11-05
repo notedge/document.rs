@@ -2,7 +2,10 @@ use std::fmt::Write as _;
 
 use std::collections::HashSet;
 
-use document_ir::{AssetId, AssetKind, Block, BreakKind, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
+use document_ir::{
+    AssetId, AssetKind, Block, BreakKind, DocumentGraph, Inline, ListItem, MathDelimiter, MathDelimiterKind, MathEnvironment,
+    MathEnvironmentKind, MathExpression, MathFractionLine, MathSpace, NodeId, RelationEndpoint, TableRow,
+};
 
 use crate::FormatError;
 
@@ -16,6 +19,7 @@ const W_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main
 const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
 const WP_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+const M_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/math";
 
 /// Rendered WordprocessingML body and collected OPC relationships.
 pub struct DocxRenderOutput {
@@ -61,7 +65,7 @@ pub fn render_document_xml(graph: &DocumentGraph) -> Result<DocxRenderOutput, Fo
     Ok(DocxRenderOutput {
         document_xml: format!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="{W_NS}" xmlns:r="{R_NS}">
+<w:document xmlns:w="{W_NS}" xmlns:r="{R_NS}" xmlns:m="{M_NS}">
   <w:body>
     {body}
   </w:body>
@@ -138,8 +142,10 @@ fn write_block(
         Block::Table { rows, .. } => {
             write_table(out, rows, graph, rels)?;
         }
-        Block::Math { .. } => {
-            return Err(FormatError::unsupported("docx", "block type is not supported by the conservative DOCX exporter yet"));
+        Block::Math { formula } => {
+            out.push_str("<w:p><m:oMathPara><m:oMath>");
+            write_math_expression(out, &formula.expression)?;
+            out.push_str("</m:oMath></m:oMathPara></w:p>");
         }
         Block::Opaque { kind, .. } => {
             return Err(FormatError::unsupported(
@@ -378,7 +384,12 @@ fn write_inline_with_properties(
         Inline::InlineCode { text } => {
             write_run_with_properties(out, text, &format!("{properties}<w:rStyle w:val=\"VerbatimChar\"/>"))?;
         }
-        Inline::InlineMath { .. } | Inline::Reference { .. } => {
+        Inline::InlineMath { formula } => {
+            out.push_str("<m:oMath>");
+            write_math_expression(out, &formula.expression)?;
+            out.push_str("</m:oMath>");
+        }
+        Inline::Reference { .. } => {
             return Err(FormatError::unsupported("docx", "inline type is not supported by the conservative DOCX exporter yet"));
         }
         Inline::Link { target, display, title: _ } => {
@@ -397,11 +408,22 @@ fn write_inline_with_properties(
             out.push_str("</w:hyperlink>");
         }
         Inline::Image { source, alt, title: _, asset } => {
-            let bytes = image_bytes_for_inline(graph, source, *asset)?;
-            let extent = image_extent(&bytes)?;
-            let rel_id = rels.id_for_image(source, bytes);
             let alt = alt.iter().map(inline_plain_text).collect::<String>();
-            write_image_drawing(out, &rel_id, &alt, extent)?;
+            match image_bytes_for_inline(graph, source, *asset) {
+                Some(bytes) => {
+                    let extent = image_extent(&bytes)?;
+                    let rel_id = rels.id_for_image(source, bytes);
+                    write_image_drawing(out, &rel_id, &alt, extent)?;
+                }
+                None => {
+                    // A picture without materialized bytes cannot become a
+                    // package part. It stays visible as an explicit marker that
+                    // names the alternative text and the unresolved location, so
+                    // the reader sees the gap instead of the export failing.
+                    let label = if alt.trim().is_empty() { source.trim() } else { alt.trim() };
+                    write_run_text(out, &format!("[image unavailable: {label} ({source})]"))?;
+                }
+            }
         }
         Inline::Note { label, display: _ } => {
             let token = format!("[^{label}]");
@@ -429,6 +451,191 @@ fn write_inline_with_properties(
         }
     }
     Ok(())
+}
+
+/// Lower one semantic math expression to OMML.
+///
+/// The exporter renders the IR expression instead of re-parsing the authored
+/// source. Fragments the lowering marked as unsupported keep their authored
+/// text inside a math run, so the formula stays visible without inventing
+/// structure.
+fn write_math_expression(out: &mut String, expression: &MathExpression) -> Result<(), FormatError> {
+    match expression {
+        MathExpression::Sequence(items) => {
+            for item in items {
+                write_math_expression(out, item)?;
+            }
+        }
+        MathExpression::Atom(atom) => write_math_run(out, &atom.text)?,
+        MathExpression::Number { text, .. } => write_math_run(out, text)?,
+        MathExpression::Text { text, .. } => write_math_run(out, text)?,
+        MathExpression::Group { body } => write_math_expression(out, body)?,
+        MathExpression::Script { base, superscript, subscript } => match (superscript, subscript) {
+            (Some(superscript), Some(subscript)) => {
+                out.push_str("<m:sSubSup><m:e>");
+                write_math_expression(out, base)?;
+                out.push_str("</m:e><m:sub>");
+                write_math_expression(out, subscript)?;
+                out.push_str("</m:sub><m:sup>");
+                write_math_expression(out, superscript)?;
+                out.push_str("</m:sup></m:sSubSup>");
+            }
+            (Some(superscript), None) => {
+                out.push_str("<m:sSup><m:e>");
+                write_math_expression(out, base)?;
+                out.push_str("</m:e><m:sup>");
+                write_math_expression(out, superscript)?;
+                out.push_str("</m:sup></m:sSup>");
+            }
+            (None, Some(subscript)) => {
+                out.push_str("<m:sSub><m:e>");
+                write_math_expression(out, base)?;
+                out.push_str("</m:e><m:sub>");
+                write_math_expression(out, subscript)?;
+                out.push_str("</m:sub></m:sSub>");
+            }
+            (None, None) => write_math_expression(out, base)?,
+        },
+        MathExpression::Fraction { numerator, denominator, line } => {
+            out.push_str("<m:f>");
+            if *line == MathFractionLine::None {
+                out.push_str("<m:fPr><m:fType m:val=\"noBar\"/></m:fPr>");
+            }
+            out.push_str("<m:num>");
+            write_math_expression(out, numerator)?;
+            out.push_str("</m:num><m:den>");
+            write_math_expression(out, denominator)?;
+            out.push_str("</m:den></m:f>");
+        }
+        MathExpression::Radical { index, radicand, .. } => {
+            out.push_str("<m:rad>");
+            match index {
+                Some(index) => {
+                    out.push_str("<m:deg>");
+                    write_math_expression(out, index)?;
+                    out.push_str("</m:deg>");
+                }
+                None => out.push_str("<m:radPr><m:degHide m:val=\"1\"/></m:radPr><m:deg/>"),
+            }
+            out.push_str("<m:e>");
+            write_math_expression(out, radicand)?;
+            out.push_str("</m:e></m:rad>");
+        }
+        MathExpression::Delimited { open, close, body, middles } => {
+            out.push_str("<m:d><m:dPr><m:begChr m:val=\"");
+            write_xml_text(out, &delimiter_char(open.as_ref(), true))?;
+            out.push_str("\"/><m:endChr m:val=\"");
+            write_xml_text(out, &delimiter_char(close.as_ref(), false))?;
+            out.push_str("\"/></m:dPr><m:e>");
+            write_math_expression(out, body)?;
+            out.push_str("</m:e>");
+            for middle in middles {
+                out.push_str("<m:e>");
+                write_math_expression(out, middle)?;
+                out.push_str("</m:e>");
+            }
+            out.push_str("</m:d>");
+        }
+        MathExpression::Styled { body, .. } => write_math_expression(out, body)?,
+        MathExpression::Accent { mark, base, .. } => {
+            out.push_str("<m:acc><m:accPr><m:chr m:val=\"");
+            write_xml_text(out, &mark.to_string())?;
+            out.push_str("\"/></m:accPr><m:e>");
+            write_math_expression(out, base)?;
+            out.push_str("</m:e></m:acc>");
+        }
+        MathExpression::StackAbove { over, base } => {
+            out.push_str("<m:limUpp><m:e>");
+            write_math_expression(out, base)?;
+            out.push_str("</m:e><m:lim>");
+            write_math_expression(out, over)?;
+            out.push_str("</m:lim></m:limUpp>");
+        }
+        MathExpression::StackBelow { under, base } => {
+            out.push_str("<m:limLow><m:e>");
+            write_math_expression(out, base)?;
+            out.push_str("</m:e><m:lim>");
+            write_math_expression(out, under)?;
+            out.push_str("</m:lim></m:limLow>");
+        }
+        MathExpression::Relation(body) => write_math_expression(out, body)?,
+        MathExpression::Space { kind } => write_math_run(out, math_space_text(*kind))?,
+        MathExpression::StyleSwitch { .. } | MathExpression::LimitsPolicy { .. } => {}
+        MathExpression::Environment(environment) => write_math_environment(out, environment)?,
+        MathExpression::Unsupported { source, .. } => write_math_run(out, source)?,
+    }
+    Ok(())
+}
+
+fn write_math_run(out: &mut String, text: &str) -> Result<(), FormatError> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    out.push_str("<m:r><m:t");
+    if text.chars().any(char::is_whitespace) {
+        out.push_str(" xml:space=\"preserve\"");
+    }
+    out.push('>');
+    write_xml_text(out, text)?;
+    out.push_str("</m:t></m:r>");
+    Ok(())
+}
+
+fn math_space_text(kind: MathSpace) -> &'static str {
+    match kind {
+        MathSpace::Thin => "\u{2009}",
+        MathSpace::Medium => "\u{2005}",
+        MathSpace::Thick => "\u{2004}",
+        MathSpace::Interword => " ",
+        MathSpace::Quad => "\u{2003}",
+        MathSpace::DoubleQuad => "\u{2003}\u{2003}",
+        MathSpace::NegativeThin => "",
+    }
+}
+
+fn write_math_environment(out: &mut String, environment: &MathEnvironment) -> Result<(), FormatError> {
+    let cases = environment.kind == MathEnvironmentKind::Cases;
+    if cases {
+        out.push_str("<m:d><m:dPr><m:begChr m:val=\"{\"/><m:endChr m:val=\"\"/></m:dPr><m:e>");
+    }
+    out.push_str("<m:m>");
+    for row in &environment.rows {
+        out.push_str("<m:mr>");
+        for cell in &row.cells {
+            out.push_str("<m:e>");
+            write_math_expression(out, cell)?;
+            out.push_str("</m:e>");
+        }
+        out.push_str("</m:mr>");
+    }
+    out.push_str("</m:m>");
+    if cases {
+        out.push_str("</m:e></m:d>");
+    }
+    Ok(())
+}
+
+fn delimiter_char(delimiter: Option<&MathDelimiter>, open: bool) -> String {
+    let Some(delimiter) = delimiter
+    else {
+        return String::new();
+    };
+    if let Some(character) = delimiter.character {
+        if character != '.' {
+            return character.to_string();
+        }
+    }
+    match delimiter.kind {
+        MathDelimiterKind::None => String::new(),
+        MathDelimiterKind::Parenthesis => (if open { "(" } else { ")" }).to_string(),
+        MathDelimiterKind::Bracket => (if open { "[" } else { "]" }).to_string(),
+        MathDelimiterKind::Brace => (if open { "{" } else { "}" }).to_string(),
+        MathDelimiterKind::Angle => (if open { "⟨" } else { "⟩" }).to_string(),
+        MathDelimiterKind::VerticalBar => "|".to_string(),
+        MathDelimiterKind::DoubleVerticalBar => "‖".to_string(),
+        MathDelimiterKind::Slash => "/".to_string(),
+        MathDelimiterKind::Other => delimiter.character.map(|character| character.to_string()).unwrap_or_default(),
+    }
 }
 
 fn write_image_drawing(out: &mut String, rel_id: &str, alt: &str, extent: (u64, u64)) -> Result<(), FormatError> {
@@ -516,25 +723,22 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 ///
 /// A bound asset keeps its bytes when the storage location is renamed, so the
 /// identity has to win over the authored `source` string.
-fn image_bytes_for_inline(graph: &DocumentGraph, source: &str, asset: Option<AssetId>) -> Result<Vec<u8>, FormatError> {
+fn image_bytes_for_inline(graph: &DocumentGraph, source: &str, asset: Option<AssetId>) -> Option<Vec<u8>> {
     if let Some(bytes) = asset
         .and_then(|asset_id| graph.assets.iter().find(|candidate| candidate.id == asset_id))
         .and_then(|asset| asset.bytes.clone())
     {
-        return Ok(bytes);
+        return Some(bytes);
     }
     image_bytes_for_target(graph, source)
 }
 
-fn image_bytes_for_target(graph: &DocumentGraph, target: &str) -> Result<Vec<u8>, FormatError> {
+fn image_bytes_for_target(graph: &DocumentGraph, target: &str) -> Option<Vec<u8>> {
     graph
         .assets
         .iter()
         .find(|asset| asset.kind == AssetKind::Image && asset.source.as_deref() == Some(target))
         .and_then(|asset| asset.bytes.clone())
-        .ok_or_else(|| {
-            FormatError::unsupported("docx", format!("embedded image `{target}` has no materialized bytes for export"))
-        })
 }
 
 fn write_text_with_footnotes(out: &mut String, text: &str) -> Result<(), FormatError> {

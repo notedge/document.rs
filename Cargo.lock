@@ -601,6 +601,7 @@ dependencies = [
  "boost-log",
  "document-compose",
  "document-diagnostic",
+ "document-fonts",
  "document-formats",
  "document-ir",
  "document-layout",
