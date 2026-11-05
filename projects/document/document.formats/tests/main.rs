@@ -34,6 +34,83 @@ mod tex_export_smoke {
         let html = export_html(&graph).expect("html export");
         assert!(html.contains(r#"src="a.png""#), "{html}");
     }
+
+    #[test]
+    fn environment_wrapper_stays_out_of_the_math_payload() {
+        let graph =
+            import_tex_bytes("equation", "\\begin{equation}\nx = 1\n\\end{equation}\n").expect("tex import");
+        let html = export_html(&graph).expect("html export");
+        assert!(html.contains(r#"<div class="math" data-language="latex">x = 1</div>"#), "{html}");
+        assert!(!html.contains("\\begin{equation}"), "{html}");
+    }
+
+    #[test]
+    fn footnote_without_a_definition_is_not_a_link() {
+        let graph = import_tex_bytes("footnote", "a\\footnote{n}\n").expect("tex import");
+        let html = export_html(&graph).expect("html export");
+        assert!(html.contains(r#"<sup class="footnote-reference" data-footnote-label="1">n</sup>"#), "{html}");
+        assert!(!html.contains("href=\"#fn-1\""), "{html}");
+    }
+}
+
+/// Every local anchor a projection emits must resolve inside the same document.
+#[cfg(all(feature = "html", feature = "markdown", feature = "tex", feature = "typst"))]
+mod html_anchor_integrity {
+    use document_formats::{
+        export::html::export_html,
+        import::{markdown::import_markdown_bytes, tex::import_tex_bytes, typst::import_typst_bytes},
+    };
+
+    fn assert_local_anchors_resolve(label: &str, html: &str) {
+        let mut ids: Vec<&str> = Vec::new();
+        let mut rest = html;
+        while let Some(position) = rest.find("id=\"") {
+            let after = &rest[position + 4..];
+            let end = after.find('"').expect("unterminated id attribute");
+            ids.push(&after[..end]);
+            rest = &after[end..];
+        }
+        for (position, _) in html.match_indices("href=\"#") {
+            let after = &html[position + 7..];
+            let end = after.find('"').expect("unterminated href attribute");
+            let target = &after[..end];
+            assert!(ids.contains(&target), "{label}: `href=\"#{target}\"` has no matching `id` in {html}");
+        }
+    }
+
+    #[test]
+    fn projections_link_only_to_existing_anchors() {
+        // The HTML importer drops authored `id` attributes because the IR has
+        // no field for them, so an `html -> html` round trip can still keep an
+        // `href` whose target disappears. That gap is recorded separately and
+        // this guard covers the projections that mint their own anchors.
+        let cases: Vec<(&str, String)> = vec![
+            (
+                "markdown",
+                export_html(
+                    &import_markdown_bytes("anchor-markdown", "see [^n]\n\n[^n]: body\n")
+                        .expect("markdown import"),
+                )
+                .expect("html export"),
+            ),
+            (
+                "tex",
+                export_html(
+                    &import_tex_bytes("anchor-tex", "\\section{A}\\label{a}\nsee \\ref{a}\n")
+                        .expect("tex import"),
+                )
+                .expect("html export"),
+            ),
+            (
+                "typst",
+                export_html(&import_typst_bytes("anchor-typst", "= Title\n").expect("typst import"))
+                    .expect("html export"),
+            ),
+        ];
+        for (label, html) in cases {
+            assert_local_anchors_resolve(label, &html);
+        }
+    }
 }
 
 /// Constructs the HTML projection degrades or defers instead of failing.

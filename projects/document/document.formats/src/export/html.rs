@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Write as _};
+use std::{collections::{HashMap, HashSet}, fmt::Write as _};
 
 use document_ir::{Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
 
@@ -23,9 +23,30 @@ pub struct RenderedDiagram {
 #[derive(Default)]
 pub(crate) struct FootnoteRefIds {
     ids: HashMap<String, Vec<String>>,
+    defined: HashSet<String>,
 }
 
 impl FootnoteRefIds {
+    /// Collect the footnote labels that have a definition block, so a reference
+    /// only links when its target exists.
+    fn with_definitions(graph: &DocumentGraph) -> Self {
+        let defined = graph
+            .blocks
+            .iter()
+            .filter_map(|node| match &node.block {
+                Block::Opaque { kind, payload_hint, .. } if kind == "footnote_definition" => {
+                    split_footnote_definition(payload_hint).map(|(label, _)| label)
+                }
+                _ => None,
+            })
+            .collect();
+        Self { ids: HashMap::new(), defined }
+    }
+
+    fn is_defined(&self, label: &str) -> bool {
+        self.defined.contains(label)
+    }
+
     pub(crate) fn next(&mut self, label: &str) -> String {
         let ids = self.ids.entry(label.to_string()).or_default();
         let id = if ids.is_empty() { format!("fnref-{label}") } else { format!("fnref-{label}-{}", ids.len()) };
@@ -71,7 +92,7 @@ pub fn export_html_with_diagrams(
         out.push_str("</h1></header>");
     }
     let nested = nested_block_ids(graph);
-    let mut footnote_refs = FootnoteRefIds::default();
+    let mut footnote_refs = FootnoteRefIds::with_definitions(graph);
     let mut footnotes: Vec<&str> = Vec::new();
     for node in &graph.blocks {
         if nested.contains(&node.id) {
@@ -122,6 +143,30 @@ fn write_footnote_section(out: &mut String, definitions: &[&str], footnote_refs:
         out.push_str(r#"</li>"#);
     }
     out.push_str("</ol></section>");
+}
+
+/// The LaTeX body a front-end math renderer consumes.
+///
+/// [`MathFormula::source`](document_ir::MathFormula) keeps the authored text
+/// for round-trip, so an environment still carries `\begin{name}` and
+/// `\end{name}`. KaTeX renders the body rather than the environment wrapper,
+/// so the HTML projection strips the wrapper and keeps the inner text.
+fn math_payload(source: &str) -> &str {
+    let Some(rest) = source.strip_prefix("\\begin{")
+    else {
+        return source;
+    };
+    let Some(close) = rest.find('}')
+    else {
+        return source;
+    };
+    let name = &rest[..close];
+    let body = &rest[close + 1..];
+    let end = format!("\\end{{{name}}}");
+    match body.strip_suffix(&end) {
+        Some(inner) => inner.trim(),
+        None => source,
+    }
 }
 
 /// Split a GFM footnote definition payload (`[^label]: body`) into its label
@@ -264,7 +309,7 @@ fn write_block(
                 out.push('"');
             }
             out.push('>');
-            escape_text(out, &formula.source);
+            escape_text(out, math_payload(&formula.source));
             out.push_str("</div>");
         }
         Block::List { ordered, items } => write_list(out, graph, *ordered, items, diagrams, footnote_refs)?,
@@ -477,17 +522,30 @@ fn write_inlines(out: &mut String, inlines: &[Inline], footnote_refs: &mut Footn
             Inline::Note { label, display } => {
                 out.push_str(r#"<sup class="footnote-reference" data-footnote-label=""#);
                 escape_attribute(out, label);
-                out.push_str("\"><a id=\"");
-                escape_attribute(out, &footnote_refs.next(label));
                 out.push('"');
-                out.push_str(r##" href="#fn-"##);
-                escape_attribute(out, label);
-                out.push_str("\">");
-                match display {
-                    Some(display) => write_inlines(out, display, footnote_refs)?,
-                    None => escape_text(out, label),
+                if footnote_refs.is_defined(label) {
+                    out.push_str("><a id=\"");
+                    escape_attribute(out, &footnote_refs.next(label));
+                    out.push('"');
+                    out.push_str(r##" href="#fn-"##);
+                    escape_attribute(out, label);
+                    out.push_str("\">");
+                    match display {
+                        Some(display) => write_inlines(out, display, footnote_refs)?,
+                        None => escape_text(out, label),
+                    }
+                    out.push_str("</a></sup>");
                 }
-                out.push_str("</a></sup>");
+                else {
+                    // No definition block means no endnote target, so the
+                    // reference stays a plain marker instead of a dead link.
+                    out.push('>');
+                    match display {
+                        Some(display) => write_inlines(out, display, footnote_refs)?,
+                        None => escape_text(out, label),
+                    }
+                    out.push_str("</sup>");
+                }
             }
             Inline::Citation { key, display } => {
                 // A citation has no HTML form without a citation database, so
