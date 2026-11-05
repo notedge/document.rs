@@ -202,7 +202,7 @@
         {"construct": "shape identity, preset geometry, solid fill, line color and width, rotation in degrees", "sample": "roundRect rotated 8 degrees"},
         {"construct": "pictures carried as assets with media type and bytes", "sample": "PNG picture frame"},
         {"construct": "tables with grid column widths, row heights, merged cells and cell fills", "sample": "2x2 revenue table"},
-        {"construct": "chart presence with chart kind and series count", "sample": "barChart with 1 series"},
+        {"construct": "chart kind, series count and cached categories, series names and values", "sample": "barChart with 3 categories and 1 series cached 42, 31, 27"},
         {"construct": "speaker notes text", "sample": "notes on both slides"},
         {"construct": "fixed-canvas slide view at the authored slide size with per-shape deviations in points", "sample": "1280x720 px page per slide"}
       ],
@@ -212,6 +212,7 @@
         {"construct": "speaker notes", "code": "import.pptx.notes", "loss": "notes text is kept as plain paragraphs and loses its notes placeholder geometry", "span": "none"},
         {"construct": "hidden slide in the IR projection", "code": "import.pptx.hidden-slide", "loss": "hidden slides stay in the native model and are excluded from the graph", "span": "none"},
         {"construct": "table style identifier", "code": "import.pptx.table-style", "loss": "the style id is reported while cell fills are kept and banding is not applied", "span": "none"},
+        {"construct": "chart object", "code": "import.pptx.chart", "loss": "cached categories, series names and values are kept as text while the plot geometry and visual style are lost", "span": "none"},
         {"construct": "gradient, pattern or picture fill", "code": "import.pptx.fill-approximated", "loss": "an unsupported fill is approximated by its first solid color or dropped", "span": "none"},
         {"construct": "theme or scheme color", "code": "import.pptx.theme-color", "loss": "an unresolvable scheme slot keeps its raw value", "span": "none"},
         {"construct": "slide master and layout shapes", "code": "import.pptx.master-shape", "loss": "master decorative shapes are not projected onto slides", "span": "none"},
@@ -220,8 +221,7 @@
         {"construct": "font the canvas cannot resolve", "code": "render.pptx.font-substitution", "loss": "the substituted font keeps the authored size and the deviation is reported", "span": "none"}
       ],
       "refused": [
-        {"construct": "chart object", "code": "import.pptx.chart", "span": "none", "note": "chart metadata is read and the renderer paints an explicit refused frame"},
-        {"construct": "chart painted on the slide canvas", "code": "render.pptx.chart-placeholder", "span": "none"},
+        {"construct": "chart painted on the slide canvas", "code": "render.pptx.chart-placeholder", "span": "none", "note": "the canvas refuses to plot chart data itself, the host injects a positioned fragment or the refused placeholder stays"},
         {"construct": "SmartArt diagram", "code": "import.pptx.smartart", "span": "none"},
         {"construct": "embedded OLE object", "code": "import.pptx.ole-object", "span": "none"},
         {"construct": "audio or video media", "code": "import.pptx.media", "span": "none"},
