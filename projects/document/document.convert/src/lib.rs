@@ -19,12 +19,14 @@ use std::{fs, path::Path, sync::Arc};
 
 use document_diagnostic::diagnostics_from_graph;
 use document_fonts::BodyFaceSet;
-use document_formats::import::{
-    doc::import_doc_bytes, docx::import_docx_bytes, epub::import_epub_bytes, html::import_html_bytes, pdf::import_pdf_bytes,
-    pptx::import_pptx_graph_bytes, xlsx::import_xlsx_graph_bytes,
+use document_formats::{
+    FormatDirection, FormatStatus, capabilities,
+    import::{
+        doc::import_doc_bytes, docx::import_docx_bytes, epub::import_epub_bytes, html::import_html_bytes,
+        pdf::import_pdf_bytes, pptx::import_pptx_graph_bytes, xlsx::import_xlsx_graph_bytes,
+    },
 };
-use document_formats::{FormatDirection, FormatStatus, capabilities};
-use document_ir::DocumentGraph;
+use document_ir::{DocumentGraph, LossMarker, SemanticStatus};
 use document_types::{AdapterError, Result};
 use serde::Serialize;
 
@@ -513,7 +515,11 @@ fn read_source(from: &str, label: &str, bytes: Vec<u8>) -> Result<DocumentGraph>
     }
 }
 
-fn write_target(to: &str, graph: &mut DocumentGraph, body_set: Option<&Arc<BodyFaceSet>>) -> Result<(String, Option<String>, Option<Vec<u8>>)> {
+fn write_target(
+    to: &str,
+    graph: &mut DocumentGraph,
+    body_set: Option<&Arc<BodyFaceSet>>,
+) -> Result<(String, Option<String>, Option<Vec<u8>>)> {
     match to {
         "markdown" => {
             let markdown = write_document_markdown(graph)?;
@@ -524,9 +530,17 @@ fn write_target(to: &str, graph: &mut DocumentGraph, body_set: Option<&Arc<BodyF
             Ok((String::new(), None, Some(binary)))
         }
         "pdf" => {
-            let Some(body_set) = body_set else {
+            let Some(body_set) = body_set
+            else {
                 return format_error::fail(crate::writers::missing_body_faces());
             };
+            if graph.page_setup.is_some_and(|page| page.columns.is_some_and(|columns| columns > 1)) {
+                graph.push_loss(LossMarker {
+                    code: "export.docx.columns_unsupported".into(),
+                    message: "the document declares multiple columns but the PDF writer lays text out in one column".into(),
+                    status: SemanticStatus::Partial,
+                });
+            }
             let binary = write_document_pdf(graph, body_set)?;
             Ok((String::new(), None, Some(binary)))
         }

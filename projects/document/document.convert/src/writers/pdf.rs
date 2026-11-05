@@ -28,14 +28,43 @@ pub fn write_document_pdf(graph: &DocumentGraph, body_set: &Arc<BodyFaceSet>) ->
         report_scene_losses(&losses);
     }
     let metrics = BodyMetrics::from_set(body_set);
-    let (plan, layout_diagnostics) = document_layout::document::layout_with_metrics(graph, &LayoutHint::a4(), &diagrams, &metrics);
+    let hint = layout_hint(graph);
+    let (plan, layout_diagnostics) = document_layout::document::layout_with_metrics(graph, &hint, &diagrams, &metrics);
     report_compose_diagnostics(&layout_diagnostics);
     let presentation = build_display_presentation(&plan);
     let resources = pdf_resources(graph);
-    let outcome = render_pdf_with_resources_and_diagnostics(&presentation, &PdfFontPolicy::Provided(Arc::clone(body_set)), &resources)
-        .map_err(map_render_diagnostic)?;
+    let outcome =
+        render_pdf_with_resources_and_diagnostics(&presentation, &PdfFontPolicy::Provided(Arc::clone(body_set)), &resources)
+            .map_err(map_render_diagnostic)?;
     report_compose_diagnostics(&outcome.diagnostics);
     Ok(outcome.pdf)
+}
+
+/// Layout intent the graph declared, with A4 filling every gap.
+///
+/// Page box, margins, body size and line height are presentation facts the
+/// source declared, so a PDF written here keeps the source's geometry instead
+/// of resetting every document to A4 at 11 pt.
+fn layout_hint(graph: &DocumentGraph) -> LayoutHint {
+    let mut hint = LayoutHint::a4();
+    let Some(page) = graph.page_setup
+    else {
+        return hint;
+    };
+    hint = hint.with_page_size(page.page_width.unwrap_or(hint.page_width), page.page_height.unwrap_or(hint.page_height));
+    hint = hint.with_margin(document_layout::hint::Margin {
+        top: page.margin_top.unwrap_or(hint.margin.top),
+        right: page.margin_right.unwrap_or(hint.margin.right),
+        bottom: page.margin_bottom.unwrap_or(hint.margin.bottom),
+        left: page.margin_left.unwrap_or(hint.margin.left),
+    });
+    if let Some(size) = page.base_font_size {
+        hint.base_font_size = size;
+    }
+    if let Some(line_height) = page.line_height {
+        hint.line_height = line_height;
+    }
+    hint
 }
 
 /// Lower every host-owned diagram and chart block to the display scene the
