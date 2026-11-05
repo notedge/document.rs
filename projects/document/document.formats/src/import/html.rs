@@ -74,6 +74,8 @@ pub fn import_html_text(label: &str, text: &str) -> Result<DocumentGraph, Format
 
 /// Import HTML from a UTF-8 string with link candidates.
 pub fn import_html_with_links(label: &str, text: &str) -> Result<HtmlImport, FormatError> {
+    let normalized = crate::import::math_ml::normalize_self_closing_math_elements(text);
+    let text = normalized.as_ref();
     let source = SourceText::new(text);
     let builder = HtmlBuilder::new(HtmlLanguage::default());
     let mut session = ParseSession::<HtmlLanguage>::default();

@@ -5,10 +5,69 @@
 //! authored TeX, so the IR keeps one math representation. Constructs without a
 //! mapping keep their readable text and are reported by the caller.
 
+use std::borrow::Cow;
+
 use document_ir::{MathDisplay, MathFormula};
 use oak_html::ast::{Element, HtmlNode};
 
 use super::math_latex::{delimiter_spelling, escape_text, formula_from_latex, latex_operator};
+
+/// Rewrite self-closing empty MathML elements into void HTML placeholders.
+///
+/// `oak-html` applies HTML tree construction rules, where a trailing slash on a
+/// non-void element is ignored. `<mspace/>` therefore stays open and swallows
+/// the rest of the document as its children. The placeholders below are void
+/// HTML elements, so the following siblings keep their real nesting. Their
+/// spellings are padded with spaces to preserve every byte offset, which keeps
+/// the source spans pointing at the original text.
+pub(crate) fn normalize_self_closing_math_elements(text: &str) -> Cow<'_, str> {
+    let bytes = text.as_bytes();
+    let mut replacement: Option<String> = None;
+    let mut copied = 0usize;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] != b'<' {
+            index += 1;
+            continue;
+        }
+        let name_start = index + 1;
+        let mut name_end = name_start;
+        while name_end < bytes.len() && (bytes[name_end].is_ascii_alphanumeric() || bytes[name_end] == b'-' || bytes[name_end] == b':') {
+            name_end += 1;
+        }
+        let name = text[name_start..name_end].to_ascii_lowercase();
+        let placeholder = match name.as_str() {
+            "mspace" => "<br/>",
+            "none" | "mprescripts" | "malignmark" => "<wbr/>",
+            _ => {
+                index += 1;
+                continue;
+            }
+        };
+        let Some(offset) = text[name_end..].find('>') else {
+            break;
+        };
+        let tag_end = name_end + offset + 1;
+        if !text[name_end..tag_end - 1].trim_end().ends_with('/') {
+            index += 1;
+            continue;
+        }
+        let owned = replacement.get_or_insert_with(|| String::with_capacity(text.len()));
+        owned.push_str(&text[copied..index]);
+        let length = tag_end - index;
+        owned.push_str(placeholder);
+        owned.push_str(&" ".repeat(length.saturating_sub(placeholder.len())));
+        copied = tag_end;
+        index = tag_end;
+    }
+    match replacement {
+        Some(mut owned) => {
+            owned.push_str(&text[copied..]);
+            Cow::Owned(owned)
+        }
+        None => Cow::Borrowed(text),
+    }
+}
 
 /// Lower one `<math>` element into the document math representation.
 ///
@@ -91,7 +150,7 @@ impl Builder {
             "math" | "mrow" | "mstyle" | "mphantom" | "menclose" | "mbox" | "mstack" | "msgroup" | "mfrac"
             | "msup" | "msub" | "msubsup" | "msqrt" | "mroot" | "mfenced" | "mtable" | "mtr" | "mtd" | "mover"
             | "munder" | "munderover" | "mspace" | "mtext" | "mi" | "mn" | "mo" | "semantics" | "none" | "mpadded"
-            | "merror" => self.lower_supported(tag.as_str(), element),
+            | "merror" | "br" | "wbr" => self.lower_supported(tag.as_str(), element),
             other => self.lower_unknown(other, element),
         }
     }
@@ -126,14 +185,10 @@ impl Builder {
             "mtext" => {
                 self.out.push_str(&format!("\\text{{{}}}", escape_text(element_text(element).trim())));
             }
-            "mspace" => {
-                // `oak-html` does not honour foreign-content self-closing tags,
-                // so the tail of `<mrow>` arrives as children of `<mspace/>`.
-                // MathML `mspace` is empty by definition, which makes lowering
-                // those children safe and keeps the rest of the formula.
-                self.out.push_str("\\quad ");
-                self.lower_children(element);
-            }
+            "mspace" => self.out.push_str("\\quad "),
+            // Placeholders produced by `normalize_self_closing_math_elements`.
+            "br" => self.out.push_str("\\quad "),
+            "wbr" => {},
             "mfrac" => {
                 let (numerator, denominator) = first_two_children(element);
                 self.out.push_str("\\frac{");

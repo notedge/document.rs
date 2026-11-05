@@ -6,6 +6,7 @@
 
 #![cfg(any(feature = "docx", feature = "html", feature = "epub"))]
 
+#[cfg(feature = "docx")]
 use std::collections::HashMap;
 
 use document_ir::{Block, DocumentGraph, Inline, MathDisplay, MathExpression, SemanticStatus};
@@ -187,7 +188,7 @@ mod html_mathml {
 
     #[test]
     fn compound_mathml_formula_keeps_the_integral_and_fraction() {
-        let source = r#"<p><math display="block"><mrow><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup><mo>,</mo><mspace width="1em"/><msubsup><mo>∫</mo><mn>0</mn><mn>1</mn></msubsup><msup><mi>x</mi><mn>2</mn></msup><mi>dx</mi><mo>=</mo><mfrac><mn>1</mn><mn>3</mn></mfrac></mrow></math></p>"#;
+        let source = r#"<p><math display="block"><mrow><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup><mo>,</mo><mspace width="1em"/><msubsup><mo>∫</mo><mn>0</mn><mn>1</mn></msubsup><msup><mi>x</mi><mn>2</mn></msup><mi>dx</mi><mo>=</mo><mfrac><mn>1</mn><mn>3</mn></mfrac></mrow></math></p><p>tail survives</p>"#;
         let graph = import(source);
         let formulas = all_inline_math(&graph);
         assert_eq!(formulas.len(), 1, "{:?}", formulas.iter().map(|formula| &formula.source).collect::<Vec<_>>());
@@ -197,6 +198,11 @@ mod html_mathml {
         assert!(formula_source.contains("\\frac{1}{3}"), "{formula_source}");
         assert!(formula_source.contains("dx"), "{formula_source}");
         assert!(contains_expression(&formulas[0].expression, &|expression| matches!(expression, MathExpression::Fraction { .. })), "{formula_source}");
+        let tail = graph.blocks.iter().any(|node| match &node.block {
+            Block::Paragraph { content } => content.iter().any(|inline| matches!(inline, Inline::Text { text } if text.contains("tail survives"))),
+            _ => false,
+        });
+        assert!(tail, "content after the formula must stay in the document");
         assert!(!has_loss(&graph, "import.html.math_unsupported"), "{:?}", graph.coverage.loss);
     }
 
