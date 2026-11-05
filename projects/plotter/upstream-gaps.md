@@ -45,6 +45,8 @@
 | 输入 | 决策 | 理由 |
 |---|---|---|
 | TikZ 的 PGFPlots `\begin{axis}` | 不接 | 坐标轴、刻度、图例与数据映射属于 `plotter.chart`，接进来会形成两套图表模型 |
+| TikZ 的 `\draw[->]` / `[<-]` 箭头选项 | 拒于选项解析（`davinci.diagram.unsupported`） | 箭头端点由图表边样式持有，TikZ 前端尚无选项到 `EdgeStyle` 的映射 |
+| TikZ node 的 `circle` / `ellipse` / `rounded corners` 等形状选项 | 拒于选项解析（`davinci.diagram.unsupported`） | TikZ node 固定按标签矩形绘制，形状键没有到 `NodeShape` 的映射 |
 | TikZ 的宿主注入（宏展开、外部图片、`\input`） | 不接 | 属宿主与排版层的职责，不是输入适配器的降级范围 |
 | `oak-mermaid` 的 `gantt` / `pie` / `journey` 等 | 不接 | 时间轴与占比是 `plotter.chart` 的领域，不走图元降级 |
 | `oak-plantuml` 的 `note` / `loop` / `alt` / `else` 等注释与组合片段 | 不接 | 需要场景层的浮层注释与组合框语义，`DiagramSpec` 无对应模型 |
