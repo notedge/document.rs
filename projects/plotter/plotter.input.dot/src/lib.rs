@@ -508,13 +508,17 @@ fn check_style(
                 return Err(unsupported_at("`rounded` applies to node outlines and is outside the edge subset", span));
             }
             "dashed" | "dotted" => {
-                diagnostics.push(approximated_at(
-                    format!("style `{token}` has no dash attribute on the scene surface and is drawn solid"),
-                    span.clone(),
-                ));
+                if target == StyleTarget::Node {
+                    diagnostics.push(approximated_at(
+                        format!("node outline style `{token}` has no dash surface and is drawn solid"),
+                        span.clone(),
+                    ));
+                }
             }
             "bold" => {
-                diagnostics.push(approximated_at("style `bold` is not applied as a stroke weight", span.clone()));
+                if target == StyleTarget::Node {
+                    diagnostics.push(approximated_at("node outline style `bold` is not applied as a stroke weight", span.clone()));
+                }
             }
             "filled" => {
                 diagnostics.push(approximated_at(
@@ -717,13 +721,21 @@ fn lower_edge(
 fn node_shape(value: &str, span: Range<usize>, diagnostics: &mut Vec<Diagnostic>) -> Result<NodeShape, DiagramError> {
     let value = value.trim().to_ascii_lowercase();
     match value.as_str() {
-        "box" | "rect" | "rectangle" | "square" | "plaintext" => Ok(NodeShape::Box),
+        "box" | "rect" | "rectangle" | "square" => Ok(NodeShape::Box),
+        "plaintext" => Ok(NodeShape::Plaintext),
         "diamond" => Ok(NodeShape::Rhombus),
         "circle" => Ok(NodeShape::Circle),
-        "ellipse" | "oval" => {
-            diagnostics.push(approximated_at("`ellipse` is approximated by a rounded rectangle", span));
-            Ok(NodeShape::Round)
-        }
+        "doublecircle" => Ok(NodeShape::DoubleCircle),
+        "ellipse" | "oval" => Ok(NodeShape::Ellipse),
+        "cylinder" => Ok(NodeShape::Cylinder),
+        "note" => Ok(NodeShape::Note),
+        "point" => Ok(NodeShape::Point),
+        "triangle" => Ok(NodeShape::Triangle),
+        "hexagon" => Ok(NodeShape::Hexagon),
+        "parallelogram" => Ok(NodeShape::Parallelogram),
+        "trapezium" => Ok(NodeShape::Trapezium),
+        "star" => Ok(NodeShape::Star),
+        "component" => Ok(NodeShape::Component),
         "record" | "mrecord" => Err(unsupported_at("record shapes carry field ports that the DOT subset rejects", span)),
         other => {
             diagnostics.push(approximated_at(format!("shape `{other}` is approximated by a box"), span));
@@ -733,25 +745,38 @@ fn node_shape(value: &str, span: Range<usize>, diagnostics: &mut Vec<Diagnostic>
 }
 
 fn style_for(value: &str, fallback: EdgeStyle) -> EdgeStyle {
-    let mut style = fallback;
+    let arrow = matches!(
+        fallback,
+        EdgeStyle::Arrow
+            | EdgeStyle::DottedArrow
+            | EdgeStyle::DashedArrow
+            | EdgeStyle::ThickArrow
+            | EdgeStyle::BoldArrow
+            | EdgeStyle::HollowArrow
+    );
+    let mut dashed = false;
+    let mut dotted = false;
+    let mut bold = false;
     for token in value.split(',') {
         match token.trim() {
-            "dashed" | "dotted" => {
-                style = match style {
-                    EdgeStyle::Arrow | EdgeStyle::ThickArrow | EdgeStyle::HollowArrow => EdgeStyle::DottedArrow,
-                    _ => EdgeStyle::DottedLine,
-                }
-            }
-            "bold" => {
-                style = match style {
-                    EdgeStyle::Arrow | EdgeStyle::DottedArrow => EdgeStyle::ThickArrow,
-                    other => other,
-                }
-            }
+            "dashed" => dashed = true,
+            "dotted" => dotted = true,
+            "bold" => bold = true,
             _ => {}
         }
     }
-    style
+    if bold {
+        if arrow { EdgeStyle::BoldArrow } else { EdgeStyle::BoldLine }
+    }
+    else if dotted {
+        if arrow { EdgeStyle::DottedArrow } else { EdgeStyle::DottedLine }
+    }
+    else if dashed {
+        if arrow { EdgeStyle::DashedArrow } else { EdgeStyle::DashedLine }
+    }
+    else {
+        fallback
+    }
 }
 
 /// Resolve one edge operand into a node endpoint.

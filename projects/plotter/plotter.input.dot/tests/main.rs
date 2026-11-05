@@ -4,7 +4,7 @@ use std::ops::Range;
 
 use plotter_diagram::{
     DiagramError,
-    spec::{DiagramNode, NodeShape},
+    spec::{DiagramNode, EdgeStyle, NodeShape},
 };
 use plotter_input_dot::dot_to_spec;
 use plotter_types::codes;
@@ -37,4 +37,55 @@ fn html_labels_are_rejected_with_the_attribute_span() {
     let error = dot_to_spec(source).expect_err("HTML labels are outside the subset");
     assert_eq!(error.code(), codes::UNSUPPORTED);
     assert!(span_of(source, &error).contains("<b>x</b>"));
+}
+
+#[test]
+fn graphviz_shapes_lower_to_native_variants() {
+    let source = r#"digraph G {
+  a [shape=box]; b [shape=circle]; c [shape=diamond]; d [shape=cylinder];
+  e [shape=note]; f [shape=plaintext]; g [shape=point]; h [shape=triangle];
+  i [shape=hexagon]; j [shape=parallelogram]; k [shape=trapezium]; l [shape=star];
+  m [shape=ellipse]; n [shape=doublecircle]; o [shape=component];
+}"#;
+    let spec = dot_to_spec(source).expect("every listed shape is native");
+
+    let shapes: Vec<NodeShape> = spec.nodes.iter().map(|node| node.shape).collect();
+    assert_eq!(
+        shapes,
+        vec![
+            NodeShape::Box,
+            NodeShape::Circle,
+            NodeShape::Rhombus,
+            NodeShape::Cylinder,
+            NodeShape::Note,
+            NodeShape::Plaintext,
+            NodeShape::Point,
+            NodeShape::Triangle,
+            NodeShape::Hexagon,
+            NodeShape::Parallelogram,
+            NodeShape::Trapezium,
+            NodeShape::Star,
+            NodeShape::Ellipse,
+            NodeShape::DoubleCircle,
+            NodeShape::Component,
+        ]
+    );
+}
+
+#[test]
+fn dashed_dotted_and_bold_edges_lower_without_approximation() {
+    let source = r#"digraph G {
+  a -> b [style=dashed];
+  b -> c [style=dotted];
+  c -> d [style=bold];
+}"#;
+    let lowered = plotter_input_dot::dot_to_scene(source).expect("the styles are part of the contract");
+
+    let styles: Vec<EdgeStyle> = lowered.plan.edges.iter().map(|edge| edge.style).collect();
+    assert_eq!(styles, vec![EdgeStyle::DashedArrow, EdgeStyle::DottedArrow, EdgeStyle::BoldArrow]);
+    assert!(
+        lowered.diagnostics.iter().all(|record| record.code().as_str() != codes::APPROXIMATED),
+        "dash and bold styles must not be approximated: {:?}",
+        lowered.diagnostics
+    );
 }
