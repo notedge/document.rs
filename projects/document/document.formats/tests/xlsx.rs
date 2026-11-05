@@ -129,7 +129,9 @@ fn render_emits_paginated_pages_and_evidence_html() {
     assert!(render.issues.iter().any(|issue| issue.code == "render.xlsx.frozen-repeated"));
     assert!(render.issues.iter().all(|issue| !issue.code.is_empty()));
 
-    let evidence = std::env::var("CARGO_TARGET_TMPDIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    let evidence = std::env::var("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("document-rs-evidence"));
     let output = evidence.join("office-evidence/xlsx/multi-sheet.html");
     fs::create_dir_all(output.parent().unwrap()).expect("evidence dir");
     fs::write(&output, &render.html).expect("evidence html");

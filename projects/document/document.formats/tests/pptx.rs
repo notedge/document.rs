@@ -237,8 +237,9 @@ fn render_paints_every_slide_and_writes_evidence_html() {
     assert!(render.issues.iter().all(|issue| !issue.code.is_empty()));
     assert!(!render.views[0].deviations.is_empty());
 
-    let evidence =
-        std::env::var("CARGO_TARGET_TMPDIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    let evidence = std::env::var("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("document-rs-evidence"));
     let directory = evidence.join("office-evidence/pptx");
     fs::create_dir_all(&directory).expect("evidence dir");
     fs::write(directory.join("generated-layouts-and-chart.pptx"), sample_package()).expect("sample pptx");
