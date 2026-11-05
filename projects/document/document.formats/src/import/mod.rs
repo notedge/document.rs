@@ -2,6 +2,9 @@
 
 mod common;
 
+#[cfg(any(feature = "xlsx", feature = "pptx"))]
+mod office;
+
 pub use common::register_image_assets;
 
 /// Legacy Word `.doc` import.
@@ -37,3 +40,6 @@ pub use tex_math::lower_tex_formula_source;
 /// Typst import via `oak-typst`.
 #[cfg(feature = "typst")]
 pub mod typst;
+/// SpreadsheetML XLSX import, IR projection and sheet grid view.
+#[cfg(feature = "xlsx")]
+pub mod xlsx;

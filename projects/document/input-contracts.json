@@ -9,6 +9,7 @@
       "规划设计/vutex/19-Typst输入适配合同.md"
     ],
     "codes": "the loss codes recorded by document.formats import lowering plus the adapter constants",
+    "office": "xlsx and pptx keep a format-native read model next to the IR projection because geometry, styles and anchors have no IR carrier, their codes are the constants in src/import/xlsx/model.rs and src/import/pptx/model.rs",
     "downstream": "the same profile / supported / approximated / refused shape as projects/plotter/input-contracts.json",
     "audit": "each acceptance item of 19 / 20 / 21 was mapped to a named test in the adapter readme, the construct tables were checked against the lowering branches, and every claimed supported construct is re-imported and re-rendered from its sample by tests/contracts/mod.rs in each adapter"
   },
@@ -146,6 +147,50 @@
         {"construct": "source above 8 MiB", "code": "vutex.input.typst.source_too_large", "span": "none"},
         {"construct": "source the parser refuses", "code": "vutex.input.typst.import_failed", "span": "none"}
       ]
+    },
+    {
+      "language": "xlsx",
+      "entry": ["import_workbook", "project_graph", "render_sheet_grid"],
+      "supported": [
+        {"construct": "workbook sheet list with visible, hidden and very hidden states", "sample": "3 sheets, one hidden"},
+        {"construct": "cell values: number, shared string, inline string, boolean, error and empty", "sample": "A1:F14"},
+        {"construct": "date and time serials under the 1900 and 1904 date systems with their number format", "sample": "F4 2026-01-15"},
+        {"construct": "formula source with its cached result value", "sample": "E4 = B4+C4+D4 cached 3970.75"},
+        {"construct": "merged cell ranges, column widths, row heights and hidden rows or columns", "sample": "A1:F1 merge, column A width 18"},
+        {"construct": "cell styles: bold, italic, font size, font color, fill, number format, alignment and borders", "sample": "header row 3"},
+        {"construct": "cell comments with author and text", "sample": "B4 note"},
+        {"construct": "anchored worksheet images carried as assets", "sample": "G2 PNG"},
+        {"construct": "frozen panes repeated on every paginated page", "sample": "freeze at B4"},
+        {"construct": "A4 grid view with page labels, repeated frozen rows and columns and an explicit cell budget", "sample": "Data sheet pages 1..n"}
+      ],
+      "approximated": [
+        {"construct": "number format display", "code": "import.xlsx.number-format", "loss": "the formatted text is approximated when literal tokens cannot be placed around the digits", "span": "none"},
+        {"construct": "theme or indexed color", "code": "import.xlsx.theme-color", "loss": "an unresolvable theme slot keeps its raw value", "span": "none"},
+        {"construct": "hidden sheet in the IR projection", "code": "import.xlsx.hidden-sheet", "loss": "hidden sheets stay in the native model and are excluded from the graph", "span": "none"},
+        {"construct": "hidden row or column", "code": "import.xlsx.hidden-row-column", "loss": "hidden rows and columns become ordinary table rows and cells", "span": "none"},
+        {"construct": "comment anchor", "code": "import.xlsx.comment-anchor", "loss": "comments are projected as paragraphs without their cell reference", "span": "none"},
+        {"construct": "image anchor", "code": "import.xlsx.image-anchor", "loss": "images are projected after the sheet table because IR has no cell anchor", "span": "none"},
+        {"construct": "shared formula child", "code": "import.xlsx.shared-formula", "loss": "a child cell keeps the cached value only when its master source cannot be resolved", "span": "none"},
+        {"construct": "array formula", "code": "import.xlsx.array-formula", "loss": "the array range is carried as the authored source only", "span": "none"},
+        {"construct": "defined name", "code": "import.xlsx.defined-name", "loss": "defined names are kept as text and never expanded into cells", "span": "none"},
+        {"construct": "cell budget", "code": "render.xlsx.cell-budget", "loss": "a sheet above the cell budget is split across extra pages", "span": "none"},
+        {"construct": "column wider than the page", "code": "render.xlsx.column-clamped", "loss": "the column is clamped to the printable width", "span": "none"},
+        {"construct": "row taller than the page", "code": "render.xlsx.row-clamped", "loss": "the row is clamped to the printable height", "span": "none"},
+        {"construct": "merge crossing a page boundary", "code": "render.xlsx.merge-split", "loss": "the merge is clipped at the page edge and the remainder is not repeated", "span": "none"},
+        {"construct": "frozen pane on a paginated sheet", "code": "render.xlsx.frozen-repeated", "loss": "frozen rows and columns are repeated on every page instead of pinned on one", "span": "none"}
+      ],
+      "refused": [
+        {"construct": "worksheet chart", "code": "import.xlsx.chart", "span": "none", "note": "the chart XML is detected and reported per sheet, never rendered as a grid"},
+        {"construct": "graphic frame without a supported anchor", "code": "import.xlsx.drawing.unsupported", "span": "none"},
+        {"construct": "conditional formatting", "code": "import.xlsx.conditional-formatting", "span": "none"},
+        {"construct": "data validation", "code": "import.xlsx.data-validation", "span": "none"},
+        {"construct": "worksheet table object", "code": "import.xlsx.table", "span": "none", "note": "table parts and autofilter are reported, the cells keep the authored values"},
+        {"construct": "pivot table", "code": "import.xlsx.pivot", "span": "none"},
+        {"construct": "macro sheet or VBA project", "code": "import.xlsx.macro", "span": "none"},
+        {"construct": "embedded OLE object", "code": "import.xlsx.embedded-object", "span": "none"},
+        {"construct": "shared string index outside the table", "code": "import.xlsx.shared-string", "span": "none"},
+        {"construct": "cell style index outside the style table", "code": "import.xlsx.style-index", "span": "none"}
+      ]
     }
   ],
   "specs": [
@@ -158,7 +203,8 @@
     {"id": "input-typst-minimal", "language": "typst", "classification": "accept", "source": "= Title\n\nBody.\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
     {"id": "input-typst-math", "language": "typst", "classification": "accept", "source": "Inline $a^2$ stays.\n\n$ x + y $\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
     {"id": "input-typst-dynamic", "language": "typst", "classification": "accept", "source": "Before\n\n#figure(\n  rect(width: 2cm),\n  caption: [A box],\n)\n\nAfter\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
-    {"id": "input-typst-link", "language": "typst", "classification": "accept", "source": "See #link(\"https://example.org\")[docs] and #link(\"https://example.org/raw\").\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}}
+    {"id": "input-typst-link", "language": "typst", "classification": "accept", "source": "See #link(\"https://example.org\")[docs] and #link(\"https://example.org/raw\").\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
+    {"id": "input-xlsx-multi-sheet", "language": "xlsx", "classification": "accept", "fixture": "document.formats/tests/fixtures/xlsx/multi-sheet.xlsx", "expect": {"import": "graph", "render": "html", "sheets": 3, "visibleSheets": 2, "deterministic": true}}
   ],
   "rejections": [
     {"id": "input-markdown-front-matter", "language": "markdown", "source": "---\ntitle: ignored\n---\n\nBody\n", "code": "vutex.input.markdown.opaque_block", "severity": "error", "spanText": "---\ntitle: ignored\n---"},

@@ -3,6 +3,8 @@
 mod capability;
 mod markdown_loss_span;
 mod markdown_math_ir;
+#[cfg(feature = "xlsx")]
+mod xlsx;
 
 /// Cross-reference and verbatim constructs that used to fail or drift.
 #[cfg(all(feature = "html", feature = "tex"))]

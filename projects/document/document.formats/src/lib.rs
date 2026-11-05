@@ -86,6 +86,20 @@ pub fn capabilities() -> Vec<FormatCapability> {
         capabilities.push(FormatCapability { id: "epub", direction: FormatDirection::Import, status: FormatStatus::Partial });
         capabilities.push(FormatCapability { id: "epub", direction: FormatDirection::Export, status: FormatStatus::Partial });
     }
+    #[cfg(feature = "xlsx")]
+    {
+        // The SpreadsheetML reader resolves the workbook, sheets, cells,
+        // styles, merges, comments and images. Charts, conditional
+        // formatting, data validation, tables, pivots and embedded objects
+        // stay refused with structured codes, so the import is partial.
+        capabilities.push(FormatCapability { id: "xlsx", direction: FormatDirection::Import, status: FormatStatus::Partial });
+        // No SpreadsheetML writer exists, so the export direction is opt-out.
+        capabilities.push(FormatCapability {
+            id: "xlsx",
+            direction: FormatDirection::Export,
+            status: FormatStatus::Unavailable,
+        });
+    }
     #[cfg(feature = "tex")]
     capabilities.push(FormatCapability { id: "tex", direction: FormatDirection::Import, status: FormatStatus::Partial });
     #[cfg(feature = "typst")]
