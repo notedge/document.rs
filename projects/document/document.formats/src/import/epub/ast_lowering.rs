@@ -101,20 +101,22 @@ fn lower_semantic_block(
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
             let level = tag[1..].parse::<u8>().unwrap_or(1);
             let plain = descendant_text(element);
-            let title = if plain.is_empty() {
+            let mut title = if plain.is_empty() {
                 collect_inlines_from_element(element, graph, member_path, losses)
             }
             else {
                 vec![Inline::Text { text: plain }]
             };
+            trim_inline_edges(&mut title);
             Some(Block::Section { level, title, children: Vec::new() })
         }
         "p" => {
-            let content =
+            let mut content =
                 non_empty_inlines(collect_inlines_from_element(element, graph, member_path, losses)).or_else(|| {
                     let plain = descendant_text(element);
                     if plain.is_empty() { None } else { Some(vec![Inline::Text { text: plain }]) }
                 })?;
+            trim_inline_edges(&mut content);
             Some(Block::Paragraph { content })
         }
         "figcaption" => lower_figcaption_block(element, graph, member_path, losses),
@@ -209,6 +211,21 @@ fn non_empty_inlines(inlines: Vec<Inline>) -> Option<Vec<Inline>> {
     if inlines.is_empty() { None } else { Some(inlines) }
 }
 
+/// Trim whitespace that only separates a block from its surrounding markup.
+///
+/// `normalize_whitespace` keeps edge spaces so inline runs stay readable across
+/// element boundaries. A block trims the outer edges after its inline run is
+/// complete, so authored indentation never reaches the IR.
+fn trim_inline_edges(inlines: &mut Vec<Inline>) {
+    if let Some(Inline::Text { text }) = inlines.first_mut() {
+        *text = text.trim_start().to_string();
+    }
+    if let Some(Inline::Text { text }) = inlines.last_mut() {
+        *text = text.trim_end().to_string();
+    }
+    inlines.retain(|inline| !matches!(inline, Inline::Text { text } if text.is_empty()));
+}
+
 /// Whether an `<aside>` declares the EPUB structural footnote marker.
 fn is_footnote_aside(element: &Element) -> bool {
     attribute_value(element, "epub:type")
@@ -237,12 +254,49 @@ fn lower_footnote_definition(element: &Element, losses: &mut Vec<LossMarker>) ->
         });
         return None;
     };
-    let body = descendant_text(element);
+    let body = footnote_body_text(element);
     Some(Block::Opaque {
         kind: "footnote_definition".into(),
         payload_hint: format!("[^{label}]: {body}"),
         status: SemanticStatus::Resolved,
     })
+}
+
+/// Text authored inside a footnote definition without its return link.
+fn footnote_body_text(element: &Element) -> String {
+    let mut text = String::new();
+    collect_footnote_body(element, &mut text);
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn collect_footnote_body(element: &Element, out: &mut String) {
+    for child in &element.children {
+        match child {
+            HtmlNode::Text(text) => out.push_str(&text.content),
+            HtmlNode::Element(child) if is_footnote_backlink(child) => {}
+            HtmlNode::Element(child) => collect_footnote_body(child, out),
+            HtmlNode::Comment(_) => {}
+        }
+    }
+}
+
+/// Whether an anchor inside a footnote definition returns to the reference.
+///
+/// EPUB authors commonly close the aside with `<a href="#fnref1">↩</a>`. The
+/// return target and the short glyph or `return` copy are presentation, not
+/// definition body, so both are stripped from the opaque payload.
+fn is_footnote_backlink(element: &Element) -> bool {
+    if !element_is(element, "a") {
+        return false;
+    }
+    let returns_to_reference = attribute_value(element, "href").is_some_and(|href| {
+        href.trim().strip_prefix('#').is_some_and(|fragment| fragment.trim().to_ascii_lowercase().starts_with("fnref"))
+    });
+    if returns_to_reference {
+        return true;
+    }
+    let text = descendant_text(element).to_ascii_lowercase();
+    matches!(text.as_str(), "↩" | "↩︎" | "⟲" | "return" | "return to text" | "back to text")
 }
 
 /// Whether an anchor declares an EPUB footnote reference marker.
@@ -289,10 +343,11 @@ fn lower_figcaption_block(
     member_path: Option<&str>,
     losses: &mut Vec<LossMarker>,
 ) -> Option<Block> {
-    let content = non_empty_inlines(collect_inlines_from_element(element, graph, member_path, losses)).or_else(|| {
+    let mut content = non_empty_inlines(collect_inlines_from_element(element, graph, member_path, losses)).or_else(|| {
         let plain = descendant_text(element);
         if plain.is_empty() { None } else { Some(vec![Inline::Text { text: plain }]) }
     })?;
+    trim_inline_edges(&mut content);
     Some(Block::Paragraph { content: vec![Inline::Styled { style: "figcaption".into(), children: content }] })
 }
 
@@ -404,6 +459,7 @@ fn lower_list_item(
             HtmlNode::Comment(_) => {}
         }
     }
+    trim_inline_edges(&mut content);
     ListItem { content, children, number, is_task: false, is_checked: None }
 }
 
@@ -458,7 +514,11 @@ fn collect_table_row(
                 is_header = true;
             }
             cells.push(TableCell {
-                content: collect_inlines_from_element(child, graph, member_path, losses),
+                content: {
+                    let mut content = collect_inlines_from_element(child, graph, member_path, losses);
+                    trim_inline_edges(&mut content);
+                    content
+                },
                 colspan: 1,
                 rowspan: 1,
             });

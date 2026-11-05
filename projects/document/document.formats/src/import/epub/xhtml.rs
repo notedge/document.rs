@@ -103,7 +103,12 @@ pub(crate) fn quote_block_from_blocks(blocks: Vec<Block>) -> Block {
 pub(crate) fn push_inline(inlines: &mut Vec<Inline>, inline: Inline) {
     if let Inline::Text { text: right } = inline {
         if let Some(Inline::Text { text: left }) = inlines.last_mut() {
-            left.push_str(&right);
+            if left.ends_with(' ') && right.starts_with(' ') {
+                left.push_str(right.trim_start_matches(' '));
+            }
+            else {
+                left.push_str(&right);
+            }
             return;
         }
         if right.is_empty() {
@@ -115,8 +120,25 @@ pub(crate) fn push_inline(inlines: &mut Vec<Inline>, inline: Inline) {
     inlines.push(inline);
 }
 
+/// Collapse whitespace runs to one space while keeping a single leading or
+/// trailing space.
+///
+/// Inline text nodes are separated by markup, so dropping their edge spaces
+/// would join words across a footnote reference or emphasis boundary. The
+/// block assembly trims only the outer edges of the final inline run.
 pub(crate) fn normalize_whitespace(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let mut normalized = trimmed.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.starts_with(char::is_whitespace) {
+        normalized.insert(0, ' ');
+    }
+    if text.ends_with(char::is_whitespace) {
+        normalized.push(' ');
+    }
+    normalized
 }
 
 /// Normalize EPUB XHTML into HTML that `oak-html` can parse reliably today.

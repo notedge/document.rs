@@ -20,7 +20,48 @@ pub fn parse_html_text(text: &str) -> Result<HtmlDocument, FormatError> {
     let builder = HtmlBuilder::new(language);
     let mut cache = ParseSession::<HtmlLanguage>::default();
     let built = builder.build(&source, &[], &mut cache);
-    built.result.map_err(|error| FormatError::parse("epub", error.to_string()))
+    let mut document = built.result.map_err(|error| FormatError::parse("epub", error.to_string()))?;
+    restore_text_edge_whitespace(&mut document, text);
+    Ok(document)
+}
+
+/// Restore whitespace that `oak-html` trims from text tokens.
+///
+/// Its builder collapses whitespace inside each token, which also drops the
+/// space that separates text from adjacent inline markup. The token span keeps
+/// pointing at the text itself, so an authored space immediately before or
+/// after the span is put back and the block assembly later trims only the outer
+/// run edges.
+fn restore_text_edge_whitespace(document: &mut HtmlDocument, source: &str) {
+    for node in &mut document.nodes {
+        restore_node_edge_whitespace(node, source);
+    }
+}
+
+fn restore_node_edge_whitespace(node: &mut HtmlNode, source: &str) {
+    match node {
+        HtmlNode::Text(text) => restore_one_text_edge_whitespace(text, source),
+        HtmlNode::Element(element) => {
+            for child in &mut element.children {
+                restore_node_edge_whitespace(child, source);
+            }
+        }
+        HtmlNode::Comment(_) => {}
+    }
+}
+
+fn restore_one_text_edge_whitespace(text: &mut Text, source: &str) {
+    if text.content.is_empty() {
+        return;
+    }
+    let leading = source.get(..text.span.start).and_then(|prefix| prefix.chars().next_back()).is_some_and(char::is_whitespace);
+    let trailing = source.get(text.span.end..).and_then(|suffix| suffix.chars().next()).is_some_and(char::is_whitespace);
+    if leading && !text.content.starts_with(char::is_whitespace) {
+        text.content.insert(0, ' ');
+    }
+    if trailing && !text.content.ends_with(char::is_whitespace) {
+        text.content.push(' ');
+    }
 }
 
 /// Returns whether an element's tag name matches `expected` case-insensitively.

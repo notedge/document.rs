@@ -310,19 +310,23 @@ fn epub_list_value_and_reversed_are_explicit() {
 
 /// `<a epub:type="noteref">` and `<aside epub:type="footnote">` lower to the
 /// same semantic shapes as the HTML endnotes path, so the Markdown writer can
-/// emit real `[^label]` references and definitions.
+/// emit real `[^label]` references and definitions. Text node edge spaces stay
+/// visible across the reference boundaries and return links stay out of the
+/// definition bodies.
 #[test]
 fn epub_structural_footnotes_become_notes_and_definitions() {
     let graph = import_epub_bytes("footnotes.epub", &read_fixture("epub/footnotes.epub")).expect("epub import");
     assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
-    assert_eq!(note_labels(&graph), vec!["1".to_string(), "2".to_string()], "{:?}", graph.blocks);
-    assert_eq!(footnote_definitions(&graph), vec!["[^1]: Note one.", "[^2]: Note two."]);
+    assert_eq!(note_labels(&graph), vec!["1".to_string(), "2".to_string(), "3".to_string()], "{:?}", graph.blocks);
+    assert_eq!(footnote_definitions(&graph), vec!["[^1]: Note one.", "[^2]: Note two.", "[^3]: Note three."]);
     assert!(!loss_codes(&graph).iter().any(|code| code == "import.epub.unsupported_xhtml_block"), "{:?}", loss_codes(&graph));
     let markdown = export_markdown(&graph).expect("markdown export");
-    assert!(markdown.contains("Body with one note[^1]"), "{markdown}");
-    assert!(markdown.contains("another[^2]."), "{markdown}");
+    assert!(markdown.contains("Body with one note[^1] and another[^2] and a third[^3]."), "{markdown}");
+    assert!(!markdown.contains('↩'), "return glyph leaked into the definitions: {markdown}");
+    assert!(!markdown.contains("Note three.return"), "return copy leaked into the definitions: {markdown}");
     assert!(markdown.contains("[^1]: Note one."), "{markdown}");
     assert!(markdown.contains("[^2]: Note two."), "{markdown}");
+    assert!(markdown.contains("[^3]: Note three."), "{markdown}");
 }
 
 /// A reference without a definition keeps its note label. Duplicate asides
