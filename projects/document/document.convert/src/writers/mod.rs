@@ -11,3 +11,4 @@ pub use html::write_document_html;
 pub use markdown::write_document_markdown;
 pub use markdown_project::write_markdown_project;
 pub use pdf::write_document_pdf;
+pub(crate) use pdf::missing_body_faces;

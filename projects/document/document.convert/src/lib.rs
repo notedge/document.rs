@@ -15,9 +15,10 @@ mod structure;
 pub mod transform;
 mod writers;
 
-use std::{fs, path::Path};
+use std::{fs, path::Path, sync::Arc};
 
 use document_diagnostic::diagnostics_from_graph;
+use document_fonts::BodyFaceSet;
 use document_formats::import::{
     doc::import_doc_bytes, docx::import_docx_bytes, epub::import_epub_bytes, html::import_html_bytes, pdf::import_pdf_bytes,
     pptx::import_pptx_graph_bytes, xlsx::import_xlsx_graph_bytes,
@@ -205,6 +206,34 @@ pub fn convert_bytes_with_budgets(
     handlers_json: Option<&str>,
     budgets: Option<&ConversionBudgets>,
 ) -> Result<ConvertOutput> {
+    convert_bytes_inner(from, to, label, bytes, handlers_json, budgets, None)
+}
+
+/// Converts bytes with host-injected body faces.
+///
+/// PDF output embeds the supplied faces, so the host is the only source of
+/// body fonts. Callers that ask for `pdf` without supplying a set get
+/// `notedown.convert.pdf-fonts-missing`.
+pub fn convert_bytes_with_body_faces(
+    from: &str,
+    to: &str,
+    label: &str,
+    bytes: Vec<u8>,
+    handlers_json: Option<&str>,
+    body_set: &Arc<BodyFaceSet>,
+) -> Result<ConvertOutput> {
+    convert_bytes_inner(from, to, label, bytes, handlers_json, None, Some(body_set))
+}
+
+fn convert_bytes_inner(
+    from: &str,
+    to: &str,
+    label: &str,
+    bytes: Vec<u8>,
+    handlers_json: Option<&str>,
+    budgets: Option<&ConversionBudgets>,
+    body_set: Option<&Arc<BodyFaceSet>>,
+) -> Result<ConvertOutput> {
     let from = from.to_ascii_lowercase();
     let to = to.to_ascii_lowercase();
     if !supports_route(&from, &to) {
@@ -216,7 +245,7 @@ pub fn convert_bytes_with_budgets(
 
     let mut graph = format_error::propagate(read_source(&from, label, bytes))?;
     let transform_outcome = apply_transform_passes(&mut graph, handlers_json);
-    let (markdown, html, binary) = format_error::propagate(write_target(&to, &mut graph))?;
+    let (markdown, html, binary) = format_error::propagate(write_target(&to, &mut graph, body_set))?;
     let loss_count = graph.coverage.loss.len();
     let mut diagnostic_set = diagnostics_from_graph(&graph);
     for diagnostic in &transform_outcome.diagnostics {
@@ -484,7 +513,7 @@ fn read_source(from: &str, label: &str, bytes: Vec<u8>) -> Result<DocumentGraph>
     }
 }
 
-fn write_target(to: &str, graph: &mut DocumentGraph) -> Result<(String, Option<String>, Option<Vec<u8>>)> {
+fn write_target(to: &str, graph: &mut DocumentGraph, body_set: Option<&Arc<BodyFaceSet>>) -> Result<(String, Option<String>, Option<Vec<u8>>)> {
     match to {
         "markdown" => {
             let markdown = write_document_markdown(graph)?;
@@ -495,7 +524,10 @@ fn write_target(to: &str, graph: &mut DocumentGraph) -> Result<(String, Option<S
             Ok((String::new(), None, Some(binary)))
         }
         "pdf" => {
-            let binary = write_document_pdf(graph)?;
+            let Some(body_set) = body_set else {
+                return format_error::fail(crate::writers::missing_body_faces());
+            };
+            let binary = write_document_pdf(graph, body_set)?;
             Ok((String::new(), None, Some(binary)))
         }
         "html" => {
