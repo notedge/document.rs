@@ -13,12 +13,15 @@ pub enum SemanticStatus {
     /// is dropped, such as an image that keeps its target but loses its
     /// authored size.
     Partial,
-    /// Whole-construct refusal: nothing of the source construct is represented.
+    /// Refused construct: none of its authored content reaches the output.
     ///
-    /// Use it only when the construct is refused outright. When the content is
-    /// kept and only some semantics are missing, record [`SemanticStatus::Partial`]
-    /// or [`SemanticStatus::Lossy`] instead, so consumers that read the status
-    /// do not report emitted content as a refusal.
+    /// Import may keep an inert shell or an unrendered opaque marker for
+    /// provenance, and the projection skips it, so readers never see the
+    /// construct. Use it only when the content is dropped as a whole. When the
+    /// content is kept in the output and only some semantics are missing,
+    /// record [`SemanticStatus::Partial`] or [`SemanticStatus::Lossy`] instead,
+    /// so consumers that read the status do not report emitted content as a
+    /// refusal.
     Unsupported,
     /// Semantics inferred rather than authored.
     Inferred,
