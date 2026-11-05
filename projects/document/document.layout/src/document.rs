@@ -649,17 +649,14 @@ impl<'a> PageBuilder<'a> {
     /// real formula box that flows on the text baseline and is never split.
     /// When the math engine rejects a formula, its raw source joins the text
     /// flow, matching the display-math fallback.
-    ///
-    /// `before_display` suppresses the paragraph separation, because a display
-    /// formula supplies its own `\abovedisplayskip` and article's `\parskip`
-    /// contributes nothing in front of a display.
-    fn emit_paragraph(&mut self, content: &[Inline], indent: f64, before_display: bool) {
+    fn emit_paragraph(&mut self, content: &[Inline], indent: f64) {
         let size = self.body_size();
         let atoms = self.compose_atoms(content, size, indent, BODY_FACE, ImageMode::Placeholder);
         self.emit_inline_lines(atoms, size, indent);
-        if !before_display {
-            self.pad(size * 0.6);
-        }
+        // article's `\parskip` is zero, so consecutive one-line paragraphs keep
+        // exactly one `\baselineskip` between their baselines. Charging an extra
+        // fraction of the em here widened every paragraph gap — the inline
+        // `$x+y$` case measured 1.67 em more than the reference.
     }
 
     /// Compose inline content into break atoms under `face`.
@@ -1166,7 +1163,7 @@ impl<'a> PageBuilder<'a> {
     }
 
     fn render_blocks(&mut self, graph: &DocumentGraph, ids: &[NodeId], indent: f64) {
-        for (index, id) in ids.iter().enumerate() {
+        for id in ids {
             let Some(node) = graph.block(*id)
             else {
                 continue;
@@ -1177,11 +1174,7 @@ impl<'a> PageBuilder<'a> {
                     self.render_blocks(graph, children, indent);
                 }
                 Block::Paragraph { content } => {
-                    let before_display = ids
-                        .get(index + 1)
-                        .and_then(|next| graph.block(*next))
-                        .is_some_and(|next| matches!(next.block, Block::Math { .. }));
-                    self.emit_paragraph(content, indent, before_display);
+                    self.emit_paragraph(content, indent);
                 }
                 Block::List { ordered, items } => {
                     self.emit_list(*ordered, items, indent, graph);

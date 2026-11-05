@@ -53,14 +53,20 @@ impl Default for LayoutHint {
 }
 
 impl LayoutHint {
-    /// A4 portrait page with 72 pt margins, 11 pt body text, and 1.45 line height.
+    /// A4 portrait page with 72 pt margins, 11 pt body text, and a 1.21 line
+    /// height.
+    ///
+    /// The ratio is TeX's `\baselineskip` for a 12 pt article (14.5 pt), which
+    /// is what a body line advances whether it holds text alone or inline
+    /// math.  A taller strut pushes every following baseline down instead of
+    /// leaving the formula one line gap too far from its neighbours.
     pub const fn a4() -> Self {
         Self {
             page_width: A4_WIDTH,
             page_height: A4_HEIGHT,
             margin: Margin::uniform(DEFAULT_MARGIN),
             base_font_size: 11.0,
-            line_height: 1.45,
+            line_height: 1.21,
         }
     }
 
