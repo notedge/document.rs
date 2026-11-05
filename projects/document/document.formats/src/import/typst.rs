@@ -458,10 +458,14 @@ impl<'a> TypstLowerer<'a> {
                 }
             };
             if let Some(items) = list_items_mut(&mut self.graph, id) {
+                // Typst numbered lists without an explicit marker number still
+                // count from one, so the graph needs the ordinal the source
+                // leaves implicit.
+                let number = line.number.or_else(|| line.ordered.then(|| items.len() as u32 + 1));
                 items.push(ListItem {
                     content,
                     children: Vec::new(),
-                    number: line.number,
+                    number,
                     is_task: false,
                     is_checked: None,
                 });
