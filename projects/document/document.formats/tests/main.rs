@@ -234,6 +234,14 @@ mod html_structure_smoke {
         let output = html("<div></div>after");
         assert!(output.contains("after"), "{output}");
     }
+
+    #[test]
+    fn script_content_does_not_swallow_following_siblings() {
+        let source = "<script>if (a < b) { x() }</script><p>after</p>";
+        let output = html(source);
+        assert!(output.contains("<p>after</p>"), "{output}");
+        assert!(loss_codes(source).contains(&"import.html.unsupported_script".to_string()));
+    }
 }
 
 /// A link whose text is an image keeps both the outer link and the image.
