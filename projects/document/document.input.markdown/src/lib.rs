@@ -295,7 +295,7 @@ fn analyze(graph: &DocumentGraph) -> (ConversionReport, Vec<Diagnostic>) {
 
 #[cfg(test)]
 mod tests {
-    use document_ir::{Block, DocumentGraph, DocumentId, LossMarker, SemanticStatus};
+    use document_ir::{Block, DocumentGraph, DocumentId, Inline, LossMarker, NodeId, SemanticStatus};
 
     use super::{Severity, codes, finish};
 
@@ -328,5 +328,20 @@ mod tests {
         let error = finish(graph).expect_err("an unsupported loss must not yield a document");
         assert_eq!(error.code(), "import.markdown.unsupported_block");
         assert_eq!(error.diagnostics().len(), 1);
+    }
+
+    #[test]
+    fn invalid_graph_is_rejected_before_layout() {
+        let mut graph = DocumentGraph::new(DocumentId(13));
+        graph.push_block(Block::Section {
+            level: 1,
+            title: vec![Inline::Text { text: "Title".into() }],
+            children: vec![NodeId(999)],
+        });
+
+        let error = finish(graph).expect_err("dangling section children must be rejected");
+        assert!(!error.diagnostics().is_empty());
+        assert!(error.diagnostics().iter().all(|diagnostic| diagnostic.severity == Severity::Error));
+        assert!(error.diagnostics().iter().any(|diagnostic| diagnostic.code == codes::INVALID_GRAPH));
     }
 }
