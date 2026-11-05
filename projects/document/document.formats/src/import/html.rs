@@ -455,7 +455,7 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
             // survives as a flattened inline run, so this is a recorded partial
             // loss rather than a silent downgrade.
             let mut flattened_cell_blocks = false;
-            let rows = descendants(element, "tr")
+            let rows: Vec<document_ir::TableRow> = descendants(element, "tr")
                 .into_iter()
                 .map(|row| {
                     let mut is_header = false;
@@ -485,6 +485,28 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                 graph.push_loss(LossMarker {
                     code: "import.html.table_cell_blocks".into(),
                     message: "table cells authored as block layout are flattened into one inline run".into(),
+                    status: SemanticStatus::Partial,
+                });
+            }
+            // The IR keeps one `is_header` flag per row, so the exporter can only
+            // rebuild `<thead>` from a single leading run. A header row after a
+            // body row cannot be expressed, and stays a recorded loss rather
+            // than a silent regroup.
+            let mut seen_body = false;
+            let mut header_after_body = false;
+            for row in &rows {
+                if row.is_header {
+                    if seen_body {
+                        header_after_body = true;
+                    }
+                } else {
+                    seen_body = true;
+                }
+            }
+            if header_after_body {
+                graph.push_loss(LossMarker {
+                    code: "import.html.table_sections".into(),
+                    message: "header rows outside the leading header run are merged into one body group".into(),
                     status: SemanticStatus::Partial,
                 });
             }

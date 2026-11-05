@@ -90,6 +90,11 @@ mod html_structure_smoke {
         export_html(&graph).expect("html export")
     }
 
+    fn loss_codes(source: &str) -> Vec<String> {
+        let graph = import_html_text("html-structure", source).expect("html import");
+        graph.coverage.loss.iter().map(|marker| marker.code.clone()).collect()
+    }
+
     #[test]
     fn unquoted_attribute_value_stays_in_the_tag() {
         let output = html("<a href=/x>x</a>");
@@ -107,8 +112,18 @@ mod html_structure_smoke {
         let output = html(
             "<table><colgroup><col span=2></colgroup><thead><tr><th>h</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>",
         );
+        assert!(output.contains("<thead><tr><th>h</th></tr></thead>"), "{output}");
+        assert!(output.contains("<tbody><tr><td>b</td></tr></tbody>"), "{output}");
+        assert!(!loss_codes("<table><thead><tr><th>h</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>")
+            .contains(&"import.html.table_sections".to_string()));
+    }
+
+    #[test]
+    fn header_rows_after_body_rows_are_a_recorded_loss() {
+        let output = html("<table><tbody><tr><td>b</td></tr></tbody><thead><tr><th>h</th></tr></thead></table>");
         assert!(output.contains("<th>h</th>"), "{output}");
-        assert!(output.contains("<td>b</td>"), "{output}");
+        assert!(loss_codes("<table><tbody><tr><td>b</td></tr></tbody><thead><tr><th>h</th></tr></thead></table>")
+            .contains(&"import.html.table_sections".to_string()));
     }
 
     #[test]

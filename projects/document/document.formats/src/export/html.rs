@@ -333,6 +333,27 @@ fn write_list(
 
 pub(crate) fn write_table(out: &mut String, rows: &[TableRow], footnote_refs: &mut FootnoteRefIds) -> Result<(), FormatError> {
     out.push_str("<table>");
+    // `TableRow::is_header` is the only section information the IR keeps, so the
+    // leading run of header rows becomes `<thead>` and everything after it
+    // becomes `<tbody>`. Header rows that appear after body rows are reported
+    // by the HTML importer as `import.html.table_sections`, because no bag of
+    // per-row flags can express two header groups.
+    let header_count = rows.iter().take_while(|row| row.is_header).count();
+    if header_count > 0 {
+        out.push_str("<thead>");
+        write_table_rows(out, &rows[..header_count], footnote_refs)?;
+        out.push_str("</thead>");
+    }
+    if header_count < rows.len() {
+        out.push_str("<tbody>");
+        write_table_rows(out, &rows[header_count..], footnote_refs)?;
+        out.push_str("</tbody>");
+    }
+    out.push_str("</table>");
+    Ok(())
+}
+
+fn write_table_rows(out: &mut String, rows: &[TableRow], footnote_refs: &mut FootnoteRefIds) -> Result<(), FormatError> {
     for row in rows {
         out.push_str("<tr>");
         let tag = if row.is_header { "th" } else { "td" };
@@ -357,7 +378,6 @@ pub(crate) fn write_table(out: &mut String, rows: &[TableRow], footnote_refs: &m
         }
         out.push_str("</tr>");
     }
-    out.push_str("</table>");
     Ok(())
 }
 
