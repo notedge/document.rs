@@ -32,7 +32,7 @@ fn host_font_dir() -> PathBuf {
         .join("fonts")
 }
 
-fn install_host_math_fonts() {
+pub(crate) fn install_host_math_fonts() {
     let dir = host_font_dir();
     assert!(dir.is_dir(), "math regression needs the host font pack at {}; set VUTEX_FONT_DIR", dir.display());
     install_math_fonts(&MathFontPack::load_from(&dir).expect("math font pack"));
@@ -252,6 +252,62 @@ fn side_script_offsets_match_the_reference() {
                 script.baseline_y,
                 expected.0,
                 expected.1
+            );
+        }
+    }
+}
+
+/// `\int_{-\infty}^{\infty} e^{-x^2}\,\mathrm{d}x=\sqrt{\pi}` 的逐锚点对照。
+///
+/// 参考值取自 Tectonic 0.17 + Latin Modern Math（9.963 pt 排版，按 10 pt
+/// 换算）。按绘制顺序逐 glyph 比对原点，容差半像素。整框 `diffRatio` 会被
+/// 参考的 0.37% 字号差放大，所以这里只用锚点。
+#[test]
+fn user_expression_anchors_match_the_reference() {
+    // (origin_x, baseline_y)，顺序为 ∫ ∞ − ∞ e − x 2 d x = √ π。
+    const DISPLAY_ANCHORS: [(f64, f64); 13] = [
+        (0.000, 0.000),
+        (9.990, -11.860),
+        (4.080, 10.010),
+        (9.526, 10.010),
+        (20.129, 0.000),
+        (24.789, -3.630),
+        (30.235, -3.630),
+        (34.771, -6.171),
+        (40.842, 0.000),
+        (46.402, 0.000),
+        (54.892, 0.000),
+        (65.457, -7.639),
+        (73.788, 0.000),
+    ];
+    const INLINE_ANCHORS: [(f64, f64); 13] = [
+        (0.000, 0.000),
+        (6.651, -6.300),
+        (3.330, 4.460),
+        (8.776, 4.460),
+        (18.916, 0.000),
+        (23.575, -3.630),
+        (29.021, -3.630),
+        (33.557, -6.171),
+        (39.629, 0.000),
+        (45.188, 0.000),
+        (53.678, 0.000),
+        (64.244, -7.150),
+        (72.575, 0.000),
+    ];
+    let tex = "\\int_{-\\infty}^{\\infty} e^{-x^2}\\,\\mathrm{d}x=\\sqrt{\\pi}";
+    for (label, display, expected) in [("display", true, DISPLAY_ANCHORS), ("inline", false, INLINE_ANCHORS)] {
+        let placed = glyphs(tex, display);
+        assert_eq!(placed.len(), expected.len(), "{label}: glyph count");
+        for (index, (glyph, (x, y))) in placed.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (glyph.origin_x - x).abs() <= TOLERANCE && (glyph.baseline_y - y).abs() <= TOLERANCE,
+                "{label}: glyph {index} {:?} sits at ({:.3}, {:.3}), reference ({:.3}, {:.3})",
+                glyph.char,
+                glyph.origin_x,
+                glyph.baseline_y,
+                x,
+                y
             );
         }
     }

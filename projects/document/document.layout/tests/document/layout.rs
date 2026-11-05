@@ -132,6 +132,7 @@ fn honours_explicit_page_size_and_margins() {
 /// and the formula still lays out: `x\limits_1` keeps its scripts beside `x`.
 #[test]
 fn inline_math_limits_misuse_reaches_the_document_diagnostics() {
+    crate::math::install_host_math_fonts();
     let mut graph = DocumentGraph::new(DocumentId(3));
     graph.push_block(Block::Paragraph {
         content: vec![Inline::InlineMath {

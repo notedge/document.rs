@@ -1221,7 +1221,9 @@ impl LayoutEngine {
     fn layout_symbol(&self, key: &GlyphKey, style: MathStyle, span: Option<SourceSpan>) -> MathResult<LayoutNode> {
         let style_scale = self.get_style_scale(style);
         let size = self.base_size * style_scale;
-        self.layout_scaled_symbol(key, size, span)
+        let key = self.alphalect_key(key);
+        let key = self.script_style_key(&key, style);
+        self.layout_scaled_symbol(&key, size, span)
     }
 
     /// Lay out a math symbol, preferring the font's display-size design for a
@@ -1281,12 +1283,35 @@ impl LayoutEngine {
     /// authored glyph stands otherwise. Digits, operators and upright text
     /// resolve to themselves.
     fn alphalect_key(&self, key: &GlyphKey) -> GlyphKey {
+        // An explicitly selected design already names the face it wants; a
+        // script-style alternate must never be redirected back to the base
+        // alphabet by its authored character.
+        if key.glyph_id.is_some() {
+            return key.clone();
+        }
         let Some(mapped) = key.char.and_then(|c| math_alphalect(key.style, c))
         else {
             return key.clone();
         };
         let redirected = GlyphKey::from_char(mapped, key.font_family.clone(), FontStyle::Math);
         if self.font_system.has_glyph(&redirected) { redirected } else { key.clone() }
+    }
+
+    /// The font's script design for `key` when the style calls for one.
+    ///
+    /// OpenType publishes script-style paints through the `ssty` feature, and
+    /// their advances differ from the base letter (Latin Modern Math's `𝑥`
+    /// advances 0.648 em as `.st` and 0.572 em upright). Keeping the base
+    /// design at 70% under-advances every following glyph, so script and
+    /// script-script styles select the font's own alternate and only fall back
+    /// to the base design when the font ships none.
+    fn script_style_key(&self, key: &GlyphKey, style: MathStyle) -> GlyphKey {
+        let level = match style {
+            MathStyle::Script => 1,
+            MathStyle::ScriptScript => 2,
+            _ => return key.clone(),
+        };
+        self.font_system.script_variant(key, level).unwrap_or_else(|| key.clone())
     }
 
     fn layout_scaled_symbol(&self, key: &GlyphKey, size: Fixed, span: Option<SourceSpan>) -> MathResult<LayoutNode> {
@@ -1787,23 +1812,16 @@ impl LayoutEngine {
         }
 
         // TeX sets the sign's reference point `height(radicand) + clr` above
-        // the formula baseline (`shift_amount(y) := -(height(x)+clr)`), where
-        // `clr` includes the radical rule thickness.  That works for the
-        // Computer Modern radical because its glyph is drawn with the reference
-        // point at the top of the ink (`\showbox` reports `cmex r` as
-        // `0.4 + 23.6`, i.e. the whole design sits below the reference point).
-        // A MATH font publishes ordinary outlines instead: the LM Math
-        // variants carry real ascent and descent about their own baseline
-        // (`√` at 2.4em measures 1.45em up and 0.95em down), so keeping the
-        // reference point at the bar level would push the ink top far above
-        // the vinculum.  The invariant that actually connects the two strokes —
-        // and the one the Tectonic oracle confirms — is that the sign's ink top
-        // meets the rule's *bottom* edge, because `clr` already contains the
-        // rule thickness: the vinculum is then raised one more thickness above
-        // the sign's ink, which is exactly the `height` Tectonic reports.
-        // Aligning the ink top to the rule's top edge instead drops the whole
-        // assembly by one rule thickness and leaves extra descent (the
-        // `radical` record failed G1 by 16.6% / 20.7% before this fix).
+        // the formula baseline (`shift_amount(y) := -(height(x)+clr)`), and
+        // `clr` is the vertical gap alone.  The reference point therefore sits
+        // on the rule's *bottom* edge, not on its top edge.  LM Math's `√` keeps
+        // an ascent of 0.04 em, which is exactly `RadicalRuleThickness`, so the
+        // sign's short bar lands on the vinculum's top edge without any extra
+        // shift.  Tectonic confirms the placement: for `\sqrt{\pi}` at 10 pt the
+        // sign origin is 7.611 pt above the baseline at 9.963 pt, i.e. 7.639 pt
+        // at 10 pt, exactly `height(radicand) + clr`.  Subtracting the glyph's
+        // own ascent instead put the origin at 7.240 pt, dropping the whole
+        // sign 0.4 pt and its tail 0.4 pt too far below the baseline.
         // The clearance is measured from the radicand's ink to the *bottom*
         // edge of the vinculum, so the kern only advances the radicand by
         // `vertical_gap`.  Advancing by `vertical_gap + rule_thickness` charged
@@ -1811,7 +1829,7 @@ impl LayoutEngine {
         // clearance allows.
         let rule_bottom = radicand_layout.height() + vertical_gap;
         if let LayoutNode::HBox(h) = &mut radical_box {
-            h.shift = radical_box_height - rule_bottom;
+            h.shift = Fixed::ZERO - rule_bottom;
         }
 
         let mut children = Vec::new();
@@ -2117,10 +2135,13 @@ impl LayoutEngine {
         let base_italic_correction =
             if class.is_large_operator() { base_layout.italic_correction() } else { Fixed::ZERO };
 
-        // TeX's `make_scripts` adds `scriptspace` to every script box's own
+        // TeX's `make_scripts` adds `\scriptspace` to every script box's own
         // width before the boxes are stacked, so the following atom never
-        // touches the script's ink.
-        let script_space = self.math_constant(MathConstant::SpaceAfterScript, size).unwrap_or(Fixed::ZERO);
+        // touches the script's ink. TeX's default is the absolute dimension
+        // 0.5 pt at every script level, not the font's `SpaceAfterScript`
+        // fraction: using 0.056 em at the current size overshoots the outer
+        // box by 0.06 pt and undershoots the script-script box by 0.108 pt.
+        let script_space = Fixed::from_f64(0.5);
 
         let mut script_vbox_children = Vec::new();
         let mut calculated_sub_shift = Fixed::ZERO;
