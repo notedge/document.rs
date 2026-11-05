@@ -182,10 +182,23 @@ mod loss_status_smoke {
         export::html::export_html,
         import::{html::import_html_bytes, tex::import_tex_bytes, typst::import_typst_bytes},
     };
-    use document_ir::{DocumentGraph, SemanticStatus};
+    use document_ir::{Block, DocumentGraph, SemanticStatus};
 
     fn status(graph: &DocumentGraph, code: &str) -> SemanticStatus {
         graph.coverage.loss.iter().find(|loss| loss.code == code).unwrap_or_else(|| panic!("missing loss `{code}`")).status
+    }
+
+    /// The opaque block a marker describes carries the same status as the marker,
+    /// so the node never claims a mapping the projection skips.
+    fn opaque_status(graph: &DocumentGraph, prefix: &str) -> SemanticStatus {
+        graph
+            .blocks
+            .iter()
+            .find_map(|node| match &node.block {
+                Block::Opaque { kind, status, .. } if kind.starts_with(prefix) => Some(*status),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing `{prefix}` opaque block"))
     }
 
     #[test]
@@ -200,6 +213,7 @@ mod loss_status_smoke {
 
         let macro_graph = import_tex_bytes("macro", "\\newcommand{\\foo}{bar}\ntext\n").expect("tex import");
         assert_eq!(status(&macro_graph, "import.tex.macro_definition"), SemanticStatus::Partial);
+        assert_eq!(opaque_status(&macro_graph, "tex."), SemanticStatus::Partial);
         assert!(export_html(&macro_graph).expect("html export").contains(r#"data-opaque-kind="tex.newcommand""#));
     }
 
@@ -207,6 +221,7 @@ mod loss_status_smoke {
     fn dropped_content_stays_a_refusal() {
         let typst = import_typst_bytes("let", "#let x = 1\nhello\n").expect("typst import");
         assert_eq!(status(&typst, "import.typst.dynamic_content"), SemanticStatus::Unsupported);
+        assert_eq!(opaque_status(&typst, "typst."), SemanticStatus::Unsupported);
         let typst_html = export_html(&typst).expect("html export");
         assert!(!typst_html.contains("#let"), "{typst_html}");
 

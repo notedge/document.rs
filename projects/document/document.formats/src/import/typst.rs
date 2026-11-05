@@ -360,7 +360,10 @@ impl<'a> TypstLowerer<'a> {
             SemanticStatus::Unsupported,
             line_span,
         );
-        self.push_block(sink, Block::Opaque { kind, payload_hint: line.to_string(), status: SemanticStatus::Partial });
+        // The HTML projection skips `typst.*` opaque kinds, so the node carries
+        // the same refusal status as the marker instead of claiming a partial
+        // mapping that readers never see.
+        self.push_block(sink, Block::Opaque { kind, payload_hint: line.to_string(), status: SemanticStatus::Unsupported });
         self.line_breaks = 0;
         self.cursor = span.start + line_end;
         if line_end < raw.len() && !raw[line_end..].trim().is_empty() {
@@ -392,7 +395,7 @@ impl<'a> TypstLowerer<'a> {
             SemanticStatus::Unsupported,
             span,
         );
-        self.push_block_at(sink, Block::Opaque { kind, payload_hint: payload, status: SemanticStatus::Partial }, span);
+        self.push_block_at(sink, Block::Opaque { kind, payload_hint: payload, status: SemanticStatus::Unsupported }, span);
         self.line_breaks = 0;
         self.cursor = end;
         if end < limit {
@@ -414,7 +417,7 @@ impl<'a> TypstLowerer<'a> {
             SemanticStatus::Unsupported,
             span,
         );
-        self.push_block_at(sink, Block::Opaque { kind, payload_hint: rest, status: SemanticStatus::Partial }, span);
+        self.push_block_at(sink, Block::Opaque { kind, payload_hint: rest, status: SemanticStatus::Unsupported }, span);
         self.line_breaks = 0;
         self.cursor = end;
         true
