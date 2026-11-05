@@ -191,6 +191,45 @@
         {"construct": "shared string index outside the table", "code": "import.xlsx.shared-string", "span": "none"},
         {"construct": "cell style index outside the style table", "code": "import.xlsx.style-index", "span": "none"}
       ]
+    },
+    {
+      "language": "pptx",
+      "entry": ["import_presentation", "project_graph", "render_slide_canvas"],
+      "supported": [
+        {"construct": "slide list with size in EMU, hidden flag and layout plus master part references", "sample": "2 slides at 12192000 x 6858000"},
+        {"construct": "layout and master placeholder inheritance for frame, fill, line and text style", "sample": "ctrTitle from layout, body index 1 from master"},
+        {"construct": "text frames with wrap, anchor, autofit and paragraph levels 0..8", "sample": "level 0 and level 1 paragraphs"},
+        {"construct": "shape identity, preset geometry, solid fill, line color and width, rotation in degrees", "sample": "roundRect rotated 8 degrees"},
+        {"construct": "pictures carried as assets with media type and bytes", "sample": "PNG picture frame"},
+        {"construct": "tables with grid column widths, row heights, merged cells and cell fills", "sample": "2x2 revenue table"},
+        {"construct": "chart presence with chart kind and series count", "sample": "barChart with 1 series"},
+        {"construct": "speaker notes text", "sample": "notes on both slides"},
+        {"construct": "fixed-canvas slide view at the authored slide size with per-shape deviations in points", "sample": "1280x720 px page per slide"}
+      ],
+      "approximated": [
+        {"construct": "placeholder frame inherited from layout or master", "code": "import.pptx.placeholder-inheritance", "loss": "position, size, fill, line or text style is copied from the layout or master chain while the authored shape keeps no own frame", "span": "none"},
+        {"construct": "shape rotation", "code": "import.pptx.rotation", "loss": "the angle is kept in degrees and the renderer rotates the box, so the text baseline follows the box", "span": "none"},
+        {"construct": "speaker notes", "code": "import.pptx.notes", "loss": "notes text is kept as plain paragraphs and loses its notes placeholder geometry", "span": "none"},
+        {"construct": "hidden slide in the IR projection", "code": "import.pptx.hidden-slide", "loss": "hidden slides stay in the native model and are excluded from the graph", "span": "none"},
+        {"construct": "table style identifier", "code": "import.pptx.table-style", "loss": "the style id is reported while cell fills are kept and banding is not applied", "span": "none"},
+        {"construct": "gradient, pattern or picture fill", "code": "import.pptx.fill-approximated", "loss": "an unsupported fill is approximated by its first solid color or dropped", "span": "none"},
+        {"construct": "theme or scheme color", "code": "import.pptx.theme-color", "loss": "an unresolvable scheme slot keeps its raw value", "span": "none"},
+        {"construct": "slide master and layout shapes", "code": "import.pptx.master-shape", "loss": "master decorative shapes are not projected onto slides", "span": "none"},
+        {"construct": "slide animation", "code": "import.pptx.animation", "loss": "the animation timeline is reported and never played", "span": "none"},
+        {"construct": "text that exceeds its frame", "code": "render.pptx.text-overflow", "loss": "the renderer reports the overflow instead of shrinking or clipping silently", "span": "none"},
+        {"construct": "font the canvas cannot resolve", "code": "render.pptx.font-substitution", "loss": "the substituted font keeps the authored size and the deviation is reported", "span": "none"}
+      ],
+      "refused": [
+        {"construct": "chart object", "code": "import.pptx.chart", "span": "none", "note": "chart metadata is read and the renderer paints an explicit refused frame"},
+        {"construct": "chart painted on the slide canvas", "code": "render.pptx.chart-placeholder", "span": "none"},
+        {"construct": "SmartArt diagram", "code": "import.pptx.smartart", "span": "none"},
+        {"construct": "embedded OLE object", "code": "import.pptx.ole-object", "span": "none"},
+        {"construct": "audio or video media", "code": "import.pptx.media", "span": "none"},
+        {"construct": "group shape without a supported projection", "code": "import.pptx.group", "span": "none"},
+        {"construct": "shape the canvas cannot paint", "code": "render.pptx.shape-skipped", "span": "none"},
+        {"construct": "picture whose media part is missing", "code": "render.pptx.image-missing", "span": "none"},
+        {"construct": "macro project", "code": "import.pptx.macro", "span": "none"}
+      ]
     }
   ],
   "specs": [
@@ -204,7 +243,8 @@
     {"id": "input-typst-math", "language": "typst", "classification": "accept", "source": "Inline $a^2$ stays.\n\n$ x + y $\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
     {"id": "input-typst-dynamic", "language": "typst", "classification": "accept", "source": "Before\n\n#figure(\n  rect(width: 2cm),\n  caption: [A box],\n)\n\nAfter\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
     {"id": "input-typst-link", "language": "typst", "classification": "accept", "source": "See #link(\"https://example.org\")[docs] and #link(\"https://example.org/raw\").\n", "expect": {"import": "graph", "render": "svg", "deterministic": true}},
-    {"id": "input-xlsx-multi-sheet", "language": "xlsx", "classification": "accept", "fixture": "document.formats/tests/fixtures/xlsx/multi-sheet.xlsx", "expect": {"import": "graph", "render": "html", "sheets": 3, "visibleSheets": 2, "deterministic": true}}
+    {"id": "input-xlsx-multi-sheet", "language": "xlsx", "classification": "accept", "fixture": "document.formats/tests/fixtures/xlsx/multi-sheet.xlsx", "expect": {"import": "graph", "render": "html", "sheets": 3, "visibleSheets": 2, "deterministic": true}},
+    {"id": "input-pptx-layouts-and-chart", "language": "pptx", "classification": "accept", "source": "in-memory OOXML package generated by document.formats/tests/pptx.rs", "expect": {"import": "graph", "render": "html", "slides": 2, "shapes": 8, "hiddenSlides": 0, "deterministic": true}}
   ],
   "rejections": [
     {"id": "input-markdown-front-matter", "language": "markdown", "source": "---\ntitle: ignored\n---\n\nBody\n", "code": "vutex.input.markdown.opaque_block", "severity": "error", "spanText": "---\ntitle: ignored\n---"},
