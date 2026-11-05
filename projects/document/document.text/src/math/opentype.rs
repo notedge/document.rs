@@ -469,13 +469,19 @@ fn extract_delimiter_constructions(
                 variant.stretch_measurement.to_f64()
             };
             let ink = ink_from_bounds(face, variant_glyph_id, one_em).unwrap_or_else(|| synthesized_variant_ink(index));
+            // Variant designs are real glyph ids, so MATH publishes their own
+            // italic correction. Side scripts of a display operator need it:
+            // TeX sets the superscript on the advance and the subscript one
+            // correction further left, and dropping it here collapsed both
+            // scripts onto the text-size correction of the base glyph.
+            let math = facts.glyph_math(variant.glyph);
             data.glyphs.insert(
                 variant_key.clone(),
                 GlyphMetrics {
                     width: width_from_advance(variant_advance),
                     height: Fixed::from_f64(ink.0),
                     depth: Fixed::from_f64(ink.1),
-                    italic_correction: UNCOVERED_MATH_METRIC,
+                    italic_correction: math.and_then(|math| math.italic_correction()).unwrap_or(UNCOVERED_MATH_METRIC),
                     top_accent_attachment: UNCOVERED_MATH_METRIC,
                 },
             );
