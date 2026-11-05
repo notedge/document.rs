@@ -147,17 +147,20 @@ fn write_block(
             write_math_expression(out, &formula.expression)?;
             out.push_str("</m:oMath></m:oMathPara></w:p>");
         }
-        Block::Opaque { kind, .. } => {
-            return Err(FormatError::unsupported(
-                "docx",
-                format!("opaque block kind `{kind}` is not supported by the conservative DOCX exporter yet"),
-            ));
+        Block::Opaque { payload_hint, .. } => {
+            // An opaque block owns no WordprocessingML structure, so its payload
+            // travels as a plain paragraph. Dropping it would delete authored
+            // content, while refusing the export would lose the whole document.
+            out.push_str("<w:p>");
+            write_literal_text(out, payload_hint, "")?;
+            out.push_str("</w:p>");
         }
-        Block::RawHtml { .. } => {
-            return Err(FormatError::unsupported(
-                "docx",
-                "RawHtml block is not representable by the conservative DOCX exporter yet",
-            ));
+        Block::RawHtml { html } => {
+            // Raw markup cannot be interpreted by the DOCX exporter, but its
+            // authored text stays visible as a paragraph instead of failing.
+            out.push_str("<w:p>");
+            write_literal_text(out, html, "")?;
+            out.push_str("</w:p>");
         }
     }
     Ok(())
@@ -389,8 +392,28 @@ fn write_inline_with_properties(
             write_math_expression(out, &formula.expression)?;
             out.push_str("</m:oMath>");
         }
-        Inline::Reference { .. } => {
-            return Err(FormatError::unsupported("docx", "inline type is not supported by the conservative DOCX exporter yet"));
+        Inline::Reference { display, .. } => {
+            // The referenced target has no DOCX anchor to point at, so the
+            // authored display text stays readable in place.
+            write_literal_text(out, display, properties)?;
+        }
+        Inline::Citation { key, display } => {
+            if let Some(display) = display {
+                for child in display {
+                    write_inline_with_properties(out, child, graph, rels, properties)?;
+                }
+            }
+            else {
+                write_literal_text(out, &format!("[{key}]"), properties)?;
+            }
+        }
+        Inline::Attributed { children, .. } => {
+            for child in children {
+                write_inline_with_properties(out, child, graph, rels, properties)?;
+            }
+        }
+        Inline::RawHtml { html } => {
+            write_literal_text(out, html, properties)?;
         }
         Inline::Link { target, display, title: _ } => {
             let RelationEndpoint::ExternalUri(url) = target
@@ -437,18 +460,6 @@ fn write_inline_with_properties(
             }
             BreakKind::Soft => write_run_with_properties(out, " ", properties)?,
         },
-        Inline::Citation { .. } | Inline::Attributed { .. } => {
-            return Err(FormatError::unsupported(
-                "docx",
-                "inline semantic node is not representable by the conservative DOCX exporter yet",
-            ));
-        }
-        Inline::RawHtml { .. } => {
-            return Err(FormatError::unsupported(
-                "docx",
-                "RawHtml inline is not representable by the conservative DOCX exporter yet",
-            ));
-        }
     }
     Ok(())
 }
@@ -739,6 +750,17 @@ fn image_bytes_for_target(graph: &DocumentGraph, target: &str) -> Option<Vec<u8>
         .iter()
         .find(|asset| asset.kind == AssetKind::Image && asset.source.as_deref() == Some(target))
         .and_then(|asset| asset.bytes.clone())
+}
+
+/// Writes one authored string as run content, honoring accumulated run
+/// properties and keeping inline footnote tokens in text without properties.
+fn write_literal_text(out: &mut String, text: &str, properties: &str) -> Result<(), FormatError> {
+    if properties.is_empty() {
+        write_text_with_footnotes(out, text)
+    }
+    else {
+        write_run_with_properties(out, text, properties)
+    }
 }
 
 fn write_text_with_footnotes(out: &mut String, text: &str) -> Result<(), FormatError> {

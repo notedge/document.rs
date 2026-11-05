@@ -680,6 +680,43 @@ fn docx_export_marks_images_without_bytes_instead_of_failing() {
 }
 
 #[test]
+fn docx_export_keeps_opaque_and_raw_html_payloads_visible() {
+    let mut graph = DocumentGraph::new(DocumentId(64));
+    graph.push_block(Block::Opaque {
+        kind: "front_matter".into(),
+        payload_hint: "title: fidelity".into(),
+        status: SemanticStatus::Unsupported,
+    });
+    graph.push_block(Block::RawHtml { html: "<div class=\"note\">raw block</div>".into() });
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Reference { target: NodeId(1), display: "see target".into() },
+            Inline::Text { text: " ".into() },
+            Inline::Citation { key: "doe2020".into(), display: None },
+            Inline::Text { text: " ".into() },
+            Inline::Attributed {
+                attributes: document_ir::Attributes { id: None, classes: Vec::new(), pairs: Vec::new() },
+                children: vec![Inline::Text { text: "caption".into() }],
+            },
+            Inline::Text { text: " ".into() },
+            Inline::RawHtml { html: "<span>raw inline</span>".into() },
+        ],
+    });
+    let exported = export_docx_bytes(&graph).expect("opaque and raw payloads must not fail the export");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("title: fidelity"), "front matter stays visible");
+    assert!(xml.contains("&lt;div class=&quot;note&quot;&gt;raw block&lt;/div&gt;"), "raw block stays visible: {xml}");
+    assert!(xml.contains("see target"), "reference display text stays visible");
+    assert!(xml.contains("[doe2020]"), "a bare citation keeps its key visible");
+    assert!(xml.contains("caption"), "attributed children stay visible");
+    assert!(xml.contains("&lt;span&gt;raw inline&lt;/span&gt;"), "raw inline stays visible");
+    let reopened = import_docx_bytes("degraded.docx", &exported).expect("reopen degraded docx");
+    let reopened = format!("{:?}", reopened.blocks);
+    assert!(reopened.contains("see target"), "{reopened}");
+    assert!(reopened.contains("caption"), "{reopened}");
+}
+
+#[test]
 fn docx_rejects_lists_deeper_than_numbering_definitions() {
     let mut graph = DocumentGraph::new(DocumentId(53));
     let mut children = Vec::new();

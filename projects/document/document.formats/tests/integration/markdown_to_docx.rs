@@ -1,4 +1,5 @@
 use document_formats::{
+    export::docx::export_docx_bytes,
     export::markdown_project::export_markdown_project,
     import::{docx::import_docx_bytes, markdown::import_markdown_bytes},
 };
@@ -63,6 +64,20 @@ fn crc32(data: &[u8]) -> u32 {
         }
     }
     crc ^ 0xFFFF_FFFF
+}
+
+#[test]
+fn docx_exports_markdown_with_front_matter_rules_and_math() {
+    let markdown = "---\ntitle: fidelity\n---\n\n# Heading\n\nBody with $x^2$ math.\n\n---\n\n$$\n\\frac{1}{2}\n$$\n";
+    let graph = import_markdown_bytes("fidelity.md", markdown).expect("import markdown");
+    let exported = export_docx_bytes(&graph).expect("markdown with front matter, a rule and math exports");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("<w:pStyle w:val=\"Heading1\"/>"), "the heading survives: {xml}");
+    assert!(xml.contains("title: fidelity"), "front matter stays visible as text");
+    assert!(xml.contains("<m:oMath>"), "inline math becomes OMML");
+    assert!(xml.contains("<m:oMathPara><m:oMath><m:f>"), "block math becomes an OMML fraction");
+    let reopened = import_docx_bytes("fidelity.docx", &exported).expect("reopen exported docx");
+    assert!(reopened.blocks.iter().any(|node| matches!(node.block, Block::Math { .. })), "{reopened:#?}");
 }
 
 #[test]
