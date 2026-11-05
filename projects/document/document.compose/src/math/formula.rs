@@ -626,14 +626,15 @@ impl MathSemantics {
         Self { nodes: nodes.iter().filter_map(MathSemNode::from_formula).collect() }
     }
 
-    /// TeX rule 18 `sub1` (σ16): the minimum baseline drop for a subscript
-    /// whose base carries no superscript, in em.
+    /// Minimum baseline drop for a subscript whose base carries no
+    /// superscript, in em.
     ///
     /// OpenType `MATH` publishes a single `subscriptShiftDown`, and the bundled
     /// Latin Modern Math and XITS Math both fill it with TeX's `sub2` (σ17,
-    /// 0.247 em). TeX additionally requires `sub1` (0.150 em) when no
-    /// superscript shares the base, and no `MATH` constant carries that number,
-    /// so the semantics layer owns it. `family` is the face label the font
+    /// 0.247 em). The reference OpenType engine keeps that single value for the
+    /// lone-subscript case too instead of falling back to TeX's σ16 `sub1`
+    /// (0.150 em), so `x_1` drops 0.2457 em there. This layer therefore hands
+    /// layout the σ17-sized 0.246 em drop. `family` is the face label the font
     /// layer publishes (`latin-modern-math`, `xits-math`, …).
     ///
     /// `None` means the face has no TeX parameter. Layout must then fall back
@@ -641,7 +642,7 @@ impl MathSemantics {
     /// diagnostic instead of silently using the σ17 number for both branches.
     pub fn tex_lone_subscript_shift_down(family: &str) -> Option<Fixed> {
         match family {
-            "latin-modern-math" | "xits-math" => Some(Fixed::from_f64(0.150)),
+            "latin-modern-math" | "xits-math" => Some(Fixed::from_f64(0.246)),
             _ => None,
         }
     }
