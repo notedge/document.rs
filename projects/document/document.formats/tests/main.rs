@@ -3,6 +3,8 @@
 mod capability;
 mod markdown_loss_span;
 mod markdown_math_ir;
+#[cfg(any(feature = "docx", feature = "html", feature = "epub"))]
+mod math_import;
 #[cfg(feature = "xlsx")]
 mod xlsx;
 

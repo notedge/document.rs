@@ -50,7 +50,7 @@ pub fn import_docx_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
     hydrate_core_metadata(&package, &mut ledger, &mut graph);
     graph.push_loss(LossMarker {
         code: "import.docx.partial_coverage".into(),
-        message: "DOCX import currently maps paragraphs, heading styles, nested lists with numbering.xml marker resolution, tables, run bold/italic/underline/strike/superscript/subscript/color/font-size/font-family/highlight, hyperlinks, embedded images, footnote references, footnote bodies from footnotes.xml, and core metadata. Tracked changes, comments, page-break layout, and complex character properties remain partial".into(),
+        message: "DOCX import currently maps paragraphs, heading styles, nested lists with numbering.xml marker resolution, tables, run bold/italic/underline/strike/superscript/subscript/color/font-size/font-family/highlight, hyperlinks, embedded images, footnote references, footnote bodies from footnotes.xml, Office Math formulas, and core metadata. Tracked changes, comments, page-break layout, and complex character properties remain partial".into(),
         status: SemanticStatus::Partial,
     });
     Ok(graph)
