@@ -77,6 +77,25 @@ fn collect_blocks<'a>(graph: &'a DocumentGraph, filter: &dyn Fn(&Block) -> bool)
     graph.blocks.iter().map(|node| &node.block).filter(|block| filter(*block)).collect()
 }
 
+fn ordered_list_starting_with<'a>(graph: &'a DocumentGraph, marker: &str) -> &'a Block {
+    graph
+        .blocks
+        .iter()
+        .map(|node| &node.block)
+        .find(|block| {
+            matches!(block, Block::List { ordered: true, items }
+                if matches!(items.first().map(|item| item.content.as_slice()), Some([Inline::Text { text }]) if text == marker))
+        })
+        .unwrap_or_else(|| panic!("ordered list starting with `{marker}`: {:?}", graph.blocks))
+}
+
+fn item_numbers(list: &Block) -> Vec<Option<u32>> {
+    let Block::List { items, .. } = list else {
+        panic!("not a list: {list:?}")
+    };
+    items.iter().map(|item| item.number).collect()
+}
+
 /// A semantic `<table>` lowers to `Block::Table`; the raw markup never survives
 /// as `Block::RawHtml`.
 #[test]
@@ -232,4 +251,25 @@ fn epub_css_stylesheets_stay_fail_closed_with_diagnostics() {
     assert_eq!(loss(&embedded, "import.epub.css_inline_block_unsupported"), SemanticStatus::Unsupported);
     let markdown = export_markdown(&embedded).expect("markdown export");
     assert!(markdown.contains("Styled paragraph."), "{markdown}");
+}
+
+/// `<li value>` shifts the ordinal while it stays increasing. A backward reset
+/// and `<ol reversed>` cannot fit the IR invariant, so both keep the list valid
+/// and record an explicit loss.
+#[test]
+fn epub_list_value_and_reversed_are_explicit() {
+    let graph = import_epub_bytes("list-value-reversed.epub", &read_fixture("epub/list-value-reversed.epub"))
+        .expect("epub import");
+    assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
+
+    let shifted = ordered_list_starting_with(&graph, "two");
+    assert_eq!(item_numbers(shifted), vec![Some(2), Some(5), Some(6)], "`value=\"5\"` must move the run");
+
+    let reset = ordered_list_starting_with(&graph, "one");
+    assert_eq!(item_numbers(reset), vec![Some(1), Some(2)], "a backward `value` keeps the running sequence");
+    assert_eq!(loss(&graph, "import.epub.list_item_value_unsupported"), SemanticStatus::Partial);
+
+    let reversed = ordered_list_starting_with(&graph, "a");
+    assert_eq!(item_numbers(reversed), vec![Some(1), Some(2)], "reversed lists fall back to ascending ordinals");
+    assert_eq!(loss(&graph, "import.epub.list_reversed_unsupported"), SemanticStatus::Partial);
 }

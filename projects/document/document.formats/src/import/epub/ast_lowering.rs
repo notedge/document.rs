@@ -229,15 +229,52 @@ fn collect_list_items(
     member_path: Option<&str>,
     losses: &mut Vec<LossMarker>,
 ) -> Vec<ListItem> {
-    let mut number = start.unwrap_or(1);
+    // The IR only carries positive, strictly increasing ordinals. HTML's
+    // `reversed` asks for descending ordinals, which the model cannot express,
+    // so the sequence stays ascending and the downgrade is recorded.
+    if ordered && has_attribute(element, "reversed") {
+        losses.push(LossMarker {
+            code: "import.epub.list_reversed_unsupported".into(),
+            message: "`<ol reversed>` descending ordinals are not representable in the IR list model, so items are numbered ascending"
+                .into(),
+            status: SemanticStatus::Partial,
+        });
+    }
+    let mut next = start.unwrap_or(1);
     child_elements(element, "li")
         .into_iter()
         .map(|li| {
-            let item_number = ordered.then_some(number);
-            number = number.saturating_add(1);
+            let mut item_number = ordered.then_some(next);
+            if ordered {
+                // `<li value>` moves the ordinal for this item and the following
+                // run. Honour it while it stays strictly increasing. A backward
+                // reset would violate the IR invariant, so the authored value is
+                // recorded and the running counter continues instead.
+                match attribute_value(li, "value").map(|value| value.trim().parse::<u32>()) {
+                    Some(Ok(value)) if value > 0 && value >= next => {
+                        item_number = Some(value);
+                        next = value.saturating_add(1);
+                    }
+                    Some(_) => {
+                        losses.push(LossMarker {
+                            code: "import.epub.list_item_value_unsupported".into(),
+                            message:
+                                "`<li value>` would break the strictly increasing ordinal invariant, so the running sequence continues"
+                                    .into(),
+                            status: SemanticStatus::Partial,
+                        });
+                        next = next.saturating_add(1);
+                    }
+                    None => next = next.saturating_add(1),
+                }
+            }
             lower_list_item(li, item_number, graph, member_path, losses)
         })
         .collect()
+}
+
+fn has_attribute(element: &Element, name: &str) -> bool {
+    element.attributes.iter().any(|attribute| attribute.name.eq_ignore_ascii_case(name))
 }
 
 fn lower_list_item(
