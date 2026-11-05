@@ -404,15 +404,22 @@ fn write_inlines(out: &mut String, inlines: &[Inline], footnote_refs: &mut Footn
                 write!(out, "</{}>", tag).map_err(format_error)?;
             }
             Inline::Link { target, display, title } => {
-                let RelationEndpoint::ExternalUri(url) = target
-                else {
-                    return Err(FormatError::unsupported(
-                        "html",
-                        format!("link target `{target:?}` has no HTML destination mapping"),
-                    ));
+                // In-document targets reuse the `#node-{id}` destination that
+                // every block wrapper already publishes, so a `\ref` to a
+                // `\label` anchor resolves to the block it names instead of
+                // failing the whole document.
+                let destination = match target {
+                    RelationEndpoint::ExternalUri(url) => url.clone(),
+                    RelationEndpoint::Node(node) => format!("#node-{}", node.0),
+                    _ => {
+                        return Err(FormatError::unsupported(
+                            "html",
+                            format!("link target `{target:?}` has no HTML destination mapping"),
+                        ))
+                    }
                 };
                 out.push_str(r#"<a href=""#);
-                escape_attribute(out, url);
+                escape_attribute(out, &destination);
                 out.push('"');
                 write_optional_title(out, title.as_deref());
                 out.push('>');

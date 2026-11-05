@@ -3,3 +3,27 @@
 mod capability;
 mod markdown_loss_span;
 mod markdown_math_ir;
+
+/// Cross-reference and verbatim constructs that used to fail or drift.
+#[cfg(all(feature = "html", feature = "tex"))]
+mod tex_export_smoke {
+    use document_formats::{export::html::export_html, import::tex::import_tex_bytes};
+
+    #[test]
+    fn section_label_ref_resolves_to_the_block_anchor() {
+        let graph = import_tex_bytes("label-ref", "\\section{A}\\label{a}\nsee \\ref{a}\n").expect("tex import");
+        let html = export_html(&graph).expect("html export");
+        assert!(html.contains(r#"id="node-1""#), "{html}");
+        assert!(html.contains(r##"href="#node-1""##), "{html}");
+    }
+
+    #[test]
+    fn verbatim_stays_inline_code() {
+        let graph = import_tex_bytes("verb", "\\verb|a|\n").expect("tex import");
+        let html = export_html(&graph).expect("html export");
+        assert!(html.contains("<code>a</code>"), "{html}");
+        assert!(!html.contains("<pre>"), "{html}");
+    }
+}
+
+

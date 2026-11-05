@@ -943,7 +943,10 @@ impl<'a> TexLowerer<'a> {
             );
             return;
         };
-        self.push_block(sink, Block::Code { language: None, content });
+        // `\verb` is Text-mode inline material, not a block: keeping it in the
+        // paragraph stream preserves its position relative to surrounding text
+        // and stops the exporter from inventing a `<pre>` block for it.
+        sink.inlines.push(Inline::InlineCode { text: content });
     }
 
     /// Number of bytes occupied by a `\verb<delimiter>...<delimiter>` body.
