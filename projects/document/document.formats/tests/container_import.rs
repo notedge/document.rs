@@ -52,6 +52,40 @@ fn footnote_definitions(graph: &DocumentGraph) -> Vec<&str> {
         .collect()
 }
 
+fn note_labels(graph: &DocumentGraph) -> Vec<String> {
+    fn scan(inlines: &[Inline], labels: &mut Vec<String>) {
+        for inline in inlines {
+            match inline {
+                Inline::Note { label, .. } => labels.push(label.clone()),
+                Inline::Styled { children, .. } | Inline::Attributed { children, .. } => scan(children, labels),
+                Inline::Link { display, .. } => scan(display, labels),
+                _ => {}
+            }
+        }
+    }
+    let mut labels = Vec::new();
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Paragraph { content } | Block::Quote { content, .. } => scan(content, &mut labels),
+            Block::Section { title, .. } => scan(title, &mut labels),
+            Block::List { items, .. } => {
+                for item in items {
+                    scan(&item.content, &mut labels);
+                }
+            }
+            Block::Table { rows, .. } => {
+                for row in rows {
+                    for cell in &row.cells {
+                        scan(&cell.content, &mut labels);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    labels
+}
+
 fn has_attributed_class(graph: &DocumentGraph, class: &str) -> bool {
     fn scan(inlines: &[Inline], class: &str) -> bool {
         inlines.iter().any(|inline| match inline {
@@ -272,4 +306,44 @@ fn epub_list_value_and_reversed_are_explicit() {
     let reversed = ordered_list_starting_with(&graph, "a");
     assert_eq!(item_numbers(reversed), vec![Some(1), Some(2)], "reversed lists fall back to ascending ordinals");
     assert_eq!(loss(&graph, "import.epub.list_reversed_unsupported"), SemanticStatus::Partial);
+}
+
+/// `<a epub:type="noteref">` and `<aside epub:type="footnote">` lower to the
+/// same semantic shapes as the HTML endnotes path, so the Markdown writer can
+/// emit real `[^label]` references and definitions.
+#[test]
+fn epub_structural_footnotes_become_notes_and_definitions() {
+    let graph = import_epub_bytes("footnotes.epub", &read_fixture("epub/footnotes.epub")).expect("epub import");
+    assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
+    assert_eq!(note_labels(&graph), vec!["1".to_string(), "2".to_string()], "{:?}", graph.blocks);
+    assert_eq!(footnote_definitions(&graph), vec!["[^1]: Note one.", "[^2]: Note two."]);
+    assert!(!loss_codes(&graph).iter().any(|code| code == "import.epub.unsupported_xhtml_block"), "{:?}", loss_codes(&graph));
+    let markdown = export_markdown(&graph).expect("markdown export");
+    assert!(markdown.contains("Body with one note[^1]"), "{markdown}");
+    assert!(markdown.contains("another[^2]."), "{markdown}");
+    assert!(markdown.contains("[^1]: Note one."), "{markdown}");
+    assert!(markdown.contains("[^2]: Note two."), "{markdown}");
+}
+
+/// A reference without a definition keeps its note label. Duplicate asides
+/// stay explicit definition blocks instead of being merged or dropped.
+#[test]
+fn epub_footnote_reference_without_definition_stays_a_note() {
+    let graph = import_epub_bytes("footnotes-edge.epub", &read_fixture("epub/footnotes-edge.epub")).expect("epub import");
+    assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
+    let notes = note_labels(&graph);
+    assert!(notes.iter().any(|label| label == "9"), "{notes:?}");
+    assert!(notes.iter().any(|label| label == "3"), "{notes:?}");
+    let definitions = footnote_definitions(&graph);
+    assert!(!definitions.iter().any(|definition| definition.starts_with("[^9]:")), "{definitions:?}");
+    assert_eq!(
+        definitions.iter().filter(|definition| definition.starts_with("[^3]:")).count(),
+        2,
+        "both duplicate definitions stay visible: {definitions:?}"
+    );
+    let markdown = export_markdown(&graph).expect("markdown export");
+    assert!(markdown.contains("[^9]"), "{markdown}");
+    assert!(!markdown.contains("[^9]:"), "{markdown}");
+    assert!(markdown.contains("[^3]: First copy."), "{markdown}");
+    assert!(markdown.contains("[^3]: Second copy."), "{markdown}");
 }

@@ -189,6 +189,7 @@ fn lower_semantic_block(
                 });
                 None
             }),
+        "aside" if is_footnote_aside(element) => lower_footnote_definition(element, losses),
         "table" => {
             let rows = collect_table_rows(element, graph, member_path, losses);
             if rows.is_empty() { None } else { Some(Block::Table { caption: None, rows }) }
@@ -206,6 +207,80 @@ fn lower_semantic_block(
 
 fn non_empty_inlines(inlines: Vec<Inline>) -> Option<Vec<Inline>> {
     if inlines.is_empty() { None } else { Some(inlines) }
+}
+
+/// Whether an `<aside>` declares the EPUB structural footnote marker.
+fn is_footnote_aside(element: &Element) -> bool {
+    attribute_value(element, "epub:type")
+        .is_some_and(|value| value.split_whitespace().any(|token| token.eq_ignore_ascii_case("footnote")))
+}
+
+/// Lower `<aside epub:type="footnote">` to the opaque authored payload shape.
+///
+/// Footnote bodies are opaque IR payloads, so the aside must not leak its
+/// paragraph structure. The label follows the HTML endnotes path:
+/// `data-footnote-label` wins, otherwise the `id` drops an `fn` prefix and an
+/// optional `-`. A missing label records an explicit loss so the body stays as
+/// ordinary content instead of becoming an unusable definition.
+fn lower_footnote_definition(element: &Element, losses: &mut Vec<LossMarker>) -> Option<Block> {
+    let label = attribute_value(element, "data-footnote-label")
+        .or_else(|| attribute_value(element, "id").and_then(|id| footnote_label(&id)))
+        .map(|label| label.trim().to_string())
+        .filter(|label| !label.is_empty());
+    let Some(label) = label
+    else {
+        losses.push(LossMarker {
+            code: "import.epub.footnote_definition_unlabelled".into(),
+            message: "`<aside epub:type=\"footnote\">` has neither `id` nor `data-footnote-label`, so its body stays as ordinary content"
+                .into(),
+            status: SemanticStatus::Partial,
+        });
+        return None;
+    };
+    let body = descendant_text(element);
+    Some(Block::Opaque {
+        kind: "footnote_definition".into(),
+        payload_hint: format!("[^{label}]: {body}"),
+        status: SemanticStatus::Resolved,
+    })
+}
+
+/// Whether an anchor declares an EPUB footnote reference marker.
+fn is_footnote_reference(element: &Element) -> bool {
+    attribute_value(element, "epub:type")
+        .is_some_and(|value| value.split_whitespace().any(|token| token.eq_ignore_ascii_case("noteref")))
+        || attribute_value(element, "role").is_some_and(|role| role.eq_ignore_ascii_case("doc-noteref"))
+}
+
+/// Collapse `<a epub:type="noteref" href="#fn1">` to `Inline::Note`.
+///
+/// The HTML path's label and display rules apply: the label comes from
+/// `data-footnote-label` or the fragment with an `fn` prefix (plus optional
+/// `-`) removed, and the authored marker text only survives as a custom
+/// display when it differs from the label or `[^label]`. A reference whose
+/// label cannot be resolved falls back to the ordinary anchor path.
+fn footnote_reference_inline(element: &Element) -> Option<Inline> {
+    let from_href = attribute_value(element, "href")
+        .and_then(|href| href.trim().strip_prefix('#').map(|fragment| footnote_label(fragment)))
+        .flatten();
+    let label = attribute_value(element, "data-footnote-label")
+        .or(from_href)
+        .map(|label| label.trim().to_string())
+        .filter(|label| !label.is_empty())?;
+    let text = descendant_text(element);
+    let gfm_marker = format!("[^{label}]");
+    let is_default = text.is_empty() || text == label || text == gfm_marker;
+    let display = (!is_default).then(|| vec![Inline::Text { text }]);
+    Some(Inline::Note { label, display })
+}
+
+/// Normalize a fragment or element id into a footnote label.
+///
+/// Both sides of the reference/definition pair use this, so `#fn-1` and
+/// `id="fn-1"` agree while an authored id such as `note1` is kept verbatim.
+fn footnote_label(value: &str) -> Option<String> {
+    let value = value.trim().strip_prefix("fn").map(|rest| rest.trim_start_matches('-')).unwrap_or(value.trim());
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 fn lower_figcaption_block(
@@ -426,6 +501,14 @@ fn lower_inline_element(
     losses: &mut Vec<LossMarker>,
 ) -> Option<Inline> {
     let tag = element.tag_name.to_ascii_lowercase();
+    // Footnote references are semantic inlines, not external links. Return
+    // before the attribute wrapper so the note label is not hidden inside an
+    // `Inline::Attributed` the Markdown writer cannot spell.
+    if is_footnote_reference(element) {
+        if let Some(note) = footnote_reference_inline(element) {
+            return Some(note);
+        }
+    }
     let lowered = match tag.as_str() {
         "img" => {
             let src = attribute_value(element, "src").unwrap_or_default();
