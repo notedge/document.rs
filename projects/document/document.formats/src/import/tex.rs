@@ -783,18 +783,20 @@ impl<'a> TexLowerer<'a> {
                     .filter(|option| !option.is_empty())
                     .collect::<Vec<_>>();
                 if !options.is_empty() {
-                    // `Inline::Image` carries the target only, so sizing and
-                    // placement options cannot be reproduced. The code is hard
-                    // (`Unsupported`) instead of a soft approximation marker, so
-                    // the construct is measured as an explicit refusal rather
-                    // than claimed as passed while the size is discarded.
+                    // The image itself is kept: only the optional sizing and
+                    // placement options are discarded because `Inline::Image`
+                    // has no field for them. That is an accepted construct with
+                    // a known loss, so the marker stays in the loss class
+                    // (`Partial`). `SemanticStatus::Unsupported` is reserved for
+                    // whole-construct refusals and would misreport an image that
+                    // did reach the document as rejected.
                     self.loss(
                         "import.tex.image_dimensions",
                         format!(
-                            "image options [{}] have no image node field and are not reproduced; only the target path is kept",
+                            "image kept with its target path, sizing options [{}] ignored because `Inline::Image` has no size field",
                             options.join("] [")
                         ),
-                        SemanticStatus::Unsupported,
+                        SemanticStatus::Partial,
                     );
                 }
                 InlineOutcome::Inline(Inline::Image { source, alt: Vec::new(), title: None, asset: None })

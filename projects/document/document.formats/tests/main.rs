@@ -24,6 +24,20 @@ mod tex_export_smoke {
         assert!(html.contains("<code>a</code>"), "{html}");
         assert!(!html.contains("<pre>"), "{html}");
     }
+
+    #[test]
+    fn sizing_options_are_a_loss_not_a_refusal() {
+        let graph = import_tex_bytes("sizing", "\\includegraphics[width=2cm]{a.png}\n").expect("tex import");
+        let marker = graph
+            .coverage
+            .loss
+            .iter()
+            .find(|marker| marker.code == "import.tex.image_dimensions")
+            .expect("sizing loss marker");
+        assert_eq!(marker.status, document_ir::SemanticStatus::Partial, "{:?}", graph.coverage.loss);
+        let html = export_html(&graph).expect("html export");
+        assert!(html.contains(r#"src="a.png""#), "{html}");
+    }
 }
 
 /// Constructs the HTML projection degrades or defers instead of failing.
