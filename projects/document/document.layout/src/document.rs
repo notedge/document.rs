@@ -1221,8 +1221,16 @@ impl<'a> PageBuilder<'a> {
                 Block::Opaque { kind, .. } if kind == "tex.environment.tikzpicture" => {
                     self.emit_diagram(*id, indent);
                 }
-                // Opaque payloads with no layout meaning are dropped, not guessed.
-                Block::Opaque { .. } => {}
+                // Opaque payloads with no layout meaning are left out of the
+                // page, but never silently: the kind is reported as a
+                // diagnostic so the caller sees which construct was not laid
+                // out.
+                Block::Opaque { kind, .. } => self.diagnostics.push(Diagnostic {
+                    code: "vutex.layout.opaque_skipped".to_string(),
+                    severity: Severity::Warning,
+                    message: format!("opaque block `{kind}` has no layout meaning and was left out of the page"),
+                    span: None,
+                }),
                 // Raw HTML is emitted as-is at render time; layout drops it.
                 Block::RawHtml { .. } => {}
             }
