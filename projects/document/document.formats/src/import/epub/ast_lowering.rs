@@ -119,8 +119,13 @@ fn lower_semantic_block(
         }
         "figcaption" => lower_figcaption_block(element, graph, member_path, losses),
         "ul" | "ol" => {
-            let items = collect_list_items(element, graph, member_path, losses);
-            if items.is_empty() { None } else { Some(Block::List { ordered: tag == "ol", items }) }
+            let ordered = tag == "ol";
+            // Ordered items must carry their number: the IR validator refuses
+            // lists whose items lack one. `<ol start="n">` shifts the sequence,
+            // unordered items stay unnumbered.
+            let start = ordered.then(|| ordered_list_start(element));
+            let items = collect_list_items(element, ordered, start, graph, member_path, losses);
+            if items.is_empty() { None } else { Some(Block::List { ordered, items }) }
         }
         "blockquote" => {
             let inner = collect_child_blocks(element, graph, member_path, losses);
@@ -218,15 +223,26 @@ fn lower_figcaption_block(
 
 fn collect_list_items(
     element: &Element,
+    ordered: bool,
+    start: Option<u32>,
     graph: &mut DocumentGraph,
     member_path: Option<&str>,
     losses: &mut Vec<LossMarker>,
 ) -> Vec<ListItem> {
-    child_elements(element, "li").into_iter().map(|li| lower_list_item(li, graph, member_path, losses)).collect()
+    let mut number = start.unwrap_or(1);
+    child_elements(element, "li")
+        .into_iter()
+        .map(|li| {
+            let item_number = ordered.then_some(number);
+            number = number.saturating_add(1);
+            lower_list_item(li, item_number, graph, member_path, losses)
+        })
+        .collect()
 }
 
 fn lower_list_item(
     li: &Element,
+    number: Option<u32>,
     graph: &mut DocumentGraph,
     member_path: Option<&str>,
     losses: &mut Vec<LossMarker>,
@@ -246,9 +262,18 @@ fn lower_list_item(
                 let tag = child_element.tag_name.to_ascii_lowercase();
                 match tag.as_str() {
                     "ul" | "ol" => {
-                        let nested = collect_list_items(child_element, graph, member_path, losses);
+                        let nested_ordered = tag == "ol";
+                        let nested_start = nested_ordered.then(|| ordered_list_start(child_element));
+                        let nested = collect_list_items(
+                            child_element,
+                            nested_ordered,
+                            nested_start,
+                            graph,
+                            member_path,
+                            losses,
+                        );
                         if !nested.is_empty() {
-                            let id = graph.push_block(Block::List { ordered: tag == "ol", items: nested });
+                            let id = graph.push_block(Block::List { ordered: nested_ordered, items: nested });
                             children.push(id);
                         }
                     }
@@ -267,7 +292,16 @@ fn lower_list_item(
             HtmlNode::Comment(_) => {}
         }
     }
-    ListItem { content, children, number: None, is_task: false, is_checked: None }
+    ListItem { content, children, number, is_task: false, is_checked: None }
+}
+
+/// Read the `start` ordinal of an `<ol>`.
+///
+/// HTML allows any integer there, but the IR only carries positive, strictly
+/// increasing ordinals, so a non-positive or malformed value falls back to the
+/// default sequence.
+fn ordered_list_start(element: &Element) -> u32 {
+    attribute_value(element, "start").and_then(|value| value.trim().parse::<u32>().ok()).filter(|value| *value > 0).unwrap_or(1)
 }
 
 fn collect_table_rows(
