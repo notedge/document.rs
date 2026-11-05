@@ -43,6 +43,19 @@ impl FontMetricsSystem {
         self.metrics_cache.get(family).is_some_and(|data| data.glyphs.contains_key(&normalized))
     }
 
+    /// The script or script-script design the font publishes for `key`.
+    ///
+    /// `level` is 1 for script style and 2 for script-script style. A miss
+    /// means the font publishes no `ssty` alternate for this glyph, and the
+    /// caller keeps the base design.
+    pub fn script_variant(&self, key: &GlyphKey, level: usize) -> Option<GlyphKey> {
+        let family = key.font_family.as_deref().unwrap_or("default");
+        let normalized = GlyphKey { font_family: Some(family.to_string()), ..key.clone() };
+        let data = self.metrics_cache.get(family)?;
+        let variants = data.script_variants.get(&normalized)?;
+        variants.get(level.checked_sub(1)?).cloned()
+    }
+
     pub fn get_metrics(&self, key: &GlyphKey) -> MathResult<GlyphMetrics> {
         let family = key.font_family.as_deref().unwrap_or("default");
         // Normalize key: layout passes None family, but rekey_family stores
@@ -342,6 +355,23 @@ fn rekey_family<V>(map: HashMap<GlyphKey, V>, new_family: &str) -> HashMap<Glyph
         .collect()
 }
 
+/// Re-key the `ssty` alternate map, including the variant keys it points at.
+fn rekey_script_variants(
+    map: HashMap<GlyphKey, Vec<GlyphKey>>,
+    new_family: &str,
+) -> HashMap<GlyphKey, Vec<GlyphKey>> {
+    let family = Some(new_family.to_string());
+    map.into_iter()
+        .map(|(mut key, mut variants)| {
+            key.font_family = family.clone();
+            for variant in &mut variants {
+                variant.font_family = family.clone();
+            }
+            (key, variants)
+        })
+        .collect()
+}
+
 /// Re-key a delimiter map, including the glyph keys nested in every construction.
 ///
 /// Layout reads the variant and assembly glyph keys straight out of the
@@ -412,6 +442,7 @@ fn builtin_font_metrics_from(opentype_data: Option<FontMetricsData>) -> FontMetr
             glyphs: rekey_family(opentype_data.glyphs, &family_str),
             glyph_paths: rekey_family(opentype_data.glyph_paths, &family_str),
             delimiters: rekey_delimiters(opentype_data.delimiters, &family_str),
+            script_variants: rekey_script_variants(opentype_data.script_variants, &family_str),
         }
     }
     else {

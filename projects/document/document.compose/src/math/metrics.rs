@@ -100,6 +100,11 @@ pub struct FontMetricsData {
     pub glyphs: std::collections::HashMap<GlyphKey, GlyphMetrics>,
     pub glyph_paths: std::collections::HashMap<GlyphKey, String>,
     pub delimiters: std::collections::HashMap<GlyphKey, DelimiterConstruction>,
+    /// OpenType `ssty` script-style alternates, in level order: the first entry
+    /// is the script design and the second the script-script design. Keyed by
+    /// the base glyph key, empty when the font publishes no such feature.
+    #[serde(default)]
+    pub script_variants: std::collections::HashMap<GlyphKey, Vec<GlyphKey>>,
 }
 
 impl FontMetricsData {
@@ -111,6 +116,7 @@ impl FontMetricsData {
             glyphs: std::collections::HashMap::new(),
             glyph_paths: std::collections::HashMap::new(),
             delimiters: std::collections::HashMap::new(),
+            script_variants: std::collections::HashMap::new(),
         }
     }
 }

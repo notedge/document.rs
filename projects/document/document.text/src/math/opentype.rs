@@ -17,6 +17,8 @@
 //! [`super::font_metrics::builtin_font_metrics`] when the font cannot be
 //! parsed or carries no MATH table.
 
+use std::collections::HashMap;
+
 use acorn_ttf::{FontFace, OutlineBuilder};
 
 use document_compose::math::{
@@ -24,7 +26,7 @@ use document_compose::math::{
     alphalect_sources, alphalect_styles, math_alphalect,
 };
 
-use super::facts::{MathFontFacts, StretchAxis};
+use super::facts::{GlyphId, MathFontFacts, StretchAxis};
 
 /// Selectable OpenType MATH font families.
 ///
@@ -351,6 +353,171 @@ pub fn opentype_font_metrics(family: MathFontFamily) -> Option<FontMetricsData> 
 // Glyph metrics + outline paths
 // ---------------------------------------------------------------------------
 
+/// Script-style glyph alternates published through the OpenType `ssty` feature.
+///
+/// The feature maps each covered glyph to the designs a renderer must use when
+/// the glyph sits in script (first alternate) or script-script (second
+/// alternate) style. Latin Modern Math's `.st` designs are wider than the base
+/// letter — `𝑥` advances 0.648 em instead of 0.572 em — so a script that keeps
+/// the base design under-advances and every following glyph drifts left.
+///
+/// The table is small and only one feature is read: coverage plus alternate
+/// sets, reached through the `ssty` feature's lookup indices. Extension lookups
+/// are unwrapped because the font may publish them that way. A font without
+/// `GSUB` or without `ssty` answers an empty map.
+fn ssty_alternates(face: &FontFace) -> HashMap<u16, Vec<u16>> {
+    let Some(gsub) = face.table_bytes(b"GSUB")
+    else {
+        return HashMap::new();
+    };
+    let Some(feature_list) = read_u16(gsub, 6).map(usize::from)
+    else {
+        return HashMap::new();
+    };
+    let Some(lookup_list) = read_u16(gsub, 8).map(usize::from)
+    else {
+        return HashMap::new();
+    };
+    let Some(feature_count) = read_u16(gsub, feature_list)
+    else {
+        return HashMap::new();
+    };
+
+    let mut lookup_indices = Vec::new();
+    for index in 0..usize::from(feature_count) {
+        let record = feature_list + 2 + index * 6;
+        if gsub.get(record..record + 4) != Some(b"ssty".as_slice()) {
+            continue;
+        }
+        let Some(feature) = read_u16(gsub, record + 4).map(|offset| feature_list + usize::from(offset))
+        else {
+            return HashMap::new();
+        };
+        let Some(count) = read_u16(gsub, feature + 2)
+        else {
+            return HashMap::new();
+        };
+        for lookup in 0..usize::from(count) {
+            if let Some(value) = read_u16(gsub, feature + 4 + lookup * 2) {
+                lookup_indices.push(usize::from(value));
+            }
+        }
+    }
+
+    let mut alternates: HashMap<u16, Vec<u16>> = HashMap::new();
+    for lookup_index in lookup_indices {
+        let Some(lookup) = read_u16(gsub, lookup_list + 2 + lookup_index * 2).map(|offset| lookup_list + usize::from(offset))
+        else {
+            continue;
+        };
+        let Some(types) = read_u16(gsub, lookup)
+        else {
+            continue;
+        };
+        let Some(count) = read_u16(gsub, lookup + 4)
+        else {
+            continue;
+        };
+        for subtable in 0..usize::from(count) {
+            let Some(offset) = read_u16(gsub, lookup + 6 + subtable * 2).map(usize::from)
+            else {
+                continue;
+            };
+            let mut table = lookup + offset;
+            let mut table_type = types;
+            if table_type == 7 {
+                // ExtensionSubst: the real lookup type and a 32-bit offset
+                // relative to the extension subtable.
+                let Some(extension_type) = read_u16(gsub, table + 2)
+                else {
+                    continue;
+                };
+                let Some(extension_offset) = read_u32(gsub, table + 4).map(|value| usize::try_from(value).unwrap_or(0))
+                else {
+                    continue;
+                };
+                table_type = extension_type;
+                table += extension_offset;
+            }
+            if table_type != 3 {
+                // Only AlternateSubst carries `ssty` designs.
+                continue;
+            }
+            let Some(coverage_offset) = read_u16(gsub, table + 2).map(usize::from)
+            else {
+                continue;
+            };
+            let Some(set_count) = read_u16(gsub, table + 4)
+            else {
+                continue;
+            };
+            let Some(covered) = read_coverage(gsub, table + coverage_offset)
+            else {
+                continue;
+            };
+            for (index, glyph) in covered.into_iter().enumerate() {
+                if index >= usize::from(set_count) {
+                    break;
+                }
+                let Some(set_offset) = read_u16(gsub, table + 6 + index * 2).map(usize::from)
+                else {
+                    continue;
+                };
+                let set = table + set_offset;
+                let Some(alternate_count) = read_u16(gsub, set)
+                else {
+                    continue;
+                };
+                let mut designs = Vec::new();
+                for alternate in 0..usize::from(alternate_count) {
+                    if let Some(value) = read_u16(gsub, set + 2 + alternate * 2) {
+                        designs.push(value);
+                    }
+                }
+                if !designs.is_empty() {
+                    alternates.insert(glyph, designs);
+                }
+            }
+        }
+    }
+    alternates
+}
+
+fn read_u16(data: &[u8], offset: usize) -> Option<u16> {
+    Some(u16::from_be_bytes([*data.get(offset)?, *data.get(offset + 1)?]))
+}
+
+fn read_u32(data: &[u8], offset: usize) -> Option<u32> {
+    Some(u32::from_be_bytes([*data.get(offset)?, *data.get(offset + 1)?, *data.get(offset + 2)?, *data.get(offset + 3)?]))
+}
+
+/// Glyph ids in a Coverage table, format 1 or 2.
+fn read_coverage(data: &[u8], offset: usize) -> Option<Vec<u16>> {
+    let format = read_u16(data, offset)?;
+    match format {
+        1 => {
+            let count = read_u16(data, offset + 2)?;
+            let mut glyphs = Vec::with_capacity(usize::from(count));
+            for index in 0..usize::from(count) {
+                glyphs.push(read_u16(data, offset + 4 + index * 2)?);
+            }
+            Some(glyphs)
+        }
+        2 => {
+            let count = read_u16(data, offset + 2)?;
+            let mut glyphs = Vec::new();
+            for index in 0..usize::from(count) {
+                let range = offset + 4 + index * 6;
+                let start = read_u16(data, range)?;
+                let end = read_u16(data, range + 2)?;
+                glyphs.extend(start..=end);
+            }
+            Some(glyphs)
+        }
+        _ => None,
+    }
+}
+
 /// Project the metrics and outline of every character in the product's glyph
 /// scope.
 ///
@@ -364,6 +531,7 @@ fn extract_glyph_metrics_and_outlines(
     family: &str,
 ) {
     let family = Some(family.to_string());
+    let alternates = ssty_alternates(face);
 
     // U+0020 is included: text-mode spaces are horizontal advances taken from
     // the font, and skipping it made every `\text{a b}` space fall back to the
@@ -396,8 +564,45 @@ fn extract_glyph_metrics_and_outlines(
         data.glyphs.insert(normal_key.clone(), metrics);
 
         if let Some(path) = glyph_outline(face, gid, one_em) {
-            data.glyph_paths.insert(math_key, path.clone());
-            data.glyph_paths.insert(normal_key, path);
+            data.glyph_paths.insert(math_key.clone(), path.clone());
+            data.glyph_paths.insert(normal_key.clone(), path);
+        }
+
+        // `ssty` designs keep their authored character so downstream paint and
+        // tests can still name the symbol, and carry an explicit glyph id so
+        // alphalect resolution never rewrites them back to the base design.
+        let Some(designs) = alternates.get(&gid)
+        else {
+            continue;
+        };
+        for design in designs.iter().take(2) {
+            let design = GlyphId::new(*design);
+            let advance = advance_em(face, design.get(), one_em);
+            let ink = ink_from_bounds(face, design.get(), one_em).unwrap_or(SYNTHETIC_INK);
+            let math = facts.glyph_math(design);
+            let metrics = GlyphMetrics {
+                width: width_from_advance(advance),
+                height: Fixed::from_f64(ink.0),
+                depth: Fixed::from_f64(ink.1),
+                italic_correction: math.and_then(|math| math.italic_correction()).unwrap_or(UNCOVERED_MATH_METRIC),
+                top_accent_attachment: math.and_then(|math| math.top_accent_attachment()).unwrap_or(UNCOVERED_MATH_METRIC),
+            };
+            let variant = |style| GlyphKey {
+                char: Some(ch),
+                glyph_id: Some(design.get()),
+                font_family: family.clone(),
+                style,
+            };
+            let math_variant = variant(FontStyle::Math);
+            let normal_variant = variant(FontStyle::Normal);
+            data.glyphs.insert(math_variant.clone(), metrics);
+            data.glyphs.insert(normal_variant.clone(), metrics);
+            if let Some(path) = glyph_outline(face, design.get(), one_em) {
+                data.glyph_paths.insert(math_variant.clone(), path.clone());
+                data.glyph_paths.insert(normal_variant.clone(), path);
+            }
+            data.script_variants.entry(math_key.clone()).or_default().push(math_variant);
+            data.script_variants.entry(normal_key.clone()).or_default().push(normal_variant);
         }
     }
 }
