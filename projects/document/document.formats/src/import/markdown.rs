@@ -1050,8 +1050,8 @@ fn parse_inline_link(node: RedNode<MarkdownLanguage>, source: &SourceText, conte
     let raw = node.text(source);
     let span = node.span();
     let site = SourceSpan { start: span.start as u32, end: span.end as u32 };
-    if let Some((text, url, title)) = resolve_link_destination(raw.as_ref(), context, site) {
-        return Some(Inline::Link { target: RelationEndpoint::ExternalUri(url), display: vec![Inline::Text { text }], title });
+    if let Some((_, url, title)) = resolve_link_destination(raw.as_ref(), context, site) {
+        return Some(Inline::Link { target: RelationEndpoint::ExternalUri(url), display: link_display(raw.as_ref()), title });
     }
     Some(Inline::Text { text: decode_escaped_text(raw.trim_end()) })
 }
@@ -1101,10 +1101,10 @@ fn resolve_link_destination(
 }
 
 fn split_markdown_link(raw: &str) -> Option<(String, String, Option<String>)> {
-    let start = raw.find("](")?;
-    let label = raw[..start].trim();
+    let end = outer_label_end(raw)?;
+    let label = raw[..end].trim();
     let text = decode_escaped_text(label.strip_prefix("![").or_else(|| label.strip_prefix('['))?);
-    let destination = &raw[start + 2..];
+    let destination = raw.get(end + 1..)?.strip_prefix('(')?;
     let close = link_destination_close(destination)?;
     let (url, title) = split_destination_and_title(destination[..close].trim());
     // An empty alt text is valid CommonMark (`![](i.png)`), so only the
@@ -1113,6 +1113,57 @@ fn split_markdown_link(raw: &str) -> Option<(String, String, Option<String>)> {
         return None;
     }
     Some((text, url, title))
+}
+
+/// Byte index of the `]` that closes the outermost link or image label.
+///
+/// CommonMark allows balanced brackets inside link text, so `[![a](i.png)](/u)`
+/// is one link whose text is an image. Anchoring on the first `](` truncates
+/// exactly that construct, so the closing bracket is found by depth instead.
+fn outer_label_end(raw: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut escaped = false;
+    for (index, character) in raw.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match character {
+            '\\' => escaped = true,
+            '[' => depth += 1,
+            ']' => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Link text as inline content, so text nested inside the label keeps its own
+/// form instead of collapsing into its markup spelling.
+fn link_display(raw: &str) -> Vec<Inline> {
+    let Some(end) = outer_label_end(raw)
+    else {
+        return vec![Inline::Text { text: decode_escaped_text(raw.trim_end()) }];
+    };
+    let label = raw[..end].trim();
+    // The label keeps its own `[` prefix, so strip it before looking at what
+    // the link text is made of.
+    let inner = label.strip_prefix('[').unwrap_or(label);
+    if let Some((alt, url, title)) = split_markdown_link(inner) {
+        if inner.starts_with("![") {
+            return vec![Inline::Image { source: url, alt: vec![Inline::Text { text: alt }], title, asset: None }];
+        }
+    }
+    let text = inner.strip_prefix("![").or_else(|| inner.strip_prefix('[')).unwrap_or(inner);
+    vec![Inline::Text { text: decode_escaped_text(text) }]
 }
 
 /// Split a CommonMark destination from its optional trailing title.
@@ -1174,11 +1225,11 @@ fn strip_math_delimiters(text: &str, delimiter: &str) -> String {
 }
 
 fn trailing_link_whitespace(raw: &str) -> String {
-    let Some(start) = raw.find("](")
+    let Some(end) = outer_label_end(raw)
     else {
         return raw[raw.trim_end_matches([' ', '\t']).len()..].to_string();
     };
-    let destination = &raw[start + 2..];
+    let destination = raw.get(end + 1..).and_then(|rest| rest.strip_prefix('(')).unwrap_or("");
     let Some(close) = link_destination_close(destination)
     else {
         return String::new();

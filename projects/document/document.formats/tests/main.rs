@@ -26,4 +26,19 @@ mod tex_export_smoke {
     }
 }
 
+/// A link whose text is an image keeps both the outer link and the image.
+#[cfg(all(feature = "html", feature = "markdown"))]
+mod markdown_export_smoke {
+    use document_formats::{export::html::export_html, import::markdown::import_markdown_bytes};
+
+    #[test]
+    fn link_text_image_is_not_truncated() {
+        let graph = import_markdown_bytes("nested-image", "[![a](i.png)](/u)\n").expect("markdown import");
+        let html = export_html(&graph).expect("html export");
+        assert!(html.contains(r#"href="/u""#), "{html}");
+        assert!(html.contains(r#"src="i.png""#), "{html}");
+        assert!(html.contains(r#"alt="a""#), "{html}");
+    }
+}
+
 
