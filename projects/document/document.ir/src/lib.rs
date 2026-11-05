@@ -11,6 +11,7 @@ mod graph;
 mod id;
 mod inline;
 mod math;
+mod page;
 mod relation;
 mod source;
 mod status;
@@ -29,6 +30,7 @@ pub use math::{
     MathEnvironmentKind, MathExpression, MathFormula, MathFractionLine, MathRow, MathRowNumbering, MathRowPlacement, MathSpace,
     MathSpan, MathStyle, MathStyleKind,
 };
+pub use page::PageSetup;
 pub use relation::{Relation, RelationEndpoint, RelationKind};
 pub use source::{CoverageReport, SourceKind, SourceRef, SourceSpan};
 pub use status::{LossMarker, SemanticStatus};

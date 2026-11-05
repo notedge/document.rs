@@ -4,6 +4,7 @@ use crate::{
     asset::Asset,
     block::{Block, BlockNode},
     id::{AssetId, DocumentId, LinkId, NodeId},
+    page::PageSetup,
     relation::{Relation, RelationEndpoint, RelationKind},
     source::{CoverageReport, SourceRef, SourceSpan},
     status::LossMarker,
@@ -43,6 +44,9 @@ pub struct DocumentGraph {
     pub sources: Vec<SourceRef>,
     /// Import/export completeness summary.
     pub coverage: CoverageReport,
+    /// Page geometry and body metrics the source declared, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_setup: Option<PageSetup>,
     /// Source spans aligned with `blocks`, when an importer knew them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     block_spans: Vec<Option<SourceSpan>>,
@@ -66,6 +70,7 @@ impl DocumentGraph {
             assets: Vec::new(),
             sources: Vec::new(),
             coverage: CoverageReport { complete: true, loss: Vec::new() },
+            page_setup: None,
             block_spans: Vec::new(),
             loss_spans: Vec::new(),
             next_node: 0,
