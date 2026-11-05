@@ -49,10 +49,8 @@ pub(crate) fn trim_pdf_brackets(mut token: &[u8]) -> &[u8] {
 pub(crate) fn dictionary_value(dictionary: &[u8], key: &[u8]) -> Option<usize> {
     let start = dictionary.windows(key.len()).rposition(|window| window == key)? + key.len();
     let value = dictionary[start..].iter().position(|byte| !byte.is_ascii_whitespace()).map(|position| start + position)?;
-    let end = dictionary[value..]
-        .iter()
-        .position(|byte| byte.is_ascii_whitespace() || *byte == b'>')
-        .map_or(dictionary.len(), |position| value + position);
+    let end =
+        dictionary[value..].iter().position(|byte| pdf_delimiter(*byte)).map_or(dictionary.len(), |position| value + position);
     std::str::from_utf8(&dictionary[value..end]).ok()?.parse().ok()
 }
 pub(crate) fn skip_space(bytes: &[u8], mut cursor: usize) -> usize {

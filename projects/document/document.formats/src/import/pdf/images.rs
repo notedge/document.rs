@@ -8,7 +8,7 @@ use acorn_codec::{
 use crate::FormatError;
 
 use super::{
-    objects::{dictionary_subtype_is, dictionary_type_is, object_bodies, page_resource_sections, resource_font_references},
+    objects::{dictionary_subtype_is, dictionary_type_is, page_resource_sections, resource_font_references},
     syntax::{dictionary_value, skip_space},
     types::{PdfImage, PdfStream},
 };
@@ -20,10 +20,12 @@ fn pdf_image_zlib_limits() -> CodecLimits {
     CodecLimits::new().with_max_output_bytes(MAX_IMAGE_BYTES + 1)
 }
 
-pub(crate) fn page_images(bytes: &[u8], streams: &[PdfStream<'_>]) -> Result<HashMap<String, PdfImage>, FormatError> {
-    let bodies = object_bodies(bytes);
+pub(crate) fn page_images(
+    bodies: &[(u32, Vec<u8>)],
+    streams: &[PdfStream<'_>],
+) -> Result<HashMap<String, PdfImage>, FormatError> {
     let mut result = HashMap::new();
-    for resources in page_resource_sections(bytes) {
+    for resources in page_resource_sections(bodies) {
         let Some(xobject_start) = resources.windows(8).position(|window| window == b"/XObject")
         else {
             continue;

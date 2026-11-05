@@ -4,7 +4,7 @@ use crate::FormatError;
 
 use super::{
     encoding::win_ansi_encoding,
-    objects::{body_contains_name, body_reference, object_bodies, page_resource_sections, resource_font_references},
+    objects::{body_contains_name, body_reference, page_resource_sections, resource_font_references},
     streams::decode_stream,
     syntax::hex_bytes,
     types::PdfStream,
@@ -57,10 +57,12 @@ impl ToUnicodeMap {
     }
 }
 
-pub(crate) fn page_font_maps(bytes: &[u8], streams: &[PdfStream<'_>]) -> Result<HashMap<String, ToUnicodeMap>, FormatError> {
-    let bodies = object_bodies(bytes);
+pub(crate) fn page_font_maps(
+    bodies: &[(u32, Vec<u8>)],
+    streams: &[PdfStream<'_>],
+) -> Result<HashMap<String, ToUnicodeMap>, FormatError> {
     let mut result = HashMap::new();
-    for resources in page_resource_sections(bytes) {
+    for resources in page_resource_sections(bodies) {
         let Some(font_start) = resources.windows(5).position(|window| window == b"/Font")
         else {
             continue;

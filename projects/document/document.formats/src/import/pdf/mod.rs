@@ -24,7 +24,7 @@ use self::{
     fonts::page_font_maps,
     images::page_images,
     metadata::{append_image_asset, pdf_metadata, report_unsupported_pdf_structures},
-    objects::page_content_groups,
+    objects::{page_content_groups, scan_object_bodies},
     streams::stream_contents,
     types::ContentEvent,
 };
@@ -39,10 +39,18 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
         graph.metadata = metadata;
     }
     report_unsupported_pdf_structures(bytes, &mut graph);
-    let page_groups = page_content_groups(bytes);
+    let scan = scan_object_bodies(bytes);
+    for failure in &scan.failures {
+        graph.push_loss(LossMarker {
+            code: "import.pdf.object_stream_unreadable".into(),
+            message: format!("object stream `{}` could not be expanded: {}", failure.object_id, failure.reason),
+            status: SemanticStatus::Unresolved,
+        });
+    }
+    let page_groups = page_content_groups(&scan.bodies);
     let streams = stream_contents(bytes);
-    let font_maps = page_font_maps(bytes, &streams)?;
-    let images = page_images(bytes, &streams)?;
+    let font_maps = page_font_maps(&scan.bodies, &streams)?;
+    let images = page_images(&scan.bodies, &streams)?;
     let use_page_filter = !page_groups.is_empty();
     let page_streams = if use_page_filter {
         page_groups

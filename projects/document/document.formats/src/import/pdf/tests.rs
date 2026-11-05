@@ -89,6 +89,78 @@ fn contains_control_character(texts: &[String]) -> bool {
     texts.iter().any(|text| text.chars().any(char::is_control))
 }
 
+/// Build a one-page PDF whose only font dictionary lives in a compressed
+/// `/ObjStm` object stream.
+///
+/// Writers such as Chromium pack font and page dictionaries into object
+/// streams, so a reader that scans only top-level `N 0 obj` blocks cannot see
+/// the font and drops every glyph drawn with it.
+fn objstm_font_pdf(stream: &[u8], object_count: u32, first: u32) -> Vec<u8> {
+    let content = "BT /F1 12 Tf 20 800 Td (Object stream text) Tj ET";
+    let mut pdf = Vec::new();
+    pdf.extend_from_slice(b"%PDF-1.4\n");
+    pdf.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    pdf.extend_from_slice(b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    pdf.extend_from_slice(
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>\nendobj\n",
+    );
+    pdf.extend_from_slice(
+        format!("4 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\n", content.len()).as_bytes(),
+    );
+    pdf.extend_from_slice(
+        format!(
+            "6 0 obj\n<< /Type /ObjStm /N {object_count} /First {first} /Filter /FlateDecode /Length {} >>\nstream\n",
+            stream.len()
+        )
+        .as_bytes(),
+    );
+    pdf.extend_from_slice(stream);
+    pdf.extend_from_slice(b"\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    pdf
+}
+
+fn compressed_font_object_stream() -> (Vec<u8>, u32) {
+    let header = "5 0 ";
+    let body = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+    let decoded = format!("{header}{body}");
+    let compressed = acorn_codec::compression::zlib::Zlib::encode(
+        decoded.as_bytes(),
+        acorn_codec::compression::deflate::DeflateLevel::default(),
+    );
+    (compressed, header.len() as u32)
+}
+
+#[test]
+fn font_inside_object_stream_is_scanned() {
+    let (stream, first) = compressed_font_object_stream();
+    let pdf = objstm_font_pdf(&stream, 1, first);
+    let graph = import_pdf_bytes("objstm-font", &pdf).expect("pdf import");
+    let texts = paragraph_texts(&graph);
+
+    assert_eq!(texts, ["Object stream text"], "the font dictionary inside `/ObjStm` must be reachable");
+    assert!(
+        !graph.coverage.loss.iter().any(|loss| loss.code == "import.pdf.font_encoding_unresolved"),
+        "a font found in an object stream must not be reported as unresolved"
+    );
+}
+
+#[test]
+fn unreadable_object_stream_fails_closed_with_diagnostic() {
+    let pdf = objstm_font_pdf(b"not a zlib stream", 1, 4);
+    let graph = import_pdf_bytes("objstm-corrupt", &pdf).expect("pdf import");
+    let texts = paragraph_texts(&graph);
+
+    assert!(texts.is_empty(), "an unexpanded object stream must not yield undeclared text");
+    assert!(
+        graph.coverage.loss.iter().any(|loss| loss.code == "import.pdf.object_stream_unreadable"),
+        "an object stream that cannot be expanded must be reported"
+    );
+    assert!(
+        graph.coverage.loss.iter().any(|loss| loss.code == "import.pdf.no_extractable_text"),
+        "the importer must still fail closed when the fonts are unreachable"
+    );
+}
+
 #[test]
 fn glued_font_resource_uses_tounicode_cmap() {
     let cmap = "/CIDInit /ProcSet findresource begin\n\
