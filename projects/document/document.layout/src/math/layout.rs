@@ -1652,11 +1652,11 @@ impl LayoutEngine {
         let den_height = den_layout.height();
 
         // TeX's `make_fraction` sets the rule to the wider of the two parts,
-        // with no side bearing: `\nulldelimiterspace` belongs to the null side
-        // of a `\left.`/`\right.` pair and never pads a fractional rule.  A
-        // reference `\frac{\alpha}{\beta}` compiled by TeX puts the rule exactly
-        // on the numerator's advance width, so adding bearings would widen every
-        // display fraction beyond what TeX paints.
+        // with no side bearing.  The reference still measures one
+        // `\nulldelimiterspace` of blank on each side of a `\frac`, and a fenced
+        // `\left(\frac ab\right)` shows the same pair of gaps, so the padding is
+        // applied around the whole fraction box below instead of widening the
+        // rule.
         let width = num_width.max(den_width);
 
         let mut v_children = Vec::new();
@@ -1703,7 +1703,12 @@ impl LayoutEngine {
         // puts the fraction baseline back on the math axis: the rule centre then
         // lands exactly `AxisHeight` above it, and `height`/`depth` fold the
         // shift so the box reports its real extents around the axis.
-        let mut wrapper = self.pack_hbox(vec![vbox_node], None);
+        // `\frac` carries one `\nulldelimiterspace` on each side at the
+        // fraction's own size, which is what separates it from a fence in the
+        // reference (`\left(\frac ab\right)` keeps both gaps, `\left(x\right)`
+        // keeps none).
+        let pad = Fixed::from_f64(NULL_DELIMITER_SPACE_EM) * size;
+        let mut wrapper = self.pack_hbox(vec![LayoutNode::Kern(pad), vbox_node, LayoutNode::Kern(pad)], None);
         if let LayoutNode::HBox(ref mut h) = wrapper {
             h.shift = actual_den_shift;
         }
