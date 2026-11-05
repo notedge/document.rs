@@ -166,12 +166,20 @@ fn lower_markdown_tree(
     }
     let mut index = 0;
     let mut pending_footnote: Option<(usize, usize)> = None;
+    let mut list_stack: Vec<OpenList> = Vec::new();
     while let Some(child) = children.get(index).copied() {
         index += 1;
         let RedTree::Node(node) = child
         else {
             continue;
         };
+        // A list run is the only construct that can continue onto the next
+        // top-level node: `oak-markdown` ends a parent list at its first nested
+        // line, so the remaining sibling items come back as root-level `List`
+        // nodes. Any other block ends the run.
+        if node.element_type() != MarkdownElementType::List {
+            list_stack.clear();
+        }
         if let Some((offset, heading)) = setext_heading(node, children.get(index..).unwrap_or_default(), source, &mut context) {
             graph.push_block(heading);
             index += offset + 1;
@@ -302,6 +310,13 @@ fn lower_markdown_tree(
             if !content.is_empty() {
                 graph.push_block(Block::Paragraph { content });
             }
+            pending_footnote = None;
+            continue;
+        }
+        if node.element_type() == MarkdownElementType::List {
+            let mut flat = Vec::new();
+            collect_list_items(node, source, &mut context, &mut flat);
+            place_flat_items(&mut graph, &mut list_stack, flat);
             pending_footnote = None;
             continue;
         }
@@ -568,8 +583,9 @@ fn lower_block_node(
             BlockOutcome::Block(Block::Math { formula: lower_formula_source(&body, MathDisplay::Display, "latex") })
         }
         MarkdownElementType::List => {
-            let (ordered, items) = extract_list(node, source, context, graph);
-            BlockOutcome::Block(Block::List { ordered, items })
+            // Top-level lists are intercepted before this lowering so their
+            // levels can be rebuilt across split root nodes.
+            BlockOutcome::Skip
         }
         MarkdownElementType::Blockquote => BlockOutcome::Block(lower_blockquote(node, source, context, graph)),
         MarkdownElementType::Table => {
@@ -1387,14 +1403,86 @@ fn list_item_marker(node: RedNode<MarkdownLanguage>, source: &SourceText) -> Opt
         .map(|child| child.text(source).trim().to_string())
 }
 
-fn extract_list(
+/// One list level that is still open while flattened items are placed.
+struct OpenList {
+    indent: usize,
+    ordered: bool,
+    id: NodeId,
+}
+
+/// One list item flattened out of the `oak-markdown` tree with its authored
+/// indentation.
+///
+/// `oak-markdown` nests list nodes by tree shape rather than by authored
+/// indentation: a parent list node ends at the first indented line, deeper
+/// sibling runs come back as separate root-level `List` nodes, and a shallower
+/// item can end up inside the previous item's node. Rebuilding the levels from
+/// the marker columns is the only way to keep every sibling on its own level.
+struct FlatItem {
+    indent: usize,
+    ordered: bool,
+    number: Option<u32>,
+    is_task: bool,
+    is_checked: Option<bool>,
+    content: Vec<Inline>,
+}
+
+/// Authored column indentation of a byte offset, ignoring blockquote markers.
+fn indent_column(text: &str, offset: usize) -> usize {
+    let offset = offset.min(text.len());
+    let line_start = text
+        .get(..offset)
+        .and_then(|head| head.rfind(['\n', '\r']))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let mut columns = 0;
+    for character in text.get(line_start..offset).unwrap_or("").chars() {
+        match character {
+            '>' => columns = 0,
+            ' ' => columns += 1,
+            '\t' => columns = (columns / 4 + 1) * 4,
+            _ => break,
+        }
+    }
+    columns
+}
+
+/// Authored column indentation of one list item's marker.
+fn item_indent(node: RedNode<MarkdownLanguage>, source: &SourceText) -> usize {
+    let text = source.text();
+    node.children()
+        .find(|child| child.kind::<MarkdownElementType>() == MarkdownElementType::ListMarker)
+        .map(|marker| indent_column(text, marker.span().start))
+        .unwrap_or(0)
+}
+
+fn list_items_mut(graph: &mut DocumentGraph, id: NodeId) -> Option<&mut Vec<ListItem>> {
+    let index = graph.blocks.iter().position(|node| node.id == id)?;
+    match &mut graph.blocks[index].block {
+        Block::List { items, .. } => Some(items),
+        _ => None,
+    }
+}
+
+fn attach_list_to_last_item(graph: &mut DocumentGraph, parent: NodeId, child: NodeId) {
+    if let Some(items) = list_items_mut(graph, parent) {
+        if let Some(last) = items.last_mut() {
+            last.children.push(child);
+        }
+    }
+}
+
+/// Flatten a `List` node into source-ordered items with their indentation.
+///
+/// Nested `List` children are recursed instead of becoming child blocks, so a
+/// run that `oak-markdown` split across several root nodes is rebuilt as one
+/// sequence before the levels are reconstructed.
+fn collect_list_items(
     node: RedNode<MarkdownLanguage>,
     source: &SourceText,
     context: &mut LinkContext,
-    graph: &mut DocumentGraph,
-) -> (bool, Vec<ListItem>) {
-    let mut ordered = false;
-    let mut items = Vec::new();
+    out: &mut Vec<FlatItem>,
+) {
     for child in node.children() {
         let RedTree::Node(item_node) = child
         else {
@@ -1404,10 +1492,8 @@ fn extract_list(
             continue;
         }
         let marker = list_item_marker(item_node, source);
-        if items.is_empty() {
-            ordered =
-                marker.as_deref().and_then(|value| value.chars().next()).is_some_and(|character| character.is_ascii_digit());
-        }
+        let ordered =
+            marker.as_deref().and_then(|value| value.chars().next()).is_some_and(|character| character.is_ascii_digit());
         let number = if ordered {
             marker
                 .as_deref()
@@ -1417,11 +1503,60 @@ fn extract_list(
         else {
             None
         };
+        let indent = item_indent(item_node, source);
         let (is_task, is_checked) = extract_task_marker(item_node, source);
-        let (content, children) = lower_list_item(item_node, source, context, graph);
-        items.push(ListItem { content, children, number, is_task, is_checked });
+        let (content, nested) = lower_list_item(item_node, source, context);
+        out.push(FlatItem { indent, ordered, number, is_task, is_checked, content });
+        for nested_node in nested {
+            collect_list_items(nested_node, source, context, out);
+        }
     }
-    (ordered, items)
+}
+
+/// Place flattened items back into list blocks by authored indentation.
+///
+/// A shallower item closes the deeper levels, an item at the innermost level
+/// continues that list, and an item with a different marker type starts a new
+/// list at its own level. The stack persists across root-level `List` nodes so
+/// a continuation split by the parser still lands inside its parent.
+fn place_flat_items(graph: &mut DocumentGraph, stack: &mut Vec<OpenList>, flat: Vec<FlatItem>) {
+    for item in flat {
+        while stack.last().is_some_and(|open| open.indent > item.indent) {
+            stack.pop();
+        }
+        let continuation = match stack.last() {
+            Some(open) if open.indent == item.indent => {
+                if open.ordered == item.ordered {
+                    Some(open.id)
+                }
+                else {
+                    stack.pop();
+                    None
+                }
+            }
+            _ => None,
+        };
+        let id = match continuation {
+            Some(id) => id,
+            None => {
+                let id = graph.push_block(Block::List { ordered: item.ordered, items: Vec::new() });
+                if let Some(parent) = stack.last() {
+                    attach_list_to_last_item(graph, parent.id, id);
+                }
+                stack.push(OpenList { indent: item.indent, ordered: item.ordered, id });
+                id
+            }
+        };
+        if let Some(items) = list_items_mut(graph, id) {
+            items.push(ListItem {
+                content: item.content,
+                children: Vec::new(),
+                number: item.number,
+                is_task: item.is_task,
+                is_checked: item.is_checked,
+            });
+        }
+    }
 }
 
 /// Scan a `ListItem` node for a `TaskMarker` child (`[x]` / `[ ]` / `[X]`).
@@ -1442,12 +1577,11 @@ fn extract_task_marker(node: RedNode<MarkdownLanguage>, source: &SourceText) -> 
     (false, None)
 }
 
-fn lower_list_item(
-    node: RedNode<MarkdownLanguage>,
+fn lower_list_item<'a>(
+    node: RedNode<'a, MarkdownLanguage>,
     source: &SourceText,
     context: &mut LinkContext,
-    graph: &mut DocumentGraph,
-) -> (Vec<Inline>, Vec<NodeId>) {
+) -> (Vec<Inline>, Vec<RedNode<'a, MarkdownLanguage>>) {
     let mut content = Vec::new();
     let mut children = Vec::new();
     let mut skip_marker_space = false;
@@ -1484,8 +1618,9 @@ fn lower_list_item(
                     skip_marker_space = true;
                 }
                 else if child_node.element_type() == MarkdownElementType::List {
-                    let (nested_ordered, nested_items) = extract_list(child_node, source, context, graph);
-                    children.push(graph.push_block(Block::List { ordered: nested_ordered, items: nested_items }));
+                    // Nested lists are flattened and rebuilt by indentation, so
+                    // they are handed back instead of becoming child blocks here.
+                    children.push(child_node);
                 }
                 else if let Some(inline) = lower_inline_node(child_node, source, context) {
                     push_inline(&mut content, inline);
@@ -1507,21 +1642,46 @@ fn extract_html_block(
     trailing: &[RedTree<MarkdownLanguage>],
     source: &SourceText,
 ) -> (String, usize) {
-    let mut end = node.span().end;
+    let text = source.text();
+    let start = node.span().start;
+    let end = html_block_terminator(text, start);
     let mut consumed = 0;
     for child in trailing {
-        let (start, child_end) = match child {
-            RedTree::Node(candidate) => (candidate.span().start, candidate.span().end),
-            RedTree::Leaf(leaf) => (leaf.span().start, leaf.span().end),
+        let child_end = match child {
+            RedTree::Node(candidate) => candidate.span().end,
+            RedTree::Leaf(leaf) => leaf.span().end,
         };
-        let gap = source.slice((end..start).into());
-        if !gap.trim().is_empty() || gap.contains("\n\n") || gap.contains("\r\n\r\n") {
+        if child_end > end {
             break;
         }
-        end = child_end;
         consumed += 1;
     }
-    (source.slice((node.span().start..end).into()).into_owned(), consumed)
+    (text.get(start.min(text.len())..end.min(text.len())).unwrap_or("").to_owned(), consumed)
+}
+
+/// Byte offset of the blank line that ends a raw HTML block.
+///
+/// CommonMark ends an HTML block at the first line that holds only whitespace.
+/// The blank line itself belongs to the following content, so the returned
+/// offset is the start of that line. `oak-markdown` emits the blank line as two
+/// separate `Newline` leaves, which a sibling gap check never sees as `\n\n`,
+/// so the scan works on the source instead of the sibling spans.
+fn html_block_terminator(text: &str, start: usize) -> usize {
+    let length = text.len();
+    let mut line_start = start.min(length);
+    let mut first_line = true;
+    while line_start < length {
+        let line_end = text.get(line_start..).and_then(|rest| rest.find(['\n', '\r'])).map(|index| line_start + index).unwrap_or(length);
+        if !first_line && text.get(line_start..line_end).unwrap_or("").trim().is_empty() {
+            return line_start;
+        }
+        first_line = false;
+        if line_end >= length {
+            return length;
+        }
+        line_start = line_end + if text.get(line_end..).is_some_and(|rest| rest.starts_with("\r\n")) { 2 } else { 1 };
+    }
+    length
 }
 
 /// Whether a lexed HTML token is an authored tag rather than a stray `<`.
