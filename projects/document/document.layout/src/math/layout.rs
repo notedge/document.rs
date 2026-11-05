@@ -1928,20 +1928,13 @@ impl LayoutEngine {
         let mut v_children = Vec::new();
 
         // TeX adds `big_op_spacing5` of extra clearance above and below a
-        // display-style limit stack.  The MATH table has no constant for that
-        // value, and the rendered reference is not reachable with the table
-        // constants alone: with the operator centred on the axis the upper limit
-        // baseline lands at 1.15 em above the formula baseline while TeX puts it
-        // at 1.25 em, and the lower one at 1.07 em instead of 1.16 em.  Carrying
-        // TeX's `\fontdimen15` value of one tenth of the em on both sides closes
-        // both gaps and leaves the sum's own glyph difference untouched.
-        const BIG_OP_DISPLAY_CLEARANCE_EM: f64 = 0.10;
-        let display_clearance = if style == MathStyle::Display {
-            size * Fixed::from_f64(BIG_OP_DISPLAY_CLEARANCE_EM)
-        }
-        else {
-            Fixed::ZERO
-        };
+        // display-style limit stack, but the MATH table has no constant for it
+        // and the reference does not charge it here: a display `\sum_{i=1}^n`
+        // puts the upper limit baseline at 1.153 em and the lower one at
+        // 1.078 em, which is exactly `UpperLimitGapMin` plus the sign's own
+        // extents.  Adding a tenth of an em pushed both limits 0.10 em too far
+        // and made the stack 8 px taller than the reference.
+        let display_clearance = Fixed::ZERO;
 
         if let Some(sup_l) = sup_layout {
             let gap = self.math_constant(MathConstant::UpperLimitGapMin, size).unwrap_or(Fixed::ZERO);
