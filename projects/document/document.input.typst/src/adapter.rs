@@ -7,7 +7,7 @@ use std::{
 
 use document_compose::{ConversionReport, Diagnostic, Severity};
 use document_ir::DocumentGraph;
-use document_layout::{Diagrams, LayoutHint, document::layout_with_diagnostics};
+use document_layout::{BodyMetrics, Diagrams, LayoutHint, document::layout_with_diagnostics};
 use document_presentation::build_display_presentation;
 
 use crate::report::{
@@ -126,7 +126,8 @@ fn ensure_source_budget(source: &str) -> Result<(), TypstError> {
 /// Import Typst source and run it through layout, presentation, and SVG output.
 pub fn render_svg(label: &str, source: &str) -> Result<TypstRender, TypstError> {
     let TypstDocument { graph, report, mut diagnostics } = import_source(label, source)?;
-    let (plan, layout_diagnostics) = layout_with_diagnostics(&graph, &LayoutHint::a4(), &Diagrams::new());
+    let (plan, layout_diagnostics) =
+        layout_with_diagnostics(&graph, &LayoutHint::a4(), &Diagrams::new(), &BodyMetrics::default());
     diagnostics.extend(layout_diagnostics);
     let display = build_display_presentation(&plan);
     let pages = display.pages.len();

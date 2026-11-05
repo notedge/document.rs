@@ -309,7 +309,7 @@ pub fn layout_with_hint(graph: &DocumentGraph, hint: &LayoutHint) -> LayoutPlan 
 /// A diagram block without a registered scene falls back to its authored source
 /// text, because layout never invents diagram geometry on its own.
 pub fn layout_with_diagrams(graph: &DocumentGraph, hint: &LayoutHint, diagrams: &Diagrams) -> LayoutPlan {
-    layout_with_diagnostics(graph, hint, diagrams).0
+    layout_with_diagnostics(graph, hint, diagrams, &BodyMetrics::default()).0
 }
 
 /// Like [`layout_with_diagrams`] but also reports the degradation the pass had
@@ -318,8 +318,17 @@ pub fn layout_with_diagrams(graph: &DocumentGraph, hint: &LayoutHint, diagrams: 
 /// Today the sources are a math glyph the embedded font supplies no outline for,
 /// which is skipped instead of being painted with a host serif face, and body
 /// text a face metric could not cover, which keeps the heuristic width.
-pub fn layout_with_diagnostics(graph: &DocumentGraph, hint: &LayoutHint, diagrams: &Diagrams) -> (LayoutPlan, Vec<Diagnostic>) {
-    layout_with_metrics(graph, hint, diagrams, BodyMetrics::bundled())
+///
+/// The host injects the metrics of the body faces it paints. A host without
+/// faces passes [`BodyMetrics::default`], and every width falls back to the
+/// heuristic model.
+pub fn layout_with_diagnostics(
+    graph: &DocumentGraph,
+    hint: &LayoutHint,
+    diagrams: &Diagrams,
+    metrics: &BodyMetrics,
+) -> (LayoutPlan, Vec<Diagnostic>) {
+    layout_with_metrics(graph, hint, diagrams, metrics)
 }
 
 /// Like [`layout_with_diagnostics`] but measures body text with `metrics`.
@@ -1563,8 +1572,35 @@ fn wrap_text(widths: &TextMeasure<'_>, text: &str, size: f64, max_width: f64) ->
 mod kerning_tests {
     use super::*;
 
+    /// Body bytes are host-owned, so read the VuTeX pack beside this
+    /// repository, or the directory named by `VUTEX_FONT_DIR`. A missing pack
+    /// fails the test instead of skipping the kerning assertions.
+    fn host_font_dir() -> std::path::PathBuf {
+        if let Ok(dir) = std::env::var("VUTEX_FONT_DIR") {
+            return std::path::PathBuf::from(dir);
+        }
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(4)
+            .expect("workspace root")
+            .join("VuTeX")
+            .join("projects")
+            .join("vutex.rs")
+            .join("fonts")
+    }
+
+    fn metrics() -> &'static BodyMetrics {
+        static METRICS: std::sync::OnceLock<BodyMetrics> = std::sync::OnceLock::new();
+        METRICS.get_or_init(|| {
+            let dir = host_font_dir();
+            assert!(dir.is_dir(), "kerning regression needs the host font pack at {}; set VUTEX_FONT_DIR", dir.display());
+            let set = document_fonts::BodyFaceSet::load_from(&dir).expect("body face pack");
+            BodyMetrics::from_set(&set)
+        })
+    }
+
     fn measure() -> TextMeasure<'static> {
-        TextMeasure::new(BodyMetrics::bundled())
+        TextMeasure::new(metrics())
     }
 
     fn atom(text: &str) -> InlineAtom {
@@ -1575,8 +1611,9 @@ mod kerning_tests {
     fn measure_counts_adjacent_pairs() {
         let widths = measure();
         let size = 10.0;
+        let pair = widths.kern('A', 'V', BODY_FACE, 1.0);
+        assert!((pair - -264.0 / 2048.0).abs() < 1e-12, "Tinos `A` + `V` is -264/2048 em, got {pair}");
         let advances = (widths.advance_em('A', BODY_FACE) + widths.advance_em('V', BODY_FACE)) * size;
-        // Tinos `A` + `V` is -264 units of 2048.
         let expected = advances - 264.0 / 2048.0 * size;
         let width = widths.measure("AV", size, BODY_FACE);
         assert!((width - expected).abs() < 1e-9, "measured {width}, expected {expected}");
@@ -1608,9 +1645,9 @@ mod kerning_tests {
 
     #[test]
     fn unreadable_body_face_falls_back_with_an_explicit_diagnostic() {
-        // A damaged face that cannot supply `head`/`hmtx`: the first 64 bytes
-        // of the bundled Tinos-Regular file are not a parseable TrueType face.
-        let damaged = &document_fonts::BODY_FACES[0].bytes[..64];
+        // A truncated face that cannot supply `head`/`hmtx`: the first 64 bytes
+        // of a zeroed buffer are not a parseable TrueType face.
+        let damaged: &[u8] = &[0u8; 64];
         let metrics = BodyMetrics::from_faces([(
             document_fonts::BodyFaceKey {
                 family: document_fonts::BodyFamily::Serif,

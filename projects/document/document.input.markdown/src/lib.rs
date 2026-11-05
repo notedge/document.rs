@@ -13,7 +13,7 @@ use document_compose::{
 };
 use document_formats::import::markdown::{import_markdown_bytes, import_markdown_bytes_for_flow};
 use document_ir::{Block, DocumentGraph, SemanticStatus};
-use document_layout::{Diagrams, LayoutHint, document::layout_with_diagnostics};
+use document_layout::{BodyMetrics, Diagrams, LayoutHint, document::layout_with_diagnostics};
 use document_presentation::build_display_presentation;
 use document_renderer_svg::render_svg as render_display_svg;
 
@@ -170,7 +170,7 @@ pub fn import_file(path: impl AsRef<Path>) -> Result<MarkdownDocument, MarkdownI
 /// keeps the authored source visible instead of guessing at a scene.
 pub fn render_svg(label: &str, source: &str, diagrams: &Diagrams) -> Result<MarkdownRender, MarkdownInputError> {
     let MarkdownDocument { graph, report, mut diagnostics } = import_source_for_flow(label, source)?;
-    let (plan, layout_diagnostics) = layout_with_diagnostics(&graph, &LayoutHint::a4(), diagrams);
+    let (plan, layout_diagnostics) = layout_with_diagnostics(&graph, &LayoutHint::a4(), diagrams, &BodyMetrics::default());
     diagnostics.extend(layout_diagnostics);
     let display = build_display_presentation(&plan);
     let pages = display.pages.len();

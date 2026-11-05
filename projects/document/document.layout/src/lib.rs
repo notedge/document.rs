@@ -10,5 +10,6 @@ pub mod plan;
 
 pub use diagram::{DiagramScene, Diagrams};
 pub use document::{layout, layout_with_diagnostics, layout_with_diagrams, layout_with_metrics};
+pub use document_fonts::BodyMetrics;
 pub use hint::LayoutHint;
 pub use plan::{Graphic, LayoutPage, LayoutPlan};

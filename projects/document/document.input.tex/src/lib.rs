@@ -26,7 +26,7 @@ use document_compose::{
 };
 use document_formats::{FormatError, import::tex::import_tex_bytes};
 use document_ir::{Block, DocumentGraph, Inline, MathExpression, MathFormula, SemanticStatus, SourceSpan as IrSpan};
-use document_layout::{Diagrams, LayoutHint, document::layout_with_diagnostics};
+use document_layout::{BodyMetrics, Diagrams, LayoutHint, document::layout_with_diagnostics};
 use document_presentation::build_display_presentation;
 
 /// Stable identifier of the TeX input profile.
@@ -162,7 +162,8 @@ pub fn import_file(path: impl AsRef<Path>) -> Result<TexDocument, TexInputError>
 /// diagnostic unchanged.
 pub fn render_svg(label: &str, source: &str) -> Result<TexRender, TexInputError> {
     let TexDocument { graph, report, mut diagnostics } = import_source(label, source)?;
-    let (plan, layout_diagnostics) = layout_with_diagnostics(&graph, &LayoutHint::a4(), &Diagrams::new());
+    let (plan, layout_diagnostics) =
+        layout_with_diagnostics(&graph, &LayoutHint::a4(), &Diagrams::new(), &BodyMetrics::default());
     diagnostics.extend(layout_diagnostics);
     let display = build_display_presentation(&plan);
     let pages = display.pages.len();
