@@ -148,9 +148,11 @@ fn write_footnote_section(out: &mut String, definitions: &[&str], footnote_refs:
 /// The LaTeX body a front-end math renderer consumes.
 ///
 /// [`MathFormula::source`](document_ir::MathFormula) keeps the authored text
-/// for round-trip, so an environment still carries `\begin{name}` and
-/// `\end{name}`. KaTeX renders the body rather than the environment wrapper,
-/// so the HTML projection strips the wrapper and keeps the inner text.
+/// for round-trip. A display wrapper such as `\begin{equation}` is not part of
+/// the formula body and KaTeX does not implement it, so the HTML projection
+/// drops that wrapper and keeps the inner text. Environments that carry the
+/// formula itself (`matrix`, `aligned`, `cases`, `align`) stay intact: without
+/// their wrapper their `&` and `\\` are not consumable LaTeX.
 fn math_payload(source: &str) -> &str {
     let Some(rest) = source.strip_prefix("\\begin{")
     else {
@@ -161,6 +163,9 @@ fn math_payload(source: &str) -> &str {
         return source;
     };
     let name = &rest[..close];
+    if !DISPLAY_WRAPPER_ENVIRONMENTS.contains(&name) {
+        return source;
+    }
     let body = &rest[close + 1..];
     let end = format!("\\end{{{name}}}");
     match body.strip_suffix(&end) {
@@ -168,6 +173,9 @@ fn math_payload(source: &str) -> &str {
         None => source,
     }
 }
+
+/// Environments that only wrap display math, and that KaTeX does not implement.
+const DISPLAY_WRAPPER_ENVIRONMENTS: &[&str] = &["equation", "equation*"];
 
 /// Split a GFM footnote definition payload (`[^label]: body`) into its label
 /// and body. Continuation lines stay in the body verbatim.

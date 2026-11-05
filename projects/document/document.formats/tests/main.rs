@@ -45,6 +45,13 @@ mod tex_export_smoke {
     }
 
     #[test]
+    fn environment_that_carries_the_formula_keeps_its_wrapper() {
+        let graph = import_tex_bytes("matrix", "$$\n\\begin{matrix}a&b\\\\c&d\\end{matrix}\n$$\n").expect("tex import");
+        let html = export_html(&graph).expect("html export");
+        assert!(html.contains("\\begin{matrix}"), "{html}");
+    }
+
+    #[test]
     fn footnote_without_a_definition_is_not_a_link() {
         let graph = import_tex_bytes("footnote", "a\\footnote{n}\n").expect("tex import");
         let html = export_html(&graph).expect("html export");
