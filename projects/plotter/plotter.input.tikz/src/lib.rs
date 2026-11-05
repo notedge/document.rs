@@ -5,6 +5,8 @@
 //! 接受的子集见 crate 文档。子集外的命令、选项或字符一律以
 //! `davinci.diagram.unsupported` 与行内字节范围拒绝，不猜几何、不降级成近似图形。
 
+use document_compose::math::FontStyle;
+use document_fonts::{key_for_run, BodyMetrics};
 use plotter_diagram::DiagramError;
 use plotter_scene::{
     Color, DisplayScene, NodeKind, PathCommand, PathData, Point, SceneNode, ShapeStyle, Size, TextAnchor, TextStyle, Transform,
@@ -26,7 +28,10 @@ const PT: f64 = 72.0 / 72.27;
 /// Margin added around the fitted picture bounds, in scene units.
 const PICTURE_MARGIN: f64 = 2.0;
 /// Default node label font size, in scene units.
-const DEFAULT_FONT_SIZE: f64 = 12.0;
+///
+/// TikZ typesets node text at the surrounding document size, and `article`
+/// defaults to 10pt with no scaling, so the scene default is 10 scene units.
+const DEFAULT_FONT_SIZE: f64 = 10.0;
 /// Default stroke width, in scene units.
 const DEFAULT_LINE_WIDTH: f64 = 0.4 * PT;
 /// `thin` stroke width, in scene units.
@@ -1036,10 +1041,13 @@ fn drop_leading_point(contours: &mut Vec<Contour>, open: Option<usize>, start: P
 
 /// The stroked box TikZ draws around a node label.
 ///
-/// The label extent follows the same `char_count * font_size * 0.6` width and
-/// `0.8` / `0.2` baseline split that `plotter-scene` reserves, so the box and the
-/// host's own text bounds agree. Every side grows by the default `inner sep`, a
-/// third of the font size.
+/// The label width is the real advance width of the body face that the host
+/// also paints with, accumulated per character and adjusted by the face's
+/// kerning pairs. Characters the bundled faces do not cover fall back to the
+/// `char_count * font_size * 0.6` heuristic that `plotter-scene` reserves. The
+/// vertical extent still uses an `0.8` / `0.2` baseline split, because
+/// `document.fonts` exposes advances and kerning but no ink bounds. Every side
+/// grows by the default `inner sep`, a third of the font size.
 fn node_box(
     text: &str,
     position: Point,
@@ -1048,7 +1056,7 @@ fn node_box(
     options: NodeOptions,
     path_style: Style,
 ) -> SceneNode {
-    let width = text.chars().count() as f64 * font_size * TEXT_WIDTH_FACTOR;
+    let width = label_width(text) * font_size;
     let left = match anchor {
         TextAnchor::Start => position.x,
         TextAnchor::Middle => position.x - width * 0.5,
@@ -1071,6 +1079,28 @@ fn node_box(
     }
     path.commands.push(PathCommand::Close);
     SceneNode::new(NodeKind::Path { path, style })
+}
+
+/// Width of one label in em units under the prose face.
+///
+/// `document.fonts` carries the `hmtx` advances and the `kern` pairs of the
+/// faces the document renderers paint with, so the node box agrees with the
+/// text it surrounds. A character no bundled face covers falls back per
+/// character to [`TEXT_WIDTH_FACTOR`], matching the heuristic `plotter-scene`
+/// reserves.
+fn label_width(text: &str) -> f64 {
+    let metrics = BodyMetrics::bundled();
+    let face = key_for_run("serif", FontStyle::Normal);
+    let mut width = 0.0;
+    let mut previous: Option<char> = None;
+    for ch in text.chars() {
+        if let Some(left) = previous {
+            width += metrics.kerning_em(face, left, ch).unwrap_or(0.0);
+        }
+        width += metrics.advance_em(face, ch).unwrap_or(TEXT_WIDTH_FACTOR);
+        previous = Some(ch);
+    }
+    width
 }
 
 /// Turn the collected contours into one path, dashing them when asked.
