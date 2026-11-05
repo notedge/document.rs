@@ -2112,6 +2112,12 @@ impl LayoutEngine {
 
         let style_scale = self.get_style_scale(style);
         let size = self.base_size * style_scale;
+        // TeX keeps the italic correction in a math character's advance but
+        // removes it when the side scripts are attached.  The display variant
+        // carries its own, larger correction, so read it off the laid-out
+        // glyph instead of the authored text-size key.
+        let base_italic_correction =
+            if class.is_large_operator() { base_layout.italic_correction() } else { Fixed::ZERO };
 
         // TeX's `make_scripts` adds `scriptspace` to every script box's own
         // width before the boxes are stacked, so the following atom never
@@ -2141,15 +2147,16 @@ impl LayoutEngine {
         //
         // A large operator is a tall nucleus in *every* style, though.  In
         // text style `\int` is a plain glyph, but its ink still towers over
-        // the axis, and TeX's rule 18c does not distinguish the two: a
-        // superscript placed beside a large operator keeps its baseline at
-        // `height(operator) - sup2` (`SuperscriptBaselineDropMax` in MATH
-        // terms) whatever style selected the operator.  Only the superscript
-        // clamp carries over to the plain glyph — the subscript keeps the
-        // ordinary minima, because the reference drops a text-style integral
-        // subscript by the font's fixed amount rather than by the sign's
-        // depth.
+        // the axis, and TeX's rule 18c does not distinguish the two: both the
+        // superscript and the subscript are clamped against the operator's own
+        // extents whatever style selected it.  The reference measures a
+        // text-style `\int_0` subscript at 0.444 em (the glyph's 0.306 em
+        // depth plus the drop constant) and the display one at 0.997 em (the
+        // variant's 0.861 em depth plus the same constant), so the drop
+        // constants are read at the script's size and the clamp applies to
+        // both branches.
         let large_operator_base = class.is_large_operator();
+        let script_scale = self.get_style_scale(state.sub().style);
         let extended_base = match base {
             FormulaNode::Symbol { glyph_key, .. } => {
                 if class.is_large_operator() {
@@ -2168,7 +2175,11 @@ impl LayoutEngine {
 
         if let Some(sup_node) = sup {
             let sup_inner = self.layout_node_state(sup_node, state.sup())?;
-            let sup_layout = self.pack_hbox(vec![sup_inner, LayoutNode::Kern(script_space)], None);
+            // The superscript sits on the operator's advance, but this box
+            // starts one correction left of it (see the trailing kern below),
+            // so the correction is put back here.
+            let sup_layout =
+                self.pack_hbox(vec![LayoutNode::Kern(base_italic_correction), sup_inner, LayoutNode::Kern(script_space)], None);
             // A cramped base takes the font's cramped minimum instead of the
             // regular one. TeX's `make_scripts` then keeps the script's own
             // bottom at least `x-height/4` above the baseline — the MATH table
@@ -2185,9 +2196,17 @@ impl LayoutEngine {
                 // `SuperscriptBaselineDropMax` caps how far a superscript's
                 // baseline may drop below the top of the nucleus.  For a large
                 // operator this is the whole placement rule (TeX rule 18c),
-                // not just a lower bound: the sign is tall enough that the cap
-                // always wins over the style's own shift.
-                let drop_max = self.math_constant(MathConstant::SuperscriptBaselineDropMax, size).unwrap_or(Fixed::ZERO);
+                // and the reference reads the cap at the script's own size:
+                // 0.250 em scaled by 0.7 lands a display `\int^1` baseline
+                // 0.178 em below the sign's top, matching the measured
+                // -1.1815 em.
+                let drop_max = if large_operator_base {
+                    self.math_constant(MathConstant::SuperscriptBaselineDropMax, size * script_scale)
+                        .unwrap_or(Fixed::ZERO)
+                }
+                else {
+                    self.math_constant(MathConstant::SuperscriptBaselineDropMax, size).unwrap_or(Fixed::ZERO)
+                };
                 calculated_sup_shift = calculated_sup_shift.max(base_layout.height() - drop_max);
             }
 
@@ -2215,6 +2234,17 @@ impl LayoutEngine {
             let sub_top_max = self.math_constant(MathConstant::SubscriptTopMax, size).unwrap_or(Fixed::ZERO);
 
             calculated_sub_shift = sub_shift.max(sub_layout.height() - sub_top_max);
+            if large_operator_base {
+                // Mirror of the superscript cap: `SubscriptBaselineDropMin`
+                // pulled back to the script size keeps the baseline at most
+                // that far inside the operator's ink.  A display `\int_0`
+                // lands 0.861 + 0.140 = 1.001 em, against the reference's
+                // measured 0.997 em, and the text-style one 0.306 + 0.140 =
+                // 0.446 em against 0.444 em.
+                let drop_min = self.math_constant(MathConstant::SubscriptBaselineDropMin, size * script_scale)
+                    .unwrap_or(Fixed::ZERO);
+                calculated_sub_shift = calculated_sub_shift.max(base_layout.depth() + drop_min);
+            }
             sub_correction_depth = calculated_sub_shift + sub_layout.depth();
 
             // If we already have a superscript, we need to adjust the kern between them
@@ -2305,23 +2335,16 @@ impl LayoutEngine {
         let mut children = Vec::new();
         children.push(base_layout);
         // A large operator keeps TeX's `\nolimits` placement when its scripts
-        // sit beside it: the scripts hang off the operator's advance, not off
-        // its italic correction. `\int` carries a third of an em of italic
+        // sit beside it: the superscript starts on the operator's advance and
+        // the subscript one italic correction further left. `\int` carries a
         // correction that only exists to keep a following atom clear of the
-        // slanted tail, so folding it in would push the scripts far right. The
-        // gap is the font's own script spacing instead. Limits above and below
-        // the operator are built by `layout_limits` and never reach this kern.
-        if class.is_large_operator() {
-            let script_space = self.math_constant(MathConstant::SpaceAfterScript, size).unwrap_or(Fixed::ZERO);
-            // The `MATH` table publishes the italic correction the operator
-            // actually carries. The metrics cache answers zero for a glyph whose
-            // extents came from a lookup that never saw it.
-            let italic_correction = base_key
-                .as_ref()
-                .and_then(|key| self.facts_italic_correction(key))
-                .map(|em| em * size)
-                .unwrap_or_else(|| children[0].italic_correction());
-            children.push(LayoutNode::Kern(script_space - italic_correction));
+        // slanted tail, so folding it into the advance (as
+        // `LayoutNode::width` does for a math glyph) and then subtracting it
+        // twice puts the shared script box on `advance - italic_correction`;
+        // the superscript box adds one back. Limits above and below the
+        // operator are built by `layout_limits` and never reach this kern.
+        if base_italic_correction != Fixed::ZERO {
+            children.push(LayoutNode::Kern(Fixed::ZERO - base_italic_correction - base_italic_correction));
         }
 
         // TeX kerns the script against the base glyph's facing corner: a
