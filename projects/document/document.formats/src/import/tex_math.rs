@@ -869,6 +869,25 @@ fn symbol_for(name: &str) -> Option<(&'static str, MathClass)> {
         "prime" => ("′", MathClass::Ordinary),
         "angle" => ("∠", MathClass::Ordinary),
         "degree" => ("°", MathClass::Ordinary),
+        // Delimiters usable without `\left` / `\right`. TeX gives each one its
+        // own class so spacing around it stays that of an opening or closing
+        // atom; only `\vert` and `\Vert` are ordinary.
+        "langle" => ("⟨", MathClass::Opening),
+        "rangle" => ("⟩", MathClass::Closing),
+        "lvert" => ("|", MathClass::Opening),
+        "rvert" => ("|", MathClass::Closing),
+        "lVert" => ("‖", MathClass::Opening),
+        "rVert" => ("‖", MathClass::Closing),
+        "vert" => ("|", MathClass::Ordinary),
+        "Vert" => ("‖", MathClass::Ordinary),
+        "lbrack" => ("[", MathClass::Opening),
+        "rbrack" => ("]", MathClass::Closing),
+        "lbrace" => ("{", MathClass::Opening),
+        "rbrace" => ("}", MathClass::Closing),
+        "lfloor" => ("⌊", MathClass::Opening),
+        "rfloor" => ("⌋", MathClass::Closing),
+        "lceil" => ("⌈", MathClass::Opening),
+        "rceil" => ("⌉", MathClass::Closing),
         _ => return None,
     };
     Some(symbol)

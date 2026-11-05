@@ -156,7 +156,15 @@ fn formula_node(expression: &MathExpression, face: Option<FontStyle>, diagnostic
         MathExpression::Unsupported { kind, source, span } => {
             let span = span_of(*span);
             diagnostics.push(unsupported(kind, source, span));
-            FormulaNode::Text { text: source.clone(), font_style: FontStyle::Normal, span }
+            // The source never reaches the page: a reader must not see `\overbrace`
+            // or `\middle` as running text.  The engine rejects the construct and
+            // leaves the documented placeholder box in its place, so the gap in the
+            // formula is visible instead of silently drawn as backslash source.
+            FormulaNode::Symbol {
+                glyph_key: GlyphKey::from_char('\u{25A1}', None, FontStyle::Normal),
+                role: SymbolRole::Ordinary,
+                span,
+            }
         }
     }
 }
@@ -425,7 +433,7 @@ fn unsupported(kind: &str, source: &str, span: Option<SourceSpan>) -> Diagnostic
     Diagnostic {
         code: "vutex.math.unsupported_expression".into(),
         severity: Severity::Warning,
-        message: format!("math {kind} has no VuTeX layout mapping and stays plain text: `{source}`"),
+        message: format!("math {kind} has no VuTeX layout mapping and is rejected: the page keeps a placeholder box instead of `{source}`"),
         span,
     }
 }
