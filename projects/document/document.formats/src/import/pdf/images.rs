@@ -103,10 +103,7 @@ pub(crate) fn decode_pdf_image_png(
             b"/DeviceGray" => 1,
             b"/DeviceRGB" => 3,
             _ => {
-                return Err(FormatError::unsupported(
-                    "pdf",
-                    "Flate image requires a direct grayscale or RGB colorspace",
-                ));
+                return Err(FormatError::unsupported("pdf", "Flate image requires a direct grayscale or RGB colorspace"));
             }
         }
     };
@@ -158,7 +155,8 @@ pub(crate) fn decode_pdf_image_png(
 /// stream object. Chromium always wraps RGB PNG data in an ICC profile, so
 /// rejecting that form would drop every screenshot-style figure.
 fn icc_based_components(dictionary: &[u8], bodies: &[(u32, Vec<u8>)]) -> Result<Option<usize>, FormatError> {
-    let Some(position) = dictionary.windows(9).position(|window| window == b"/ICCBased") else {
+    let Some(position) = dictionary.windows(9).position(|window| window == b"/ICCBased")
+    else {
         return Ok(None);
     };
     let start = skip_space(dictionary, position + 9);
@@ -166,9 +164,7 @@ fn icc_based_components(dictionary: &[u8], bodies: &[(u32, Vec<u8>)]) -> Result<
     if digits == 0 {
         return Err(FormatError::parse("pdf", "`/ICCBased` colorspace is missing a object reference"));
     }
-    let object_id = dictionary[start..start + digits]
-        .iter()
-        .fold(0u32, |value, byte| value * 10 + u32::from(byte - b'0'));
+    let object_id = dictionary[start..start + digits].iter().fold(0u32, |value, byte| value * 10 + u32::from(byte - b'0'));
     let Some((_, profile)) = bodies.iter().find(|(id, _)| *id == object_id)
     else {
         return Err(FormatError::parse("pdf", "`/ICCBased` colorspace references a missing object"));

@@ -59,8 +59,8 @@ impl Builder {
     fn lower(&mut self, element: &XmlElement) {
         let tag = local_name(&element.name).to_string();
         match tag.as_str() {
-            "oMath" | "oMathPara" | "e" | "num" | "den" | "sup" | "sub" | "deg" | "fName" | "lim" | "box"
-            | "borderBox" | "phant" | "m" | "mr" | "eqArr" | "r" => self.lower_container(&tag, element),
+            "oMath" | "oMathPara" | "e" | "num" | "den" | "sup" | "sub" | "deg" | "fName" | "lim" | "box" | "borderBox"
+            | "phant" | "m" | "mr" | "eqArr" | "r" => self.lower_container(&tag, element),
             "sSup" | "sSub" | "sSubSup" | "sPre" => self.lower_script(&tag, element),
             "f" => self.lower_fraction(element),
             "rad" => self.lower_radical(element),
@@ -317,12 +317,8 @@ impl Builder {
             .and_then(|properties| child_element(properties, "pos"))
             .and_then(|pos| attribute_value(pos, "val"))
             .unwrap_or_else(|| "top".into());
-        let (command, glyph) = if position.eq_ignore_ascii_case("bot") {
-            ("underset", "\u{23DF}")
-        }
-        else {
-            ("overset", "\u{23DE}")
-        };
+        let (command, glyph) =
+            if position.eq_ignore_ascii_case("bot") { ("underset", "\u{23DF}") } else { ("overset", "\u{23DE}") };
         self.out.push_str(&format!("\\{command}{{\\text{{{glyph}}}}}{{"));
         if let Some(body) = child_element(element, "e") {
             self.lower_children(body);

@@ -10,8 +10,7 @@ use super::{
     },
     streams::decode_stream,
     syntax::{
-        dictionary_value, hex_bytes, is_pdf_number_start, pdf_delimiter, skip_pdf_number, skip_space,
-        split_pdf_syntax_tokens,
+        dictionary_value, hex_bytes, is_pdf_number_start, pdf_delimiter, skip_pdf_number, skip_space, split_pdf_syntax_tokens,
     },
     types::PdfStream,
 };
@@ -46,9 +45,9 @@ impl ToUnicodeMap {
             return None;
         }
         if self.entries.is_empty() && self.winansi_fallback {
-            let advance = bytes.iter().fold(Some(0.0f32), |total, byte| {
-                combine_advance(total, self.advance_for(std::slice::from_ref(byte)))
-            });
+            let advance = bytes
+                .iter()
+                .fold(Some(0.0f32), |total, byte| combine_advance(total, self.advance_for(std::slice::from_ref(byte))));
             return Some((bytes.iter().map(|byte| win_ansi_encoding(*byte)).collect(), advance));
         }
         let mut output = String::new();
@@ -144,12 +143,7 @@ pub(crate) fn page_font_maps(
 /// An embedded encoding CMap may carry its own `W` widths and `begincidchar` /
 /// `begincidrange` mappings. A font that declares no width keeps an empty table,
 /// so `decode_run` reports an unknown advance instead of estimating one.
-fn apply_font_widths(
-    map: &mut ToUnicodeMap,
-    font_body: &[u8],
-    bodies: &[(u32, Vec<u8>)],
-    streams: &[PdfStream<'_>],
-) {
+fn apply_font_widths(map: &mut ToUnicodeMap, font_body: &[u8], bodies: &[(u32, Vec<u8>)], streams: &[PdfStream<'_>]) {
     if dictionary_subtype_is(font_body, b"/Type0") {
         if let Some(descendant) = body_reference(font_body, b"/DescendantFonts").and_then(|id| font_object(bodies, id)) {
             if let Some(default) = dictionary_value(descendant, b"/DW") {
@@ -174,8 +168,7 @@ fn apply_font_widths(
                 map.widths.insert(first as u32 + offset as u32, width / 1000.0);
             }
         }
-        if let Some(descriptor) =
-            body_reference(font_body, b"/FontDescriptor").and_then(|id| font_object(bodies, id))
+        if let Some(descriptor) = body_reference(font_body, b"/FontDescriptor").and_then(|id| font_object(bodies, id))
             && let Some(missing) = dictionary_value(descriptor, b"/MissingWidth")
         {
             map.default_width = Some(missing as f32 / 1000.0);
@@ -318,9 +311,10 @@ fn apply_cmap_widths(bytes: &[u8], map: &mut ToUnicodeMap) {
                 }
                 continue;
             }
-            if let (Some(last), Some(width)) =
-                (tokens.get(index + 1).and_then(|token| parse_u32(token)), tokens.get(index + 2).and_then(|token| parse_f32(token)))
-                && token_is(tokens.get(index + 3), b"W")
+            if let (Some(last), Some(width)) = (
+                tokens.get(index + 1).and_then(|token| parse_u32(token)),
+                tokens.get(index + 2).and_then(|token| parse_f32(token)),
+            ) && token_is(tokens.get(index + 3), b"W")
             {
                 if first <= last && last - first < 65_536 {
                     for cid in first..=last {
@@ -330,10 +324,9 @@ fn apply_cmap_widths(bytes: &[u8], map: &mut ToUnicodeMap) {
                 index += 4;
                 continue;
             }
-            if let (Some(width), Some(operator)) = (
-                tokens.get(index + 1).and_then(|token| parse_f32(token)),
-                tokens.get(index + 2).copied(),
-            ) && is_token(operator, b"w")
+            if let (Some(width), Some(operator)) =
+                (tokens.get(index + 1).and_then(|token| parse_f32(token)), tokens.get(index + 2).copied())
+                && is_token(operator, b"w")
             {
                 map.widths.insert(first, width / 1000.0);
                 index += 3;
