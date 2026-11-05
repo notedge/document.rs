@@ -52,11 +52,6 @@ fn lower_typst_root(root: &TypstRoot, text: &str, id: DocumentId) -> DocumentGra
             SemanticStatus::Partial,
         );
     }
-    lowerer.loss(
-        "import.typst.partial_coverage",
-        "Typst import preserves headings, paragraphs, strong/emphasis spans, lists, math source, raw code, and links, but not dynamic content, function calls, set/show rules, or free layout",
-        SemanticStatus::Partial,
-    );
     register_image_assets(&mut lowerer.graph);
     lowerer.graph
 }

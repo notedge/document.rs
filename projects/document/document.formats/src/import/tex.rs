@@ -112,11 +112,6 @@ pub fn import_tex_bytes(label: &str, text: &str) -> Result<DocumentGraph, Format
     if lowerer.graph.blocks.is_empty() {
         lowerer.loss("import.tex.empty_document", "TeX source produced no supported semantic blocks", SemanticStatus::Partial);
     }
-    lowerer.loss(
-        "import.tex.partial_coverage",
-        "TeX import preserves metadata, numbered sections, paragraphs, inline styles, lists, simple tabular tables, math source, verbatim code, label anchors, references, footnotes, and citations, but not macros, packages, floats, or arbitrary layout semantics",
-        SemanticStatus::Partial,
-    );
     register_image_assets(&mut lowerer.graph);
     Ok(lowerer.graph)
 }
