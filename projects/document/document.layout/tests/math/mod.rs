@@ -10,9 +10,33 @@
 //! TeX 位置判成错误。水平带裁剪保留「限位不得压进笔画」的原意，同时不要求
 //! 参考引擎做不到的整框分离。
 
-use document_fonts::install_default_math_font;
+use std::path::{Path, PathBuf};
+
+use document_fonts::{MathFontPack, install_math_fonts};
 use document_layout::math::{LayoutNode, layout_formula_source_for};
 use document_text::math::MathFontFamily;
+
+/// Math bytes are host-owned, so read the VuTeX pack beside this repository,
+/// or the directory named by `VUTEX_FONT_DIR`. A missing pack fails the test.
+fn host_font_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("VUTEX_FONT_DIR") {
+        return PathBuf::from(dir);
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(4)
+        .expect("workspace root")
+        .join("VuTeX")
+        .join("projects")
+        .join("vutex.rs")
+        .join("fonts")
+}
+
+fn install_host_math_fonts() {
+    let dir = host_font_dir();
+    assert!(dir.is_dir(), "math regression needs the host font pack at {}; set VUTEX_FONT_DIR", dir.display());
+    install_math_fonts(&MathFontPack::load_from(&dir).expect("math font pack"));
+}
 
 /// 半像素容差。
 const TOLERANCE: f64 = 0.5;
@@ -142,7 +166,7 @@ fn operator_band(operator: &PlacedGlyph, left: f64, right: f64) -> Option<(f64, 
 }
 
 fn glyphs(tex: &str, display: bool) -> Vec<PlacedGlyph> {
-    install_default_math_font();
+    install_host_math_fonts();
     let (_, root, _) = layout_formula_source_for(tex, display, 10.0, MathFontFamily::LmMath).expect("layout succeeds");
     let mut placed = Vec::new();
     collect(&root, 0.0, 0.0, &mut placed);

@@ -12,7 +12,7 @@ mod svg;
 
 pub use formula_result::render_formula_result;
 pub use render::{
-    PdfFontPolicy, PdfRenderOutcome, render_pdf, render_pdf_with_diagnostics, render_pdf_with_font_policy,
-    render_pdf_with_font_policy_and_diagnostics, render_pdf_with_resources, render_pdf_with_resources_and_diagnostics,
+    PdfFontPolicy, PdfRenderOutcome, render_pdf_with_font_policy, render_pdf_with_font_policy_and_diagnostics,
+    render_pdf_with_resources, render_pdf_with_resources_and_diagnostics,
 };
 pub use resources::PdfResources;

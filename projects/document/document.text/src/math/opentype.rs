@@ -61,8 +61,8 @@ fn installed_fonts() -> &'static std::sync::RwLock<InstalledMathFonts> {
 /// Install host-owned OpenType MATH font bytes for one family.
 ///
 /// VuTeX, panduck, or another product host calls this once at startup with the
-/// `'static` payload it embeds; `document_fonts::install_default_math_font`
-/// is the bundled shortcut.
+/// `'static` payload it embeds; `document_fonts::install_math_fonts` pairs the
+/// two default families from one host pack.
 pub fn install_math_font(family: MathFontFamily, bytes: &'static [u8]) {
     let mut guard = installed_fonts().write().expect("math font registry");
     match family {

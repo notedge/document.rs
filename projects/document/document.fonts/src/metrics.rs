@@ -1,4 +1,4 @@
-//! Character advance widths of the bundled body faces.
+//! Character advance widths of the body faces one host supplies.
 //!
 //! Line breaking needs the width a face actually paints, not a shape guessed
 //! from the character class: a Latin italic face can be several percent wider
@@ -13,12 +13,11 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
-    sync::OnceLock,
 };
 
 use document_compose::math::FontStyle;
 
-use crate::{BODY_FACES, BodyFace, BodyFaceStyle, BodyFamily};
+use crate::{BodyFace, BodyFaceSet, BodyFaceStyle, BodyFamily};
 
 /// Family and style one text run asks the body faces for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -190,7 +189,7 @@ impl FaceMetrics {
 }
 
 /// Advance widths of a set of body faces, queried by requested family and style.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct BodyMetrics {
     /// Parsed faces in declaration order, so Latin precedes CJK within one style.
     faces: Vec<(BodyFaceKey, FaceMetrics)>,
@@ -201,16 +200,14 @@ pub struct BodyMetrics {
 }
 
 impl BodyMetrics {
-    /// Metrics of [`BODY_FACES`], parsed once per process.
-    pub fn bundled() -> &'static Self {
-        static BUNDLED: OnceLock<BodyMetrics> = OnceLock::new();
-        BUNDLED.get_or_init(|| {
-            Self::from_faces(
-                BODY_FACES
-                    .iter()
-                    .map(|face| (BodyFaceKey { family: face.family, style: face.style }, face_label(face), face.bytes)),
-            )
-        })
+    /// Metrics of the faces one host supplies.
+    ///
+    /// A face whose file cannot be parsed is recorded in [`Self::unreadable`],
+    /// exactly as [`Self::from_faces`] does.
+    pub fn from_set(set: &BodyFaceSet) -> Self {
+        Self::from_faces(set.faces().iter().map(|face| {
+            (BodyFaceKey { family: face.family, style: face.style }, face_label(face), face.bytes.as_ref())
+        }))
     }
 
     /// Metrics of an arbitrary face set, for hosts that paint their own faces.
@@ -301,35 +298,179 @@ fn face_label(face: &BodyFace) -> String {
 mod tests {
     use super::*;
 
-    fn bundled_advance(text: &str, family: &str, style: FontStyle) -> f64 {
-        let key = key_for_run(family, style);
-        text.chars().map(|ch| BodyMetrics::bundled().advance_em(key, ch).expect("bundled face covers the sample")).sum()
+    /// Build one `glyf`-free sfnt whose `hmtx` and `cmap` carry the advances a
+    /// test asserts on.
+    fn synthetic_font(units_per_em: u16, advances: &[(char, u16)]) -> Vec<u8> {
+        let num_glyphs = advances.len() as u16 + 1;
+
+        let mut head = vec![0u8; 54];
+        head[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        head[12..16].copy_from_slice(&0x5F0F_3CF5u32.to_be_bytes());
+        head[18..20].copy_from_slice(&units_per_em.to_be_bytes());
+
+        let mut hhea = vec![0u8; 36];
+        hhea[34..36].copy_from_slice(&num_glyphs.to_be_bytes());
+
+        let mut maxp = vec![0u8; 32];
+        maxp[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        maxp[4..6].copy_from_slice(&num_glyphs.to_be_bytes());
+
+        let mut hmtx = Vec::new();
+        hmtx.extend_from_slice(&[0u8; 4]);
+        for (_, advance) in advances {
+            hmtx.extend_from_slice(&advance.to_be_bytes());
+            hmtx.extend_from_slice(&0i16.to_be_bytes());
+        }
+
+        let mut entries: Vec<(u16, u16)> =
+            advances.iter().enumerate().map(|(index, (ch, _))| (*ch as u16, index as u16 + 1)).collect();
+        entries.sort_by_key(|(code, _)| *code);
+
+        let mut loca = Vec::new();
+        for _ in 0..=num_glyphs {
+            loca.extend_from_slice(&0u16.to_be_bytes());
+        }
+
+        assemble(&[
+            (*b"head", head),
+            (*b"hhea", hhea),
+            (*b"maxp", maxp),
+            (*b"hmtx", hmtx),
+            (*b"cmap", cmap_table(&entries)),
+            (*b"loca", loca),
+        ])
+    }
+
+    /// Lay tables out into one sfnt with a table directory.
+    fn assemble(tables: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
+        let count = tables.len() as u16;
+        let mut out = Vec::new();
+        out.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+        out.extend_from_slice(&count.to_be_bytes());
+        out.extend_from_slice(&(count * 16).to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        let mut offset = 12 + tables.len() * 16;
+        let mut body = Vec::new();
+        for (tag, data) in tables {
+            out.extend_from_slice(tag);
+            out.extend_from_slice(&0u32.to_be_bytes());
+            out.extend_from_slice(&(offset as u32).to_be_bytes());
+            out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            body.extend_from_slice(data);
+            while body.len() % 4 != 0 {
+                body.push(0);
+            }
+            offset = 12 + tables.len() * 16 + body.len();
+        }
+        out.extend(body);
+        out
+    }
+
+    /// One format 4 `cmap` mapping each code point to its glyph id.
+    fn cmap_table(entries: &[(u16, u16)]) -> Vec<u8> {
+        let segments = entries.len() + 1;
+        let mut subtable = Vec::new();
+        subtable.extend_from_slice(&4u16.to_be_bytes());
+        subtable.extend_from_slice(&((16 + segments * 8) as u16).to_be_bytes());
+        subtable.extend_from_slice(&0u16.to_be_bytes());
+        subtable.extend_from_slice(&((segments * 2) as u16).to_be_bytes());
+        let mut power = 1usize;
+        let mut log = 0usize;
+        while power * 2 <= segments {
+            power *= 2;
+            log += 1;
+        }
+        subtable.extend_from_slice(&((power * 2) as u16).to_be_bytes());
+        subtable.extend_from_slice(&(log as u16).to_be_bytes());
+        subtable.extend_from_slice(&(((segments - power) * 2) as u16).to_be_bytes());
+        for (code, _) in entries {
+            subtable.extend_from_slice(&code.to_be_bytes());
+        }
+        subtable.extend_from_slice(&0xFFFFu16.to_be_bytes());
+        subtable.extend_from_slice(&0u16.to_be_bytes());
+        for (code, _) in entries {
+            subtable.extend_from_slice(&code.to_be_bytes());
+        }
+        subtable.extend_from_slice(&0xFFFFu16.to_be_bytes());
+        for (code, glyph) in entries {
+            let delta = i32::from(*glyph) - i32::from(*code);
+            subtable.extend_from_slice(&(delta as i16).to_be_bytes());
+        }
+        subtable.extend_from_slice(&1i16.to_be_bytes());
+        for _ in 0..segments {
+            subtable.extend_from_slice(&0u16.to_be_bytes());
+        }
+
+        let mut out = Vec::new();
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
+        out.extend_from_slice(&3u16.to_be_bytes());
+        out.extend_from_slice(&1u16.to_be_bytes());
+        out.extend_from_slice(&12u32.to_be_bytes());
+        out.extend(subtable);
+        out
+    }
+
+    /// A three-face pack: Latin serif, Han serif, and a fixed-advance Latin face.
+    fn pack() -> BodyFaceSet {
+        BodyFaceSet::new(vec![
+            BodyFace::new(
+                BodyFamily::Serif,
+                crate::BodyScript::Latin,
+                BodyFaceStyle::Regular,
+                synthetic_font(2048, &[('a', 1000), ('b', 1200)]),
+            ),
+            BodyFace::new(
+                BodyFamily::Serif,
+                crate::BodyScript::Cjk,
+                BodyFaceStyle::Regular,
+                synthetic_font(1000, &[('同', 1000)]),
+            ),
+            BodyFace::new(
+                BodyFamily::Mono,
+                crate::BodyScript::Latin,
+                BodyFaceStyle::Regular,
+                synthetic_font(2048, &[('i', 1229)]),
+            ),
+        ])
     }
 
     #[test]
-    fn italic_latin_uses_the_face_hmtx() {
-        // Tinos-Italic: 2048 units per em, the same string sums to 8.056152344 em.
-        let width = bundled_advance("italic English words", "serif", FontStyle::Italic);
-        assert!((width - 8.056152344).abs() < 1e-6, "italic width was {width}");
-    }
-
-    #[test]
-    fn regular_latin_uses_the_face_hmtx() {
-        // Tinos-Regular: the same string sums to 7.999023438 em.
-        let width = bundled_advance("italic English words", "serif", FontStyle::Normal);
-        assert!((width - 7.999023438).abs() < 1e-6, "regular width was {width}");
+    fn advance_widths_come_from_the_face_hmtx() {
+        let metrics = BodyMetrics::from_set(&pack());
+        let key = key_for_run("serif", FontStyle::Normal);
+        assert_eq!(metrics.advance_em(key, 'a'), Some(1000.0 / 2048.0));
+        assert_eq!(metrics.advance_em(key, 'b'), Some(1200.0 / 2048.0));
     }
 
     #[test]
     fn han_advance_is_one_em() {
+        let metrics = BodyMetrics::from_set(&pack());
         let key = key_for_run("serif", FontStyle::Normal);
-        assert_eq!(BodyMetrics::bundled().advance_em(key, '同'), Some(1.0));
+        assert_eq!(metrics.advance_em(key, '同'), Some(1.0));
     }
 
     #[test]
-    fn mono_advance_is_six_tenths_of_an_em() {
+    fn mono_advance_tracks_the_face_units() {
+        let metrics = BodyMetrics::from_set(&pack());
         let key = key_for_run("monospace", FontStyle::Normal);
-        assert_eq!(BodyMetrics::bundled().advance_em(key, 'i'), Some(0.6));
+        let advance = metrics.advance_em(key, 'i').expect("the mono face covers `i`");
+        assert!((advance - 0.6).abs() < 1e-3, "mono advance was {advance}");
+    }
+
+    #[test]
+    fn regular_face_serves_a_bold_request() {
+        let metrics = BodyMetrics::from_set(&pack());
+        let bold = BodyFaceKey { family: BodyFamily::Serif, style: BodyFaceStyle::Bold };
+        assert_eq!(metrics.advance_em(bold, 'a'), Some(1000.0 / 2048.0));
+    }
+
+    #[test]
+    fn face_without_a_kern_table_reports_no_pair() {
+        let metrics = BodyMetrics::from_set(&pack());
+        let key = key_for_run("serif", FontStyle::Normal);
+        assert_eq!(metrics.kerning_em(key, 'a', 'b'), None);
     }
 
     #[test]
@@ -357,71 +498,13 @@ mod tests {
         assert_eq!(metrics.advance_em(BodyFaceKey { family: BodyFamily::Serif, style: BodyFaceStyle::Regular }, 'a'), None);
     }
 
-    /// Smoke coverage for a CFF/OTTO face: the same `cmap` and `hmtx` path parses
-    /// without panicking and yields non-zero advances.
-    ///
-    /// The glyph-by-glyph comparison against fontTools lives outside this crate.
     #[test]
-    fn cff_face_parses_and_reports_advances() {
-        let face = FaceMetrics::parse(crate::XITS_MATH).expect("the bundled XITS Math face is a CFF/OTTO face");
-        assert!(face.units_per_em() > 0);
-        assert!(!face.advances.is_empty());
-        assert!(!face.glyphs.is_empty());
-        assert!(face.advance_em('A').is_some_and(|advance| advance > 0.0));
-        // A Han character is outside the CFF face's coverage, so it stays `None`
-        // instead of being guessed.
-        assert_eq!(face.advance_em('同'), None);
-
-        let metrics = BodyMetrics::from_faces([(
-            BodyFaceKey { family: BodyFamily::Serif, style: BodyFaceStyle::Regular },
-            "XitsMath/CFF".to_string(),
-            crate::XITS_MATH,
-        )]);
-        assert!(metrics.unreadable().is_empty(), "a CFF face must not fall back to the heuristic");
-        assert!(metrics.advance_em(key_for_run("serif", FontStyle::Normal), 'A').is_some_and(|advance| advance > 0.0));
-    }
-
-    fn serif_face(style: BodyFaceStyle) -> &'static FaceMetrics {
-        let metrics = BodyMetrics::bundled();
-        &metrics
-            .faces
-            .iter()
-            .find(|(key, _)| key.family == BodyFamily::Serif && key.style == style)
-            .expect("bundled serif face")
-            .1
-    }
-
-    #[test]
-    fn bundled_latin_faces_carry_gpos_kern_pairs() {
-        // Counts and sums come from fontTools reading the shipped `GPOS` tables.
-        for (style, count, sum) in [
-            (BodyFaceStyle::Regular, 113usize, -16087i64),
-            (BodyFaceStyle::Bold, 117, -15901),
-            (BodyFaceStyle::Italic, 112, -15323),
-        ] {
-            let face = serif_face(style);
-            assert_eq!(face.kern.len(), count, "{style:?} pair count");
-            assert_eq!(face.kern.values().map(|value| i64::from(*value)).sum::<i64>(), sum, "{style:?} pair sum");
-            assert!(!face.kerning_unavailable, "{style:?} declares a readable `kern` feature");
-        }
-        assert!(BodyMetrics::bundled().kerning_unavailable().is_empty());
-    }
-
-    #[test]
-    fn gpos_kern_matches_the_face_units() {
-        let metrics = BodyMetrics::bundled();
-        let regular = key_for_run("serif", FontStyle::Normal);
-        let bold = key_for_run("serif", FontStyle::Bold);
-        let italic = key_for_run("serif", FontStyle::Italic);
-        let em = 2048.0;
-        assert_eq!(metrics.kerning_em(regular, 'A', 'V'), Some(-264.0 / em));
-        assert_eq!(metrics.kerning_em(regular, ' ', 'T'), Some(-37.0 / em));
-        assert_eq!(metrics.kerning_em(regular, 'V', 'e'), Some(-227.0 / em));
-        assert_eq!(metrics.kerning_em(bold, 'V', 'e'), Some(-188.0 / em));
-        assert_eq!(metrics.kerning_em(italic, 'A', 'V'), Some(-102.0 / em));
-        assert_eq!(metrics.kerning_em(regular, 'A', 'A'), None);
-        // A pair split across two faces has no shared glyph pair.
-        assert_eq!(metrics.kerning_em(regular, 'A', '同'), None);
+    fn coverage_is_reported_per_face() {
+        let metrics = BodyMetrics::from_set(&pack());
+        let key = key_for_run("serif", FontStyle::Normal);
+        assert_eq!(metrics.advance_em(key, 'z'), None);
+        assert_eq!(metrics.advance_em(key, 'A'), None);
+        assert_eq!(metrics.advance_em(key, 'a'), Some(1000.0 / 2048.0));
     }
 
     #[test]

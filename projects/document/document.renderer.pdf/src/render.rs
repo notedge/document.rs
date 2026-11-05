@@ -27,10 +27,11 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     path::PathBuf,
+    sync::Arc,
 };
 
 use document_compose::{Diagnostic, Severity, math::FontStyle};
-use document_fonts::{key_for_run, BodyFaceStyle, BodyFamily, BodyMetrics};
+use document_fonts::{key_for_run, BodyFaceSet, BodyFaceStyle, BodyFamily, BodyMetrics};
 use document_presentation::display::{
     DisplayGraphic, DisplayImage, DisplayItem, DisplayPage, DisplayPath, DisplayPresentation, DisplayRect, DisplayRule,
     DisplayTextRun,
@@ -39,7 +40,7 @@ use document_renderer::is_safe_href;
 use plotter_scene::DisplayScene;
 
 use crate::{
-    font::{ChainKey, FontChain, Subset, SystemFont, bundled_faces},
+    font::{ChainKey, FontChain, Subset, SystemFont, provided_faces},
     resources::PdfResources,
 };
 
@@ -87,28 +88,22 @@ pub struct PdfRenderOutcome {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-/// PDF renderer. Consumes only the display presentation IR.
-///
-/// Body text embeds the bundled `document_fonts` faces by default; use
-/// [`render_pdf_with_font_policy`] to pin a system font, a font file, or the
-/// base-14-only fallback instead.
-pub fn render_pdf(presentation: &DisplayPresentation) -> Result<Vec<u8>, Diagnostic> {
-    render_pdf_with_font_policy(presentation, &PdfFontPolicy::Bundled)
-}
-
 /// Where glyphs for PDF text come from.
 ///
-/// `Bundled` embeds the body faces shipped in `document_fonts` for every
+/// There is no implicit font: a caller always states a policy, and
+/// `Provided` embeds the body faces the host handed over for every
 /// non-monospaced run, so the PDF never depends on a reader's installed fonts.
 /// `Discover` and both file variants build a fallback chain: the first font
 /// supplies the characters it covers and later fonts fill in the rest. For
 /// `Discover` the candidates are system faces with `glyf` outlines. For
 /// `File` and `Files` they are exactly the authored paths, in order.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum PdfFontPolicy {
-    /// Embed subsets of the bundled `document_fonts` body faces.
-    #[default]
-    Bundled,
+    /// Embed subsets of the body faces supplied by the caller.
+    ///
+    /// The set travels in an [`Arc`] so one host-owned pack can serve every
+    /// render call without copying megabytes of font bytes.
+    Provided(Arc<BodyFaceSet>),
     /// Discover system TrueType fonts for characters WinAnsi cannot encode.
     Discover,
     /// Never embed a font; characters outside WinAnsi degrade to `?`.
@@ -132,18 +127,13 @@ pub fn render_pdf_with_font_policy(presentation: &DisplayPresentation, policy: &
 ///
 /// Sources resolve through `resources`, so a host can point relative paths at a
 /// base directory or hand over bytes it already fetched. The default context
-/// reproduces the behaviour of [`render_pdf`] and [`render_pdf_with_font_policy`].
+/// reproduces the behaviour of [`render_pdf_with_font_policy`].
 pub fn render_pdf_with_resources(
     presentation: &DisplayPresentation,
     policy: &PdfFontPolicy,
     resources: &PdfResources,
 ) -> Result<Vec<u8>, Diagnostic> {
     render_pdf_with_resources_and_diagnostics(presentation, policy, resources).map(|outcome| outcome.pdf)
-}
-
-/// Like [`render_pdf`] but returns the warnings the pipeline collected.
-pub fn render_pdf_with_diagnostics(presentation: &DisplayPresentation) -> Result<PdfRenderOutcome, Diagnostic> {
-    render_pdf_with_font_policy_and_diagnostics(presentation, &PdfFontPolicy::Bundled)
 }
 
 /// Like [`render_pdf_with_font_policy`] but returns the warnings the pipeline collected.
@@ -221,7 +211,7 @@ pub(crate) fn chain_key(family: &str, style: FontStyle) -> ChainKey {
 
 /// Whether one text run paints through the embedded font chain.
 ///
-/// `body` is set by [`PdfFontPolicy::Bundled`], where every run embeds, because
+/// `body` is set by [`PdfFontPolicy::Provided`], where every run embeds, because
 /// a printed page must not depend on the reader shipping any face. The other
 /// policies only embed where WinAnsi cannot reach the text.
 fn embeds_run(body: bool, text: &str) -> bool {
@@ -272,7 +262,7 @@ fn load_chain(
     policy: &PdfFontPolicy,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<FontChain>, Diagnostic> {
-    let body = matches!(policy, PdfFontPolicy::Bundled);
+    let body = matches!(policy, PdfFontPolicy::Provided(_));
     let charsets = embedded_charsets(presentation, body);
     let charset = flat_charset(&charsets);
     if charset.is_empty() {
@@ -284,13 +274,13 @@ fn load_chain(
                 Some(diagnostics),
                 "vutex.render.pdf.font_unavailable",
                 format!(
-                    "PdfFontPolicy::Base14Only degrades {} characters to '?' because the WinAnsi encoding cannot represent them; switch to Bundled or provide explicit font files to embed glyphs",
+                    "PdfFontPolicy::Base14Only degrades {} characters to '?' because the WinAnsi encoding cannot represent them; switch to Provided or provide explicit font files to embed glyphs",
                     charset.len()
                 ),
             );
             return Ok(None);
         }
-        PdfFontPolicy::Bundled => bundled_faces(),
+        PdfFontPolicy::Provided(set) => provided_faces(set),
         PdfFontPolicy::Discover => discover_fonts_with_warnings(&charset, diagnostics)
             .into_iter()
             .map(|font| (font, BodyFamily::Serif, BodyFaceStyle::Regular))
@@ -532,6 +522,8 @@ pub(crate) struct EmbeddedText<'a> {
     pub(crate) first_index: usize,
     /// `true` when the policy embeds body text even where WinAnsi would do.
     pub(crate) body: bool,
+    /// Metrics of the host-supplied faces, when the policy provided them.
+    pub(crate) metrics: Option<&'a BodyMetrics>,
 }
 
 impl EmbeddedText<'_> {
@@ -612,7 +604,11 @@ fn build_objects(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Vec<PdfObject>, Diagnostic> {
     let chain = load_chain(presentation, policy, diagnostics)?;
-    let body = matches!(policy, PdfFontPolicy::Bundled);
+    let body = matches!(policy, PdfFontPolicy::Provided(_));
+    let metrics = match policy {
+        PdfFontPolicy::Provided(set) => Some(BodyMetrics::from_set(set)),
+        _ => None,
+    };
     let fonts = used_fonts(presentation, chain.is_some(), body);
     let page_count = presentation.pages.len();
     let page_links: Vec<Vec<LinkAnnotation>> = presentation.pages.iter().map(page_links).collect();
@@ -644,7 +640,7 @@ fn build_objects(
             page_resources.insert("Font", &format!("F{}", embedded_first + index), first);
             push_embedded_font_objects(&mut document, subset, first, &embedded_name(index, subset));
         }
-        embedded = Some(EmbeddedText { chain, first_index: embedded_first, body });
+        embedded = Some(EmbeddedText { chain, first_index: embedded_first, body, metrics: metrics.as_ref() });
     }
 
     let mut opacities = OpacityResources::default();
@@ -1129,7 +1125,7 @@ pub(crate) fn paint_text(
     if let Some(embedded) = embedded {
         // Body text carries kerning from the same `BodyMetrics` layout used, so
         // the writer never parses a font on its own.
-        let metrics = embedded.body.then(BodyMetrics::bundled);
+        let metrics = embedded.metrics;
         let key = key_for_run(family, style);
         let _ = write!(out, "BT\n1 0 0 {down} {} {} Tm\n", num(x), num(y));
         let mut current: Option<usize> = None;

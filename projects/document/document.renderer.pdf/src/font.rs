@@ -1,9 +1,9 @@
 //! TrueType font selection and subsetting for embedded PDF text.
 //!
-//! Two sources feed the chain. [`PdfFontPolicy::Bundled`] parses the body faces
-//! of `document_fonts::BODY_FACES`, so every paragraph is embedded from the
-//! repository's own assets. The other policies fall back to system faces for
-//! characters WinAnsi cannot encode.
+//! Two sources feed the chain. [`PdfFontPolicy::Provided`] parses the body faces
+//! the caller handed over, so every paragraph is embedded from the host's own
+//! assets. The other policies fall back to system faces for characters WinAnsi
+//! cannot encode.
 //!
 //! Either way each face is subset to the characters one document uses, so the
 //! PDF carries only the glyphs it paints, and the subset reaches the writer as
@@ -19,7 +19,7 @@ use std::{
     path::Path,
 };
 
-use document_fonts::{BODY_FACES, BodyFaceStyle, BodyFamily};
+use document_fonts::{BodyFaceSet, BodyFaceStyle, BodyFamily};
 
 /// Family and style one text run asks the chain for.
 ///
@@ -419,15 +419,15 @@ impl FontChain {
     }
 }
 
-/// Parse the bundled body faces into the chain order [`BODY_FACES`] declares.
+/// Parse the caller-supplied body faces into the pack's declaration order.
 ///
-/// A bundled face that fails to parse is skipped, so a corrupt asset degrades
-/// to a missing-glyph error naming the character instead of silently painting a
+/// A face that fails to parse is skipped, so a corrupt asset degrades to a
+/// missing-glyph error naming the character instead of silently painting a
 /// base-14 fallback.
-pub(crate) fn bundled_faces() -> Vec<(SystemFont, BodyFamily, BodyFaceStyle)> {
-    BODY_FACES
+pub(crate) fn provided_faces(set: &BodyFaceSet) -> Vec<(SystemFont, BodyFamily, BodyFaceStyle)> {
+    set.faces()
         .iter()
-        .filter_map(|face| SystemFont::from_bytes(face.bytes).map(|font| (font, face.family, face.style)))
+        .filter_map(|face| SystemFont::from_bytes(&face.bytes).map(|font| (font, face.family, face.style)))
         .collect()
 }
 

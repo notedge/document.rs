@@ -16,5 +16,6 @@ document-presentation = { workspace = true }
 document-renderer-svg = { workspace = true }
 
 [dev-dependencies]
+document-fonts = { workspace = true }
 document-text = { workspace = true }
 serde_json = { workspace = true }

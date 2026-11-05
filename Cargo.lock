@@ -686,6 +686,7 @@ name = "document-input-markdown"
 version = "0.1.0"
 dependencies = [
  "document-compose",
+ "document-fonts",
  "document-formats",
  "document-ir",
  "document-layout",
@@ -702,6 +703,7 @@ name = "document-input-tex"
 version = "0.1.0"
 dependencies = [
  "document-compose",
+ "document-fonts",
  "document-formats",
  "document-ir",
  "document-layout",

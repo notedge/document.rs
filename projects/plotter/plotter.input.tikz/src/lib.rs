@@ -5,8 +5,6 @@
 //! 接受的子集见 crate 文档。子集外的命令、选项或字符一律以
 //! `davinci.diagram.unsupported` 与行内字节范围拒绝，不猜几何、不降级成近似图形。
 
-use document_compose::math::FontStyle;
-use document_fonts::{key_for_run, BodyMetrics};
 use plotter_diagram::DiagramError;
 use plotter_scene::{
     Color, DisplayScene, NodeKind, PathCommand, PathData, Point, SceneNode, ShapeStyle, Size, TextAnchor, TextStyle, Transform,
@@ -1084,24 +1082,12 @@ fn node_box(
 
 /// Width of one label in em units under the prose face.
 ///
-/// `document.fonts` carries the `hmtx` advances and the `kern` pairs of the
-/// faces the document renderers paint with, so the node box agrees with the
-/// text it surrounds. A character no bundled face covers falls back per
-/// character to [`TEXT_WIDTH_FACTOR`], matching the heuristic `plotter-scene`
-/// reserves.
+/// Font bytes live in the host, and this lowering has no face-set parameter yet,
+/// so every character measures through [`TEXT_WIDTH_FACTOR`], the same heuristic
+/// `plotter-scene` reserves. Wiring real `hmtx` advances and `kern` pairs needs a
+/// `BodyMetrics` parameter threaded from the conversion host.
 fn label_width(text: &str) -> f64 {
-    let metrics = BodyMetrics::bundled();
-    let face = key_for_run("serif", FontStyle::Normal);
-    let mut width = 0.0;
-    let mut previous: Option<char> = None;
-    for ch in text.chars() {
-        if let Some(left) = previous {
-            width += metrics.kerning_em(face, left, ch).unwrap_or(0.0);
-        }
-        width += metrics.advance_em(face, ch).unwrap_or(TEXT_WIDTH_FACTOR);
-        previous = Some(ch);
-    }
-    width
+    text.chars().count() as f64 * TEXT_WIDTH_FACTOR
 }
 
 /// Turn the collected contours into one path, dashing them when asked.

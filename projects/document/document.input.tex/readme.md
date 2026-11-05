@@ -24,10 +24,10 @@ A source above `MAX_SOURCE_BYTES` (8 MiB) is rejected with
 `vutex.input.tex.source_too_large` before the frontend starts reading. An empty
 source imports as a documented lossy document instead of a failure.
 
-数学用例通过 `include_bytes!` 内嵌
-`projects/document/test-assets/fonts/LatinModernMath-Regular.otf`（GUST 许可，
-同目录附许可文件），并在渲染前 `install_math_font`，因此 CI 不依赖本机字体或
-`VuTeX` 仓存在。
+本仓不携带字体字节。数学用例在运行期从宿主资产包读取
+`LatinModernMath-Regular.otf`（默认取同级 `VuTeX/projects/vutex.rs/fonts/`，
+可用 `VUTEX_FONT_DIR` 覆盖），再经 `install_math_fonts` 注入。资产包缺失时用例
+直接失败并给出路径，不跳过。
 
 字体是环境相关的产品级差异：宿主安装字体后公式排成轮廓，SVG 不再出现公式源码；
 未安装时 `vutex.layout.math.not_typeset` 为 `Error`，公式源码作为文本保留。适配器

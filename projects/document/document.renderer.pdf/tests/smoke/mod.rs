@@ -1,7 +1,7 @@
 //! PDF smoke: the writer emits a parseable byte stream.
 
 use document_presentation::display::{DisplayItem, DisplayPage, DisplayPresentation, DisplayTextRun};
-use document_renderer_pdf::render_pdf;
+use document_renderer_pdf::{PdfFontPolicy, render_pdf_with_font_policy};
 
 #[test]
 fn pdf_writer_emits_a_parseable_document() {
@@ -23,7 +23,9 @@ fn pdf_writer_emits_a_parseable_document() {
         }],
     };
 
-    let bytes = render_pdf(&presentation).expect("pdf render");
+    // ASCII text needs no embedded face, so the base-14 policy keeps the smoke
+    // test free of host font bytes.
+    let bytes = render_pdf_with_font_policy(&presentation, &PdfFontPolicy::Base14Only).expect("pdf render");
     assert!(bytes.starts_with(b"%PDF-"), "missing pdf header");
     assert!(bytes.ends_with(b"%%EOF\n") || bytes.ends_with(b"%%EOF"), "missing pdf trailer");
     assert!(bytes.windows(4).any(|window| window == b"xref"), "missing xref table");

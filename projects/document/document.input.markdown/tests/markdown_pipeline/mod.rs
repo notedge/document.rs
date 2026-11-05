@@ -1,13 +1,26 @@
+use std::path::{Path, PathBuf};
+
 use document_compose::Severity;
+use document_fonts::{MathFontPack, install_math_fonts};
 use document_input_markdown::{codes, import_source, render_svg};
 use document_ir::{Block, Inline, RelationEndpoint};
 use document_layout::Diagrams;
-use document_text::math::{MathFontFamily, install_math_font};
 
-/// The MATH font payload is a test asset, so the suite never depends on
-/// `E:\文档研究\VuTeX` existing on the machine.
+/// Math bytes are host-owned, so read the VuTeX pack beside this repository,
+/// or the directory named by `VUTEX_FONT_DIR`. A missing pack fails the test.
 fn install_test_math_font() {
-    install_math_font(MathFontFamily::LmMath, include_bytes!("../../../test-assets/fonts/LatinModernMath-Regular.otf"));
+    let dir = std::env::var("VUTEX_FONT_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(4)
+            .expect("workspace root")
+            .join("VuTeX")
+            .join("projects")
+            .join("vutex.rs")
+            .join("fonts")
+    });
+    assert!(dir.is_dir(), "markdown pipeline needs the host font pack at {}; set VUTEX_FONT_DIR", dir.display());
+    install_math_fonts(&MathFontPack::load_from(&dir).expect("math font pack"));
 }
 
 const SOURCE: &str = "\
