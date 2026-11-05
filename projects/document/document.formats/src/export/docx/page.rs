@@ -7,6 +7,8 @@
 
 use std::fmt::Write as _;
 
+use document_ir::DocumentGraph;
+
 /// Points per inch divided by twips per inch: every Word length is in twips.
 const TWIPS_PER_POINT: f64 = 20.0;
 
@@ -61,6 +63,30 @@ impl DocxPageSetup {
             line_spacing: 1.21,
         }
     }
+
+    /// Page setup declared by the graph, with A4 filling every gap.
+    ///
+    /// A source that names only part of its geometry keeps this exporter
+    /// honest: the declared facts are repeated verbatim and the rest falls back
+    /// to [`DocxPageSetup::a4`], so a partially declared page never turns into
+    /// a fabricated one.
+    pub fn from_graph(graph: &DocumentGraph) -> Self {
+        let mut setup = Self::a4();
+        let Some(page) = graph.page_setup
+        else {
+            return setup;
+        };
+        setup.page_width = page.page_width.unwrap_or(setup.page_width);
+        setup.page_height = page.page_height.unwrap_or(setup.page_height);
+        setup.margin_top = page.margin_top.unwrap_or(setup.margin_top);
+        setup.margin_right = page.margin_right.unwrap_or(setup.margin_right);
+        setup.margin_bottom = page.margin_bottom.unwrap_or(setup.margin_bottom);
+        setup.margin_left = page.margin_left.unwrap_or(setup.margin_left);
+        setup.columns = page.columns.unwrap_or(setup.columns).max(1);
+        setup.base_font_size = page.base_font_size.unwrap_or(setup.base_font_size);
+        setup.line_spacing = page.line_height.unwrap_or(setup.line_spacing);
+        setup
+    }
 }
 
 impl Default for DocxPageSetup {
@@ -72,12 +98,7 @@ impl Default for DocxPageSetup {
 /// Render `w:sectPr` for the declared page geometry.
 pub fn sect_pr_xml(setup: &DocxPageSetup) -> String {
     let mut xml = String::from("<w:sectPr>");
-    let _ = write!(
-        xml,
-        "<w:pgSz w:w=\"{}\" w:h=\"{}\"/>",
-        twips(setup.page_width),
-        twips(setup.page_height)
-    );
+    let _ = write!(xml, "<w:pgSz w:w=\"{}\" w:h=\"{}\"/>", twips(setup.page_width), twips(setup.page_height));
     let _ = write!(
         xml,
         "<w:pgMar w:top=\"{}\" w:right=\"{}\" w:bottom=\"{}\" w:left=\"{}\" w:header=\"{}\" w:footer=\"{}\" w:gutter=\"0\"/>",
@@ -88,12 +109,7 @@ pub fn sect_pr_xml(setup: &DocxPageSetup) -> String {
         twips(36.0),
         twips(36.0),
     );
-    let _ = write!(
-        xml,
-        "<w:cols w:num=\"{}\" w:space=\"{}\"/>",
-        setup.columns.max(1),
-        twips(setup.column_spacing)
-    );
+    let _ = write!(xml, "<w:cols w:num=\"{}\" w:space=\"{}\"/>", setup.columns.max(1), twips(setup.column_spacing));
     xml.push_str("</w:sectPr>");
     xml
 }
@@ -112,10 +128,7 @@ pub fn styles_xml(setup: &DocxPageSetup) -> String {
     <w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:eastAsia="SimSun" w:cs="Times New Roman"/><w:sz w:val=""#,
     );
     let _ = write!(xml, "{half_points}\"/><w:szCs w:val=\"{half_points}\"/></w:rPr></w:rPrDefault>");
-    let _ = write!(
-        xml,
-        "\n    <w:pPrDefault><w:pPr><w:spacing w:line=\"{line}\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault>"
-    );
+    let _ = write!(xml, "\n    <w:pPrDefault><w:pPr><w:spacing w:line=\"{line}\" w:lineRule=\"auto\"/></w:pPr></w:pPrDefault>");
     xml.push_str("\n  </w:docDefaults>");
     xml.push_str(
         "\n  <w:style w:type=\"paragraph\" w:styleId=\"Normal\" w:default=\"1\"><w:name w:val=\"Normal\"/><w:qFormat/></w:style>",
@@ -173,20 +186,13 @@ mod tests {
     fn a4_section_declares_page_size_and_margins() {
         let xml = sect_pr_xml(&DocxPageSetup::a4());
         assert!(xml.contains("<w:pgSz w:w=\"11906\" w:h=\"16838\"/>"), "{xml}");
-        assert!(
-            xml.contains("w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\""),
-            "{xml}"
-        );
+        assert!(xml.contains("w:top=\"1440\" w:right=\"1440\" w:bottom=\"1440\" w:left=\"1440\""), "{xml}");
         assert!(xml.contains("<w:cols w:num=\"1\""), "{xml}");
     }
 
     #[test]
     fn two_columns_are_written_when_declared() {
-        let setup = DocxPageSetup {
-            columns: 2,
-            column_spacing: 36.0,
-            ..DocxPageSetup::a4()
-        };
+        let setup = DocxPageSetup { columns: 2, column_spacing: 36.0, ..DocxPageSetup::a4() };
         let xml = sect_pr_xml(&setup);
         assert!(xml.contains("<w:cols w:num=\"2\" w:space=\"720\"/>"), "{xml}");
     }
@@ -204,11 +210,7 @@ mod tests {
 
     #[test]
     fn a_smaller_body_text_shrinks_the_declared_size() {
-        let setup = DocxPageSetup {
-            base_font_size: 9.5,
-            line_spacing: 1.03,
-            ..DocxPageSetup::a4()
-        };
+        let setup = DocxPageSetup { base_font_size: 9.5, line_spacing: 1.03, ..DocxPageSetup::a4() };
         let xml = styles_xml(&setup);
         assert!(xml.contains("<w:sz w:val=\"19\"/><w:szCs w:val=\"19\"/>"), "{xml}");
         assert!(xml.contains("<w:spacing w:line=\"247\" w:lineRule=\"auto\"/>"), "{xml}");

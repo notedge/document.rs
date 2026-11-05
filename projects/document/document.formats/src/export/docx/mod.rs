@@ -13,9 +13,12 @@ use crate::FormatError;
 
 pub use page::DocxPageSetup;
 
-/// Export a document graph to DOCX bytes with the default A4 page setup.
+/// Export a document graph to DOCX bytes with the graph's page setup.
+///
+/// A graph that records no page setup exports as A4, matching the previous
+/// default.
 pub fn export_docx_bytes(graph: &DocumentGraph) -> Result<Vec<u8>, FormatError> {
-    export_docx_bytes_with_page_setup(graph, &DocxPageSetup::a4())
+    export_docx_bytes_with_page_setup(graph, &DocxPageSetup::from_graph(graph))
 }
 
 /// Export a document graph to DOCX bytes with an explicit page setup.
