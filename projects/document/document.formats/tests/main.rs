@@ -28,12 +28,8 @@ mod tex_export_smoke {
     #[test]
     fn sizing_options_are_a_loss_not_a_refusal() {
         let graph = import_tex_bytes("sizing", "\\includegraphics[width=2cm]{a.png}\n").expect("tex import");
-        let marker = graph
-            .coverage
-            .loss
-            .iter()
-            .find(|marker| marker.code == "import.tex.image_dimensions")
-            .expect("sizing loss marker");
+        let marker =
+            graph.coverage.loss.iter().find(|marker| marker.code == "import.tex.image_dimensions").expect("sizing loss marker");
         assert_eq!(marker.status, document_ir::SemanticStatus::Partial, "{:?}", graph.coverage.loss);
         let html = export_html(&graph).expect("html export");
         assert!(html.contains(r#"src="a.png""#), "{html}");
@@ -108,7 +104,9 @@ mod html_structure_smoke {
 
     #[test]
     fn table_sections_keep_their_cells() {
-        let output = html("<table><colgroup><col span=2></colgroup><thead><tr><th>h</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>");
+        let output = html(
+            "<table><colgroup><col span=2></colgroup><thead><tr><th>h</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>",
+        );
         assert!(output.contains("<th>h</th>"), "{output}");
         assert!(output.contains("<td>b</td>"), "{output}");
     }
@@ -166,19 +164,13 @@ mod markdown_export_smoke {
 #[cfg(all(feature = "html", feature = "tex", feature = "typst"))]
 mod loss_status_smoke {
     use document_formats::{
-        export::html::export_html, import::html::import_html_bytes, import::tex::import_tex_bytes,
-        import::typst::import_typst_bytes,
+        export::html::export_html,
+        import::{html::import_html_bytes, tex::import_tex_bytes, typst::import_typst_bytes},
     };
     use document_ir::{DocumentGraph, SemanticStatus};
 
     fn status(graph: &DocumentGraph, code: &str) -> SemanticStatus {
-        graph
-            .coverage
-            .loss
-            .iter()
-            .find(|loss| loss.code == code)
-            .unwrap_or_else(|| panic!("missing loss `{code}`"))
-            .status
+        graph.coverage.loss.iter().find(|loss| loss.code == code).unwrap_or_else(|| panic!("missing loss `{code}`")).status
     }
 
     #[test]
@@ -210,5 +202,3 @@ mod loss_status_smoke {
         assert!(!template_html.contains("<p>x</p>"), "{template_html}");
     }
 }
-
-
