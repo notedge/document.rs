@@ -1927,10 +1927,26 @@ impl LayoutEngine {
 
         let mut v_children = Vec::new();
 
+        // TeX adds `big_op_spacing5` of extra clearance above and below a
+        // display-style limit stack.  The MATH table has no constant for that
+        // value, and the rendered reference is not reachable with the table
+        // constants alone: with the operator centred on the axis the upper limit
+        // baseline lands at 1.15 em above the formula baseline while TeX puts it
+        // at 1.25 em, and the lower one at 1.07 em instead of 1.16 em.  Carrying
+        // TeX's `\fontdimen15` value of one tenth of the em on both sides closes
+        // both gaps and leaves the sum's own glyph difference untouched.
+        const BIG_OP_DISPLAY_CLEARANCE_EM: f64 = 0.10;
+        let display_clearance = if style == MathStyle::Display {
+            size * Fixed::from_f64(BIG_OP_DISPLAY_CLEARANCE_EM)
+        }
+        else {
+            Fixed::ZERO
+        };
+
         if let Some(sup_l) = sup_layout {
             let gap = self.math_constant(MathConstant::UpperLimitGapMin, size).unwrap_or(Fixed::ZERO);
             let rise = self.math_constant(MathConstant::UpperLimitBaselineRiseMin, size).unwrap_or(Fixed::ZERO);
-            let kern = gap.max(rise - base_layout.height() - sup_l.depth());
+            let kern = gap.max(rise - base_layout.height() - sup_l.depth()) + display_clearance;
 
             let sup_hbox = self.pack_hbox(
                 vec![LayoutNode::Kern((total_width - sup_l.width()) / Fixed::from_f64(2.0)), sup_l],
@@ -1961,9 +1977,9 @@ impl LayoutEngine {
             // baseline across the subscript's height. Taking the max of both
             // requirements keeps the gap rule from being applied on top of an
             // already sufficient baseline drop.
-            baseline_drop = (base_depth + gap + sub_height).max(drop);
+            baseline_drop = (base_depth + gap + sub_height + display_clearance).max(drop);
 
-            v_children.push(LayoutNode::Kern(gap));
+            v_children.push(LayoutNode::Kern(gap + display_clearance));
             let sub_hbox = self.pack_hbox(
                 vec![LayoutNode::Kern((total_width - sub_l.width()) / Fixed::from_f64(2.0)), sub_l],
                 Some(total_width),
