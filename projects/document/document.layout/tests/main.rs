@@ -2,3 +2,6 @@
 
 mod block;
 mod math;
+
+mod diagram;
+mod document;

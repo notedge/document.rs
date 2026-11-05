@@ -10,6 +10,29 @@ mod xlsx;
 #[cfg(feature = "pptx")]
 mod pptx;
 
+mod common;
+#[cfg(feature = "doc")]
+mod doc;
+#[cfg(feature = "docx")]
+mod docx;
+#[cfg(feature = "epub")]
+mod epub;
+#[cfg(feature = "html")]
+mod html;
+mod integration;
+#[cfg(feature = "markdown")]
+mod markdown;
+#[cfg(feature = "notedown")]
+mod notedown;
+#[cfg(feature = "pdf")]
+mod pdf;
+#[cfg(feature = "markdown")]
+mod provenance;
+#[cfg(feature = "tex")]
+mod tex;
+#[cfg(feature = "typst")]
+mod typst;
+
 /// Cross-reference and verbatim constructs that used to fail or drift.
 #[cfg(all(feature = "html", feature = "tex"))]
 mod tex_export_smoke {

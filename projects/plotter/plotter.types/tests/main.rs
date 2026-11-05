@@ -2,3 +2,9 @@
 
 mod color;
 mod diagnostics;
+
+mod geometry;
+mod rejections;
+mod text_metrics;
+mod theme;
+mod transform;

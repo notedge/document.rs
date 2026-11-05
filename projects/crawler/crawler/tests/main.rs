@@ -2,3 +2,15 @@
 
 mod admission;
 mod fallback;
+
+mod assets;
+mod browser;
+mod crawl;
+mod frontier;
+mod html_import;
+mod input;
+mod logger_transport;
+mod markdown;
+mod seed_input;
+mod sitemap;
+mod snapshot;

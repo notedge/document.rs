@@ -3,3 +3,5 @@
 mod contracts;
 mod fail_closed;
 mod markdown_pipeline;
+
+mod markdown_constructs;

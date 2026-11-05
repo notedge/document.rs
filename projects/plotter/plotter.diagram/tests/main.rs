@@ -2,3 +2,7 @@
 
 mod catalog;
 mod shapes;
+
+mod layout;
+mod render;
+mod spec;

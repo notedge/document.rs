@@ -2,3 +2,6 @@
 
 mod fail_closed;
 mod render_smoke;
+
+mod minimal_loop;
+mod structure_probe;
