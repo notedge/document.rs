@@ -784,15 +784,17 @@ impl<'a> TexLowerer<'a> {
                     .collect::<Vec<_>>();
                 if !options.is_empty() {
                     // `Inline::Image` carries the target only, so sizing and
-                    // placement options cannot be reproduced. Record them
-                    // instead of dropping them without a trace.
+                    // placement options cannot be reproduced. The code is hard
+                    // (`Unsupported`) instead of a soft approximation marker, so
+                    // the construct is measured as an explicit refusal rather
+                    // than claimed as passed while the size is discarded.
                     self.loss(
                         "import.tex.image_dimensions",
                         format!(
                             "image options [{}] have no image node field and are not reproduced; only the target path is kept",
                             options.join("] [")
                         ),
-                        SemanticStatus::Partial,
+                        SemanticStatus::Unsupported,
                     );
                 }
                 InlineOutcome::Inline(Inline::Image { source, alt: Vec::new(), title: None, asset: None })
