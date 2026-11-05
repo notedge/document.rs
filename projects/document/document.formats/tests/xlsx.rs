@@ -138,6 +138,32 @@ fn render_emits_paginated_pages_and_evidence_html() {
     println!("xlsx evidence html: {}", output.display());
 }
 
+#[test]
+fn column_clamped_pages_keep_page_numbers_contiguous() {
+    let workbook = import_xlsx_bytes("in-memory-wide.xlsx", &wide_workbook()).expect("wide import");
+    let render = render_workbook_html(&workbook, &RenderOptions::default());
+    let total = render.pages.len();
+    assert!(total > 1, "{:?}", render.pages);
+    assert!(render.issues.iter().any(|issue| issue.code == "render.xlsx.column-clamped"), "{:?}", render.issues);
+
+    let numbers: Vec<usize> = render.pages.iter().map(|page| page.number).collect();
+    assert_eq!(numbers, (1..=total).collect::<Vec<_>>(), "page numbers stay contiguous once a column is clamped");
+    assert!(render.pages.iter().all(|page| page.total == total));
+
+    // The clamped column (A) forms its own column band, so no cell is drawn twice
+    // and no column is skipped across the row-band pages.
+    let mut column_bands: Vec<(u32, u32)> = render.pages.iter().map(|page| (page.first_column, page.last_column)).collect();
+    column_bands.sort_unstable();
+    column_bands.dedup();
+    assert_eq!(column_bands, vec![(1, 1), (2, 4)], "{column_bands:?}");
+    let drawn: usize = render.pages.iter().map(|page| page.cell_count).sum();
+    assert_eq!(drawn, 120 * 4, "every cell of the wide sheet is drawn exactly once");
+
+    assert!(render.html.contains("page 1/"), "{}", render.html);
+    assert!(render.html.contains(&format!("page {total}/{total}")), "{}", render.html);
+    assert!(!render.html.contains("1790.0px"), "the clamped column never exceeds the page budget");
+}
+
 // --- in-memory OOXML sample -------------------------------------------------
 
 fn sample_workbook() -> Vec<u8> {
@@ -160,6 +186,33 @@ fn sample_workbook() -> Vec<u8> {
     text("xl/tables/table1.xml", TABLE);
     parts.push(("xl/media/image1.png", PNG.to_vec()));
     zip_stored(&parts)
+}
+
+fn wide_workbook() -> Vec<u8> {
+    let mut parts: Vec<(&str, Vec<u8>)> = Vec::new();
+    let mut text = |path: &'static str, body: &str| parts.push((path, body.as_bytes().to_vec()));
+    text("[Content_Types].xml", WIDE_CONTENT_TYPES);
+    text("_rels/.rels", PACKAGE_RELS);
+    text("xl/workbook.xml", WIDE_WORKBOOK);
+    text("xl/_rels/workbook.xml.rels", WIDE_WORKBOOK_RELS);
+    text("xl/styles.xml", WIDE_STYLES);
+    parts.push(("xl/worksheets/sheet1.xml", wide_sheet().into_bytes()));
+    zip_stored(&parts)
+}
+
+/// A sheet whose first column alone is wider than a page, so the column has to
+/// be clamped while the row bands keep paginating.
+fn wide_sheet() -> String {
+    let mut sheet = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><dimension ref=\"A1:D120\"/><sheetViews><sheetView workbookViewId=\"0\"/></sheetViews><sheetFormatPr baseColWidth=\"8\" defaultRowHeight=\"15\"/><cols><col width=\"255\" customWidth=\"1\" min=\"1\" max=\"1\"/><col width=\"10\" customWidth=\"1\" min=\"2\" max=\"2\"/><col width=\"10\" customWidth=\"1\" min=\"3\" max=\"3\"/><col width=\"10\" customWidth=\"1\" min=\"4\" max=\"4\"/></cols><sheetData>",
+    );
+    for row in 1..=120 {
+        sheet.push_str(&format!(
+            "<row r=\"{row}\"><c r=\"A{row}\" t=\"inlineStr\"><is><t>wide-{row}</t></is></c><c r=\"B{row}\" t=\"inlineStr\"><is><t>b{row}</t></is></c><c r=\"C{row}\" t=\"inlineStr\"><is><t>c{row}</t></is></c><c r=\"D{row}\" t=\"inlineStr\"><is><t>d{row}</t></is></c></row>"
+        ));
+    }
+    sheet.push_str("</sheetData><pageMargins left=\"0.75\" right=\"0.75\" top=\"1\" bottom=\"1\" header=\"0.5\" footer=\"0.5\"/></worksheet>");
+    sheet
 }
 
 fn zip_stored(parts: &[(&str, Vec<u8>)]) -> Vec<u8> {
@@ -210,6 +263,14 @@ fn crc32(bytes: &[u8]) -> u32 {
     }
     !crc
 }
+
+const WIDE_CONTENT_TYPES: &str = r##"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>"##;
+
+const WIDE_WORKBOOK: &str = r##"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Wide" sheetId="1" state="visible" r:id="rId1"/></sheets></workbook>"##;
+
+const WIDE_WORKBOOK_RELS: &str = r##"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet1.xml" Id="rId1"/><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="/xl/styles.xml" Id="rId2"/></Relationships>"##;
+
+const WIDE_STYLES: &str = r##"<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"##;
 
 const CONTENT_TYPES: &str = r##"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/comments/comment1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/></Types>"##;
 
