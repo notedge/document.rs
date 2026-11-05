@@ -1745,9 +1745,21 @@ impl LayoutEngine {
         // height plus depth reaches the radicand's extent plus the clearance
         // plus the rule. A sign drawn from the base outline is never scaled —
         // that would be an invented design, not a font fact.
+        //
+        // Appendix G's acceptance test applies to the radical exactly as it does
+        // to a fence: the smallest design that reaches
+        // `max(0.901 × required, required − \delimitershortfall)` is accepted,
+        // even when it is a little short of the required extent.  Selecting the
+        // first design that fully covers the radicand instead jumps a whole
+        // variant step whenever the radicand crosses the design boundary — the
+        // `radical-index` case took the 1.2 em design while TeX stayed on its
+        // 12 pt one, and the extra 2.2 pt widened the measured box by 0.23 em.
         let radical_key = GlyphKey::from_char('√', Some("default".to_string()), FontStyle::Normal);
-        let min_hdp = radicand_layout.height() + radicand_layout.depth() + vertical_gap + rule_thickness;
-        let radical_symbol = self.radical_sign(&radical_key, min_hdp, size, radical_span)?;
+        let required = radicand_layout.height() + radicand_layout.depth() + vertical_gap + rule_thickness;
+        let minimum = (required * Fixed::from_f64(DELIMITER_FACTOR))
+            .max(required - size * Fixed::from_f64(DELIMITER_SHORTFALL_EM))
+            .max(size);
+        let radical_symbol = self.radical_sign(&radical_key, minimum, size, radical_span)?;
 
         // Height of the nominal radical bar above the radicand baseline, before
         // the delta adjustment below. The engine raises the degree by a
@@ -1764,8 +1776,7 @@ impl LayoutEngine {
         let mut radical_box = self.pack_hbox(vec![radical_symbol], None);
         let radical_box_height = radical_box.height();
         let design_extent = radical_box_height + radical_box.depth();
-        let requirement = radicand_layout.height() + radicand_layout.depth() + vertical_gap + rule_thickness;
-        let excess = design_extent - requirement;
+        let excess = design_extent - required;
         if excess > Fixed::ZERO {
             vertical_gap = vertical_gap + excess / Fixed::from_f64(2.0);
         }
@@ -1788,7 +1799,12 @@ impl LayoutEngine {
         // Aligning the ink top to the rule's top edge instead drops the whole
         // assembly by one rule thickness and leaves extra descent (the
         // `radical` record failed G1 by 16.6% / 20.7% before this fix).
-        let rule_bottom = radicand_layout.height() + vertical_gap + rule_thickness;
+        // The clearance is measured from the radicand's ink to the *bottom*
+        // edge of the vinculum, so the kern only advances the radicand by
+        // `vertical_gap`.  Advancing by `vertical_gap + rule_thickness` charged
+        // the rule twice and made every radical 0.04 em taller than its font
+        // clearance allows.
+        let rule_bottom = radicand_layout.height() + vertical_gap;
         if let LayoutNode::HBox(h) = &mut radical_box {
             h.shift = radical_box_height - rule_bottom;
         }
@@ -1829,7 +1845,7 @@ impl LayoutEngine {
 
         let mut radicand_vbox = Vec::new();
         radicand_vbox.push(LayoutNode::Rule { width: radicand_layout.width(), height: rule_thickness, depth: Fixed::ZERO });
-        radicand_vbox.push(LayoutNode::Kern(vertical_gap + rule_thickness));
+        radicand_vbox.push(LayoutNode::Kern(vertical_gap));
         radicand_vbox.push(radicand_layout);
 
         let packed_radicand = self.pack_vbox(radicand_vbox, Alignment::Left);
