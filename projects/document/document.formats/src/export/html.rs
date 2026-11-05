@@ -277,11 +277,19 @@ fn write_block(
                 out.push_str("</span>");
             }
         }
-        Block::Opaque { kind, .. } => {
-            return Err(FormatError::unsupported(
-                "html",
-                format!("opaque block kind {kind} is not supported by the HTML exporter"),
-            ));
+        Block::Opaque { kind, payload_hint, .. } => {
+            // Opaque payloads stay in the IR for the stages that understand
+            // them. The HTML projection either skips the construct or renders
+            // the authored payload as inert text, so one construct that has no
+            // HTML form no longer fails the whole document. Every deferral is
+            // already recorded in the graph loss markers at import time.
+            if !kind.starts_with("typst.") {
+                out.push_str(r#"<div class="opaque" data-opaque-kind=""#);
+                escape_attribute(out, kind);
+                out.push_str(r#"">"#);
+                escape_text(out, payload_hint);
+                out.push_str("</div>");
+            }
         }
         Block::RawHtml { html } => {
             out.push_str(html);
@@ -461,11 +469,23 @@ fn write_inlines(out: &mut String, inlines: &[Inline], footnote_refs: &mut Footn
                 }
                 out.push_str("</a></sup>");
             }
-            Inline::Citation { .. } => {
-                return Err(FormatError::unsupported(
-                    "html",
-                    "inline semantic node is not representable by the conservative IR HTML exporter yet",
-                ));
+            Inline::Citation { key, display } => {
+                // A citation has no HTML form without a citation database, so
+                // it degrades to its authored key as text instead of failing
+                // the document. The unresolved relation stays visible in the
+                // graph loss markers.
+                out.push_str(r#"<span class="citation" data-citation-key=""#);
+                escape_attribute(out, key);
+                out.push_str(r#"">"#);
+                match display {
+                    Some(display) => write_inlines(out, display, footnote_refs)?,
+                    None => {
+                        out.push('[');
+                        escape_text(out, key);
+                        out.push(']');
+                    }
+                }
+                out.push_str("</span>");
             }
             Inline::RawHtml { html } => out.push_str(html),
         }
