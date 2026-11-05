@@ -1,8 +1,11 @@
 //! scale / coord / facet / theme 基线组合。
 
-use apollo::{
-    ColumnTable, CompileOptions, CoordinateSpec, FacetSpec, Interval, LayerSpec, Mapping, PlotSpec, ScaleSpec, ThemeSpec,
-    compile_plot,
+use plotter::{
+    data::ColumnTable,
+    grammar::{
+        CompileOptions, CoordinateSpec, FacetSpec, LayerSpec, Mapping, PlotSpec, ScaleSpec, ThemeSpec, compile_plot,
+    },
+    types::plot::Interval,
 };
 
 #[test]
