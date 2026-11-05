@@ -21,7 +21,7 @@ pub struct ToUnicodeMap(InnerToUnicodeMap);
 impl ToUnicodeMap {
     /// Decode bytes using the CMap.
     pub fn decode(&self, bytes: &[u8]) -> String {
-        self.0.decode(bytes).unwrap_or_default()
+        self.0.decode_run(bytes).map(|(text, _)| text).unwrap_or_default()
     }
 }
 
@@ -44,7 +44,7 @@ pub fn parse_to_unicode_cmap(bytes: &[u8]) -> Option<ToUnicodeMap> {
 /// Decode text using an optional font CMap.
 pub fn decode_with_font(bytes: &[u8], font: Option<&str>, maps: &HashMap<String, ToUnicodeMap>, literal: bool) -> String {
     let inner = maps.iter().map(|(name, map)| (name.clone(), map.0.clone())).collect::<HashMap<String, InnerToUnicodeMap>>();
-    decode_with_font_impl(bytes, font, &inner, literal).unwrap_or_default()
+    decode_with_font_impl(bytes, font, &inner, literal).map(|run| run.text).unwrap_or_default()
 }
 
 /// Decode a PDF parenthesized string.

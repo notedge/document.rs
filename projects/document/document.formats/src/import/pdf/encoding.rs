@@ -1,18 +1,41 @@
 use std::collections::HashMap;
 
 use super::fonts::ToUnicodeMap;
+
+/// Decoded text plus the advance it covers, in em units.
+///
+/// `advance` is `None` when the font has no width for at least one glyph. The
+/// content walker must then skip geometric gap detection instead of estimating
+/// a width.
+pub(crate) struct DecodedRun {
+    pub(crate) text: String,
+    pub(crate) advance: Option<f32>,
+}
+
 pub(crate) fn decode_with_font(
     bytes: &[u8],
     font: Option<&str>,
     maps: &HashMap<String, ToUnicodeMap>,
     literal: bool,
-) -> Option<String> {
+) -> Option<DecodedRun> {
     match font {
         Some(name) => {
             let map = maps.get(name)?;
-            if literal { map.decode(&unescape_pdf_literal(bytes)) } else { map.decode(bytes) }
+            let unescaped;
+            let decoded = if literal {
+                unescaped = unescape_pdf_literal(bytes);
+                unescaped.as_slice()
+            }
+            else {
+                bytes
+            };
+            let (text, advance) = map.decode_run(decoded)?;
+            Some(DecodedRun { text, advance })
         }
-        None => Some(if literal { decode_pdf_string(bytes) } else { decode_text_bytes(bytes) }),
+        None => Some(DecodedRun {
+            text: if literal { decode_pdf_string(bytes) } else { decode_text_bytes(bytes) },
+            advance: None,
+        }),
     }
 }
 pub(crate) fn win_ansi_encoding(byte: u8) -> char {

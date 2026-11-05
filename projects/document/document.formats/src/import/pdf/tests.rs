@@ -85,6 +85,28 @@ fn single_page_font_pdf(font_dictionary: &str, font_section: &str, to_unicode: O
     pdf.into_bytes()
 }
 
+/// Build a one-page PDF with extra indirect objects for a descendant font or an
+/// encoding CMap. Object ids 10 and above are reserved for `extra`.
+fn width_font_pdf(font_dictionary: &str, to_unicode: Option<&str>, extra: &[(u32, String)], content: &str) -> Vec<u8> {
+    let to_unicode_reference = if to_unicode.is_some() { " /ToUnicode 6 0 R" } else { "" };
+    let mut pdf = String::from("%PDF-1.4\n");
+    pdf.push_str("1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
+    pdf.push_str("2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n");
+    pdf.push_str(&format!(
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n"
+    ));
+    pdf.push_str(&format!("4 0 obj\n<< {font_dictionary}{to_unicode_reference} >>\nendobj\n"));
+    pdf.push_str(&format!("5 0 obj\n<< /Length {} >>\nstream\n{content}\nendstream\nendobj\n", content.len()));
+    if let Some(cmap) = to_unicode {
+        pdf.push_str(&format!("6 0 obj\n<< /Length {} >>\nstream\n{cmap}\nendstream\nendobj\n", cmap.len()));
+    }
+    for (id, body) in extra {
+        pdf.push_str(&format!("{id} 0 obj\n{body}\nendobj\n"));
+    }
+    pdf.push_str("trailer\n<< /Root 1 0 R >>\n%%EOF\n");
+    pdf.into_bytes()
+}
+
 fn contains_control_character(texts: &[String]) -> bool {
     texts.iter().any(|text| text.chars().any(char::is_control))
 }
@@ -240,6 +262,101 @@ fn unresolved_font_fails_closed_with_diagnostic() {
     assert!(
         graph.coverage.loss.iter().any(|loss| loss.code == "import.pdf.font_encoding_unresolved"),
         "an unresolved font must be reported"
+    );
+}
+
+#[test]
+fn simple_font_widths_build_a_word_gap() {
+    let font = "/Type /Font /Subtype /Type1 /BaseFont /Test /Encoding /WinAnsiEncoding /FirstChar 65 /LastChar 66 /Widths [500 500]";
+    let pdf = width_font_pdf(
+        font,
+        None,
+        &[],
+        "BT /F1 10 Tf 1 0 0 1 20 800 Tm (A) Tj 1 0 0 1 60 800 Tm (B) Tj ET",
+    );
+    let graph = import_pdf_bytes("simple-width-gap", &pdf).expect("pdf import");
+
+    assert_eq!(
+        paragraph_texts(&graph),
+        ["A B"],
+        "a gap wider than 0.2 em past the declared advance is a word gap"
+    );
+}
+
+#[test]
+fn simple_font_widths_ignore_a_subthreshold_gap() {
+    let font = "/Type /Font /Subtype /Type1 /BaseFont /Test /Encoding /WinAnsiEncoding /FirstChar 65 /LastChar 66 /Widths [500 500]";
+    let pdf = width_font_pdf(
+        font,
+        None,
+        &[],
+        "BT /F1 10 Tf 1 0 0 1 20 800 Tm (A) Tj 1 0 0 1 26 800 Tm (B) Tj ET",
+    );
+    let graph = import_pdf_bytes("simple-width-kerning", &pdf).expect("pdf import");
+
+    assert_eq!(paragraph_texts(&graph), ["AB"], "a gap below 0.2 em is kerning, not a word gap");
+}
+
+#[test]
+fn type0_w_array_builds_a_word_gap() {
+    let descendant = "/Type /Font /Subtype /CIDFontType0 /BaseFont /Test /DW 1000 /W [1 [500] 2 [500]]".to_string();
+    let cmap = "2 beginbfchar\n<0001> <0041>\n<0002> <0042>\nendbfchar\n";
+    let pdf = width_font_pdf(
+        "/Type /Font /Subtype /Type0 /BaseFont /Test /Encoding /Identity-H /DescendantFonts [10 0 R]",
+        Some(cmap),
+        &[(10, descendant)],
+        "BT /F1 10 Tf 1 0 0 1 20 800 Tm <0001> Tj 1 0 0 1 60 800 Tm <0002> Tj ET",
+    );
+    let graph = import_pdf_bytes("type0-width-gap", &pdf).expect("pdf import");
+
+    assert_eq!(paragraph_texts(&graph), ["A B"], "the `/W` array supplies composite glyph advances");
+}
+
+#[test]
+fn encoding_cmap_widths_build_a_word_gap() {
+    let cmap = "/CIDInit /ProcSet findresource begin\n\
+                begincmap\n\
+                1 begincodespacerange\n\
+                <0001> <0002>\n\
+                endcodespacerange\n\
+                1 begincidrange\n\
+                <0001> <0002> 1\n\
+                endcidrange\n\
+                1 2 500 W\n\
+                endcmap\n\
+                end\n";
+    let encoding = format!("<< /Length {} >>\nstream\n{cmap}\nendstream", cmap.len());
+    let to_unicode = "2 beginbfchar\n<0001> <0041>\n<0002> <0042>\nendbfchar\n";
+    let pdf = width_font_pdf(
+        "/Type /Font /Subtype /Type0 /BaseFont /Test /Encoding 11 0 R /DescendantFonts [10 0 R]",
+        Some(to_unicode),
+        &[(10, "/Type /Font /Subtype /CIDFontType0 /BaseFont /Test".to_string()), (11, encoding)],
+        "BT /F1 10 Tf 1 0 0 1 20 800 Tm <0001> Tj 1 0 0 1 60 800 Tm <0002> Tj ET",
+    );
+    let graph = import_pdf_bytes("cmap-width-gap", &pdf).expect("pdf import");
+
+    assert_eq!(
+        paragraph_texts(&graph),
+        ["A B"],
+        "an embedded encoding CMap must map codes to CIDs and supply `W` widths"
+    );
+}
+
+#[test]
+fn missing_widths_do_not_synthesise_a_space() {
+    let cmap = "2 beginbfchar\n<0001> <0041>\n<0002> <0042>\nendbfchar\n";
+    let pdf = width_font_pdf(
+        "/Type /Font /Subtype /Type0 /BaseFont /Test /Encoding /Identity-H",
+        Some(cmap),
+        &[],
+        "BT /F1 10 Tf 1 0 0 1 20 800 Tm <0001> Tj 1 0 0 1 60 800 Tm <0002> Tj ET",
+    );
+    let graph = import_pdf_bytes("missing-widths", &pdf).expect("pdf import");
+
+    assert_eq!(
+        paragraph_texts(&graph),
+        ["AB"],
+        "without a declared width the geometric gap must stay unevaluated instead of being estimated"
     );
 }
 

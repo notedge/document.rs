@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::{
-    encoding::decode_with_font,
+    encoding::{DecodedRun, decode_with_font},
     fonts::ToUnicodeMap,
     images::parse_inline_jpeg,
     syntax::{
@@ -28,15 +28,19 @@ enum Separation {
 /// still catches every line advance in the regression samples.
 const LINE_BREAK_EM: f32 = 0.7;
 
-/// A `TJ` displacement wider than a fifth of an em is a word gap.
+/// A word gap is a fifth of an em, measured either as a `TJ` displacement or as
+/// the distance from the previous run's declared end to the next run's start.
 ///
-/// Small negative numbers are kerning between adjacent glyphs. The threshold is
-/// measured in ems so it follows the active font size.
+/// Small negative `TJ` numbers are kerning between adjacent glyphs. The
+/// geometric gap is `next_start - (previous_start + advance)`, where `advance`
+/// comes from the font width tables (`/Widths`, `/W` or CMap `W`). When either
+/// run has no declared width the gap is not evaluated and no space is
+/// synthesised, so a font without width data keeps its current output.
 const WORD_SPACE_EM: f32 = 0.2;
 
-// Horizontal gaps are not synthesised from `Td`: writers place every glyph
-// with its own `Td`, and those advances are glyph widths rather than gaps.
-// Word gaps come from the space glyphs a writer emits and from `TJ` numbers.
+// Writers place every glyph with its own `Td`, and those advances are glyph
+// widths rather than gaps. The geometric check therefore subtracts the
+// previous run's declared advance instead of treating a `Td` move as a gap.
 
 pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, ToUnicodeMap>) -> ExtractedText {
     let mut events = Vec::new();
@@ -47,6 +51,13 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
     let mut font_size = 0.0f32;
     let mut text_position: Option<(f32, f32)> = None;
     let mut text_block_start = true;
+    // End of the previous glyph run on the current baseline, in text-space
+    // units. `None` means the run had no declared advance, so the next gap is
+    // unknown and must not be turned into a space.
+    let mut pen_end: Option<f32> = None;
+    // Whether `text_position` was set by a positioning operator since the last
+    // text run. Without one, the next run starts where the pen already is.
+    let mut positioned = false;
     let mut separation = Separation::None;
     let mut last_char: Option<char> = None;
     while cursor < stream.len() {
@@ -83,7 +94,9 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                 let after = skip_content_space(stream, close + 1);
                 if pdf_operator_at(stream, after, b"Tj") {
                     let decoded = decode_with_font(&stream[cursor + 1..close], current_font.as_deref(), font_maps, true);
-                    push_decoded_text(
+                    let start = run_start(positioned, text_position, pen_end);
+                    note_geometric_gap(start, pen_end, font_size, &mut separation);
+                    let advance = push_decoded_text(
                         &mut events,
                         &mut unresolved_fonts,
                         current_font.as_deref(),
@@ -92,6 +105,8 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                         &mut separation,
                         &mut last_char,
                     );
+                    pen_end = pen_after_run(start, advance, font_size);
+                    positioned = false;
                 }
                 else if pdf_operator_at(stream, after, b"'") || pdf_operator_at(stream, after, b"\"") {
                     let decoded = decode_with_font(&stream[cursor + 1..close], current_font.as_deref(), font_maps, true);
@@ -105,6 +120,8 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                         &mut last_char,
                     );
                     text_position = None;
+                    pen_end = None;
+                    positioned = false;
                 }
                 cursor = close + 1;
             }
@@ -118,7 +135,9 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                 let text = &stream[cursor + 1..close];
                 if pdf_operator_at(stream, after, b"Tj") {
                     let decoded = decode_with_font(&hex_bytes(text), current_font.as_deref(), font_maps, false);
-                    push_decoded_text(
+                    let start = run_start(positioned, text_position, pen_end);
+                    note_geometric_gap(start, pen_end, font_size, &mut separation);
+                    let advance = push_decoded_text(
                         &mut events,
                         &mut unresolved_fonts,
                         current_font.as_deref(),
@@ -127,6 +146,8 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                         &mut separation,
                         &mut last_char,
                     );
+                    pen_end = pen_after_run(start, advance, font_size);
+                    positioned = false;
                 }
                 else if pdf_operator_at(stream, after, b"'") || pdf_operator_at(stream, after, b"\"") {
                     let decoded = decode_with_font(&hex_bytes(text), current_font.as_deref(), font_maps, false);
@@ -140,12 +161,15 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                         &mut last_char,
                     );
                     text_position = None;
+                    pen_end = None;
+                    positioned = false;
                 }
                 cursor = close + 1;
             }
             b'[' => {
                 let mut position = cursor + 1;
                 let mut run = String::new();
+                let mut advance = Some(0.0f32);
                 while position < stream.len() && stream[position] != b']' {
                     if stream[position] == b'(' {
                         let Some(end) = literal_close(stream, position + 1)
@@ -154,6 +178,7 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                         };
                         push_decoded_run(
                             &mut run,
+                            &mut advance,
                             &mut unresolved_fonts,
                             current_font.as_deref(),
                             decode_with_font(&stream[position + 1..end], current_font.as_deref(), font_maps, true),
@@ -168,6 +193,7 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                         let end = position + 1 + relative;
                         push_decoded_run(
                             &mut run,
+                            &mut advance,
                             &mut unresolved_fonts,
                             current_font.as_deref(),
                             decode_with_font(&hex_bytes(&stream[position + 1..end]), current_font.as_deref(), font_maps, false),
@@ -181,19 +207,21 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                         spacing_adjustments = true;
                         let start = position;
                         position = skip_pdf_number(stream, position);
-                        if let Ok(value) = std::str::from_utf8(&stream[start..position]).unwrap_or("").parse::<f32>()
-                            && font_size > 0.0
-                        {
-                            // A negative `TJ` number moves the pen right. Only a
-                            // displacement wider than the threshold is a word
-                            // gap, smaller ones are kerning between glyphs.
-                            let gap = -value / 1000.0 * font_size;
-                            if gap >= WORD_SPACE_EM * font_size {
-                                if run.is_empty() {
-                                    separation = separation.max(Separation::Space);
-                                }
-                                else if !run.ends_with(|character: char| character.is_whitespace()) {
-                                    run.push(' ');
+                        if let Ok(value) = std::str::from_utf8(&stream[start..position]).unwrap_or("").parse::<f32>() {
+                            // A negative `TJ` number moves the pen right, so the
+                            // same signed displacement extends the run advance.
+                            advance = advance.map(|total| total + -value / 1000.0);
+                            if font_size > 0.0 {
+                                // Only a displacement wider than the threshold
+                                // is a word gap, smaller ones are kerning.
+                                let gap = -value / 1000.0 * font_size;
+                                if gap >= WORD_SPACE_EM * font_size {
+                                    if run.is_empty() {
+                                        separation = separation.max(Separation::Space);
+                                    }
+                                    else if !run.ends_with(|character: char| character.is_whitespace()) {
+                                        run.push(' ');
+                                    }
                                 }
                             }
                         }
@@ -203,17 +231,27 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                     }
                 }
                 if position < stream.len() && pdf_operator_at(stream, skip_content_space(stream, position + 1), b"TJ") {
+                    let start = run_start(positioned, text_position, pen_end);
+                    note_geometric_gap(start, pen_end, font_size, &mut separation);
                     push_text_event(&mut events, run, &mut separation, &mut last_char);
+                    pen_end = pen_after_run(start, advance, font_size);
+                    positioned = false;
                 }
                 cursor = position.saturating_add(1);
             }
             b'B' if (cursor == 0 || pdf_delimiter(stream[cursor - 1])) && pdf_operator_at(stream, cursor, b"BT") => {
                 text_block_start = true;
+                // The text matrix restarts, but writers split one visual line
+                // into several `BT`/`ET` blocks. The pen end therefore survives
+                // the block boundary, and only a line move suppresses the gap.
+                positioned = false;
                 cursor += 2;
             }
             b'T' if (cursor == 0 || pdf_delimiter(stream[cursor - 1])) && pdf_operator_at(stream, cursor, b"T*") => {
                 separation = Separation::Line;
                 text_position = None;
+                pen_end = None;
+                positioned = false;
                 text_block_start = false;
                 cursor += 2;
             }
@@ -223,6 +261,7 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                         TextPosition::Matrix if values.len() >= 6 => {
                             note_text_position(&mut text_position, (values[4], values[5]), font_size, &mut separation);
                             text_block_start = false;
+                            positioned = true;
                         }
                         TextPosition::Translate if values.len() >= 2 => {
                             // `Td` and `TD` are relative to the text line matrix.
@@ -238,6 +277,7 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
                             };
                             note_text_position(&mut text_position, next, font_size, &mut separation);
                             text_block_start = false;
+                            positioned = true;
                         }
                         _ => {}
                     }
@@ -254,37 +294,93 @@ pub(crate) fn extract_text_operators(stream: &[u8], font_maps: &HashMap<String, 
     ExtractedText { events, spacing_adjustments, unresolved_fonts }
 }
 
+/// Where the next run starts on the current baseline.
+///
+/// A positioning operator sets the start from the text matrix. Without one the
+/// pen already sits at the previous run's end, so the gap is zero.
+///
+/// A word gap is measured inside one fragment: the previous run's advance and
+/// the next run's start come from the same line, and a line move wins over a
+/// space. Font switches are allowed because math and table fragments change
+/// fonts between adjacent words.
+fn run_start(positioned: bool, text_position: Option<(f32, f32)>, pen_end: Option<f32>) -> Option<f32> {
+    if positioned { text_position.map(|(x, _)| x) } else { pen_end }
+}
+
+/// Turn a geometric gap between glyph runs into a word space.
+///
+/// The gap is `next_start - previous_end`, with both ends measured in text-space
+/// units and compared against `WORD_SPACE_EM × font_size`. A line break wins
+/// over a space, and an unknown width on either side leaves the gap unevaluated.
+fn note_geometric_gap(start: Option<f32>, pen_end: Option<f32>, font_size: f32, separation: &mut Separation) {
+    if *separation == Separation::Line || font_size <= 0.0 {
+        return;
+    }
+    let (Some(start), Some(end)) = (start, pen_end)
+    else {
+        return;
+    };
+    if start - end >= WORD_SPACE_EM * font_size {
+        *separation = (*separation).max(Separation::Space);
+    }
+}
+
+
+
+/// Pen end after a run, or `None` when its start or advance is unknown.
+fn pen_after_run(start: Option<f32>, advance: Option<f32>, font_size: f32) -> Option<f32> {
+    match (start, advance) {
+        (Some(start), Some(advance)) if font_size > 0.0 => Some(start + advance * font_size),
+        _ => None,
+    }
+}
+
+/// Emit one decoded run and return its advance in em units.
+///
+/// `None` means either no text was emitted or the font has no usable encoding.
+/// A decoded run with an unknown advance also returns `None`, which makes the
+/// caller clear the pen end and stop geometric gap detection.
 fn push_decoded_text(
     events: &mut Vec<ContentEvent>,
     unresolved_fonts: &mut std::collections::BTreeSet<String>,
     font: Option<&str>,
-    decoded: Option<String>,
+    decoded: Option<DecodedRun>,
     owed: Separation,
     separation: &mut Separation,
     last_char: &mut Option<char>,
-) {
+) -> Option<f32> {
     match decoded {
-        Some(text) => {
+        Some(DecodedRun { text, advance }) => {
             *separation = (*separation).max(owed);
             push_text_event(events, text, separation, last_char);
+            advance
         }
         None => {
             if let Some(font) = font {
                 unresolved_fonts.insert(font.to_owned());
             }
+            None
         }
     }
 }
 
 fn push_decoded_run(
     run: &mut String,
+    advance: &mut Option<f32>,
     unresolved_fonts: &mut std::collections::BTreeSet<String>,
     font: Option<&str>,
-    decoded: Option<String>,
+    decoded: Option<DecodedRun>,
 ) {
     match decoded {
-        Some(text) => run.push_str(&text),
+        Some(DecodedRun { text, advance: run_advance }) => {
+            run.push_str(&text);
+            *advance = match (*advance, run_advance) {
+                (Some(total), Some(run_advance)) => Some(total + run_advance),
+                _ => None,
+            };
+        }
         None => {
+            *advance = None;
             if let Some(font) = font {
                 unresolved_fonts.insert(font.to_owned());
             }
