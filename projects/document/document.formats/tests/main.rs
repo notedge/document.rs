@@ -161,4 +161,54 @@ mod markdown_export_smoke {
     }
 }
 
+/// Loss status classification: kept content is a loss, dropped content is a
+/// whole-construct refusal.
+#[cfg(all(feature = "html", feature = "tex", feature = "typst"))]
+mod loss_status_smoke {
+    use document_formats::{
+        export::html::export_html, import::html::import_html_bytes, import::tex::import_tex_bytes,
+        import::typst::import_typst_bytes,
+    };
+    use document_ir::{DocumentGraph, SemanticStatus};
+
+    fn status(graph: &DocumentGraph, code: &str) -> SemanticStatus {
+        graph
+            .coverage
+            .loss
+            .iter()
+            .find(|loss| loss.code == code)
+            .unwrap_or_else(|| panic!("missing loss `{code}`"))
+            .status
+    }
+
+    #[test]
+    fn kept_tex_content_is_a_loss_not_a_refusal() {
+        let pair = import_tex_bytes("left-pair", "\\left[ a\n").expect("tex import");
+        assert_eq!(status(&pair, "import.tex.unclosed_delimiters"), SemanticStatus::Partial);
+        assert!(export_html(&pair).expect("html export").contains("tex-delimiter-pair"));
+
+        let math = import_tex_bytes("unclosed-math", "$a\n").expect("tex import");
+        assert_eq!(status(&math, "import.tex.unclosed_math"), SemanticStatus::Partial);
+        assert!(export_html(&math).expect("html export").contains(r#"class="math""#));
+
+        let macro_graph = import_tex_bytes("macro", "\\newcommand{\\foo}{bar}\ntext\n").expect("tex import");
+        assert_eq!(status(&macro_graph, "import.tex.macro_definition"), SemanticStatus::Partial);
+        assert!(export_html(&macro_graph).expect("html export").contains(r#"data-opaque-kind="tex.newcommand""#));
+    }
+
+    #[test]
+    fn dropped_content_stays_a_refusal() {
+        let typst = import_typst_bytes("let", "#let x = 1\nhello\n").expect("typst import");
+        assert_eq!(status(&typst, "import.typst.dynamic_content"), SemanticStatus::Unsupported);
+        let typst_html = export_html(&typst).expect("html export");
+        assert!(!typst_html.contains("#let"), "{typst_html}");
+
+        let template = import_html_bytes("template", b"<template><p>x</p></template>").expect("html import");
+        assert_eq!(status(&template, "import.html.template_contents"), SemanticStatus::Unsupported);
+        let template_html = export_html(&template).expect("html export");
+        assert!(template_html.contains("<template></template>"), "{template_html}");
+        assert!(!template_html.contains("<p>x</p>"), "{template_html}");
+    }
+}
+
 

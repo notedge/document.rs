@@ -8,8 +8,17 @@ pub enum SemanticStatus {
     /// Intentionally unresolved target or value.
     Unresolved,
     /// Partially mapped semantics.
+    ///
+    /// An accepted construct whose content is kept while part of its semantics
+    /// is dropped, such as an image that keeps its target but loses its
+    /// authored size.
     Partial,
-    /// Unsupported source construct retained as loss.
+    /// Whole-construct refusal: nothing of the source construct is represented.
+    ///
+    /// Use it only when the construct is refused outright. When the content is
+    /// kept and only some semantics are missing, record [`SemanticStatus::Partial`]
+    /// or [`SemanticStatus::Lossy`] instead, so consumers that read the status
+    /// do not report emitted content as a refusal.
     Unsupported,
     /// Semantics inferred rather than authored.
     Inferred,

@@ -343,13 +343,16 @@ impl<'a> TexLowerer<'a> {
     /// authored `"."` so it cannot be confused with a missing delimiter.
     fn left_right_inline(&mut self, pair: &TexLeftRightPair) -> Inline {
         if pair.left_delim.is_empty() || pair.right_delim.is_empty() {
+            // The pair body is still lowered and both authored delimiters stay
+            // as attributes, so the content is kept and only the pairing is
+            // incomplete. That is a loss, not a refusal.
             self.loss(
                 "import.tex.unclosed_delimiters",
                 format!(
-                    "`\\left` pair has no readable delimiter pair: left `{}` right `{}`",
+                    "`\\left` pair has no readable delimiter pair: left `{}` right `{}`, the body and both delimiters are kept",
                     pair.left_delim, pair.right_delim
                 ),
-                SemanticStatus::Unsupported,
+                SemanticStatus::Partial,
             );
         }
         let children = self.collect_inlines(&pair.content.items, pair.span.start, pair.span.end, true);
@@ -398,7 +401,7 @@ impl<'a> TexLowerer<'a> {
                 self.loss(
                     "import.tex.unclosed_math",
                     format!("math span opened with `{open}` has no closing `{close}`, the authored body is kept"),
-                    SemanticStatus::Unsupported,
+                    SemanticStatus::Partial,
                 );
                 let body = raw.trim().strip_prefix(open).unwrap_or(raw.trim());
                 (body.trim().to_string(), math.is_display)
@@ -456,10 +459,12 @@ impl<'a> TexLowerer<'a> {
                 InlineOutcome::Unknown => {
                     let kind = if name.is_empty() { "tex.unknown".to_string() } else { format!("tex.{name}") };
                     if is_macro_definition(&name) {
+                        // The definition is kept as an opaque payload, so the
+                        // authored source is not lost, only its effect is.
                         self.loss(
                             "import.tex.macro_definition",
                             format!("TeX macro definition kept opaque: {}", raw.trim()),
-                            SemanticStatus::Unsupported,
+                            SemanticStatus::Partial,
                         );
                     }
                     self.push_block(
