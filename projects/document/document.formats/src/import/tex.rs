@@ -498,6 +498,7 @@ impl<'a> TexLowerer<'a> {
             "itemize" | "enumerate" | "description" => {
                 self.lower_list(&name, environment.span.start, environment.span.end, sink)
             }
+            "figure" | "figure*" => self.lower_root(&environment.content.items, environment.span.start, environment.span.end, sink),
             "tabular" | "array" => self.lower_table(environment.span.start, environment.span.end, sink),
             _ => {
                 self.loss(
@@ -777,7 +778,43 @@ impl<'a> TexLowerer<'a> {
                     self.loss("import.tex.empty_image_source", "image command has no target", SemanticStatus::Partial);
                     return InlineOutcome::Dropped;
                 }
+                let options = command
+                    .arguments
+                    .iter()
+                    .filter_map(|argument| match argument {
+                        TexArgument::Optional(root) => Some(self.argument_fragment(root).trim()),
+                        TexArgument::Required(_) => None,
+                    })
+                    .filter(|option| !option.is_empty())
+                    .collect::<Vec<_>>();
+                if !options.is_empty() {
+                    // `Inline::Image` carries the target only, so sizing and
+                    // placement options cannot be reproduced. Record them
+                    // instead of dropping them without a trace.
+                    self.loss(
+                        "import.tex.image_dimensions",
+                        format!(
+                            "image options [{}] have no image node field and are not reproduced; only the target path is kept",
+                            options.join("] [")
+                        ),
+                        SemanticStatus::Partial,
+                    );
+                }
                 InlineOutcome::Inline(Inline::Image { source, alt: Vec::new(), title: None, asset: None })
+            }
+            "caption" => {
+                let children = self
+                    .nth_required_argument(command, 0)
+                    .map(|fragment| self.lower_inline_fragment(fragment))
+                    .unwrap_or_default();
+                if children.is_empty() {
+                    self.loss("import.tex.empty_caption", "caption command has no readable text", SemanticStatus::Partial);
+                    return InlineOutcome::Dropped;
+                }
+                InlineOutcome::Inline(Inline::Attributed {
+                    attributes: Attributes { id: None, classes: vec!["tex-caption".into()], pairs: Vec::new() },
+                    children,
+                })
             }
             "ref" | "eqref" => {
                 let label = self.required_argument(command).unwrap_or_default().trim().to_string();
