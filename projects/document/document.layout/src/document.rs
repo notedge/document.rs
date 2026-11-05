@@ -52,19 +52,21 @@ const MONOSPACE_ADVANCE: f64 = 0.6;
 // reconstructed here from the line box and the formula's own height and depth.
 //
 // The constants below are the ratios measured from a `tectonic` reference at a
-// 12 pt body expressed in em: `1.0` is the 12 pt skip itself, `1.32` / `1.54`
-// are the visible gaps TeX keeps when interline glue no longer fits, and `1.11`
-// is the above-the-depth part of `\belowdisplayskip`. Only the natural width and
-// the `minus` shrink are consumed: this page builder fills pages top-down and
-// never justifies them to the bottom margin, so the `plus` stretch component
-// would be invented vertical padding rather than TeX's flush-bottom behaviour.
+// 12 pt body expressed in em: `1.0` is the 12 pt skip itself, and `1.32` / `1.54`
+// are the visible gaps TeX keeps when interline glue no longer fits.  The
+// reference page must stay one page per set with `\raggedbottom`, otherwise the
+// page filler consumes `\belowdisplayskip`'s `minus` component and the measured
+// below gap silently shrinks by about 0.21 em.  Only the natural width and the
+// `minus` shrink are consumed: this page builder fills pages top-down and never
+// justifies them to the bottom margin, so the `plus` stretch component would be
+// invented vertical padding rather than TeX's flush-bottom behaviour.
 
 /// Natural space above a display formula, in em of the body size.
 const ABOVE_DISPLAY_SKIP_EM: f64 = 1.0;
 /// Smallest visible gap above a display taller than a body line, in em.
 const ABOVE_DISPLAY_GAP_MIN_EM: f64 = 1.32;
 /// Natural gap from a display baseline down to the next line, in em.
-const BELOW_DISPLAY_GAP_EM: f64 = 1.11;
+const BELOW_DISPLAY_GAP_EM: f64 = 1.32;
 /// Smallest gap below a display, less its depth, in em.
 const BELOW_DISPLAY_GAP_MIN_EM: f64 = 1.54;
 /// How far a display's space may shrink, in em of the body size.
