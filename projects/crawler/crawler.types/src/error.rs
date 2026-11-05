@@ -1,6 +1,6 @@
 use std::fmt;
 
-use boost_diagnostic::Diagnostic;
+use boost_diagnostic::{Diagnostic, MessageArg};
 
 /// Crawler orchestration error — structured diagnostic with stable code,
 /// typed args, cause chain, and origin.
@@ -22,6 +22,20 @@ impl CrawlError {
     pub fn message_key(&self) -> Option<&str> {
         match self {
             Self::Diagnostic(d) => Some(d.message().key()),
+        }
+    }
+
+    /// Read a text argument attached to the diagnostic message.
+    pub fn text_arg(&self, name: &str) -> Option<&str> {
+        match self {
+            Self::Diagnostic(d) => {
+                d.message().args().iter().find_map(|(key, value)| (key.as_str() == name).then_some(value)).and_then(|value| {
+                    match value {
+                        MessageArg::Text(text) => Some(text.as_str()),
+                        _ => None,
+                    }
+                })
+            }
         }
     }
 }

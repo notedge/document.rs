@@ -153,6 +153,10 @@ pub const BROWSER_CHALLENGE: &str = "crawler.browser.challenge";
 pub const BROWSER_SESSION_EXPIRED: &str = "crawler.browser.session-expired";
 /// Snapshot could not be deserialized or materialized.
 pub const BROWSER_SNAPSHOT_INVALID: &str = "crawler.browser.snapshot-invalid";
+/// Browser worker rejected the snapshot with a non-success HTTP status.
+pub const BROWSER_WORKER_STATUS: &str = "crawler.browser.worker-status";
+/// A render fallback was attempted and failed closed.
+pub const BROWSER_FALLBACK_FAILED: &str = "crawler.browser.fallback-failed";
 
 // ── cache ──
 

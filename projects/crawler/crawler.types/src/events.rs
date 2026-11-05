@@ -33,14 +33,33 @@ pub enum CrawlEvent {
         /// Whether response came from cache.
         cache_hit: bool,
     },
-    /// HTTP fetch failed and a browser snapshot was used instead.
+    /// A browser snapshot was used instead of the HTTP result.
     BrowserFallback {
-        /// Request URL that failed over HTTP.
+        /// Request URL that failed over HTTP or yielded too little content.
         url: Url,
-        /// Original fetch error message.
-        fetch_error: String,
+        /// Why the crawl invoked the renderer.
+        trigger: BrowserFallbackTrigger,
+        /// Original HTTP fetch error message when the trigger was a fetch failure.
+        fetch_error: Option<String>,
         /// Browser engine label from the snapshot provider.
         browser_engine: String,
+        /// Extracted text characters observed on the HTTP artifact before fallback.
+        observed_text_chars: Option<u64>,
+        /// Content-bearing IR blocks observed on the HTTP artifact before fallback.
+        observed_content_blocks: Option<u32>,
+    },
+    /// The browser provider failed while rendering a fallback page.
+    BrowserFallbackFailed {
+        /// Request URL whose render fallback failed.
+        url: Url,
+        /// Why the crawl invoked the renderer.
+        trigger: BrowserFallbackTrigger,
+        /// Stable diagnostic code produced by the provider failure.
+        diagnostic_code: String,
+        /// Provider-native code such as `pandark.browser.snapshot-too-large`.
+        provider_code: Option<String>,
+        /// Human-readable provider failure message.
+        reason: String,
     },
     /// Extractor finished.
     Extracted {
@@ -77,6 +96,16 @@ pub enum CrawlEvent {
         /// Detected challenge state.
         challenge_state: crate::browser::PageChallengeState,
     },
+}
+
+/// Why the crawl invoked the browser renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserFallbackTrigger {
+    /// HTTP fetch failed before an artifact could be extracted.
+    FetchFailure,
+    /// HTTP fetch succeeded but the extracted document was empty or too thin.
+    LowYield,
 }
 
 /// In-memory event log for reports and tests.

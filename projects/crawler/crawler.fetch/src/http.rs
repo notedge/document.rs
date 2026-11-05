@@ -14,6 +14,12 @@ fn headers_to_map(headers: &Headers) -> BTreeMap<String, String> {
     headers.iter().map(|(name, value)| (name.to_string(), value.to_string())).collect()
 }
 
+/// Default HTTP response body budget (4 MiB).
+///
+/// This deliberately sits below the browser snapshot cap so a page rejected by
+/// the HTTP tier can still be delivered by the render tier.
+pub const DEFAULT_FETCH_BODY_BUDGET_BYTES: usize = 4 * 1024 * 1024;
+
 /// Network transport for `http://` and `https://` URLs.
 #[derive(Debug, Clone)]
 pub struct HttpTransport {
@@ -27,7 +33,7 @@ pub struct HttpTransport {
 
 impl Default for HttpTransport {
     fn default() -> Self {
-        Self { max_body_bytes: 8 * 1024 * 1024, max_redirects: 8, timeout: Duration::from_secs(30) }
+        Self { max_body_bytes: DEFAULT_FETCH_BODY_BUDGET_BYTES, max_redirects: 8, timeout: Duration::from_secs(30) }
     }
 }
 
