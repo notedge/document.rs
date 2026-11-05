@@ -111,7 +111,7 @@ pub fn import_html_with_links(label: &str, text: &str) -> Result<HtmlImport, For
     }
     graph.push_loss(LossMarker {
         code: "import.html.partial_coverage".into(),
-        message: "HTML import preserves common document blocks and inline links/images, but not CSS layout, scripts, forms, or arbitrary DOM semantics".into(),
+        message: "HTML import preserves common document blocks, inline links/images, and MathML formulas, but not CSS layout, scripts, forms, or arbitrary DOM semantics".into(),
         status: SemanticStatus::Partial,
     });
     Ok(HtmlImport { document: graph, base_href, links })

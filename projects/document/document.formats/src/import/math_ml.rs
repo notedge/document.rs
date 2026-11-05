@@ -126,7 +126,14 @@ impl Builder {
             "mtext" => {
                 self.out.push_str(&format!("\\text{{{}}}", escape_text(element_text(element).trim())));
             }
-            "mspace" => self.out.push_str("\\quad "),
+            "mspace" => {
+                // `oak-html` does not honour foreign-content self-closing tags,
+                // so the tail of `<mrow>` arrives as children of `<mspace/>`.
+                // MathML `mspace` is empty by definition, which makes lowering
+                // those children safe and keeps the rest of the formula.
+                self.out.push_str("\\quad ");
+                self.lower_children(element);
+            }
             "mfrac" => {
                 let (numerator, denominator) = first_two_children(element);
                 self.out.push_str("\\frac{");

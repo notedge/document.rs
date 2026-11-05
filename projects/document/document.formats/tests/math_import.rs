@@ -186,6 +186,21 @@ mod html_mathml {
     }
 
     #[test]
+    fn compound_mathml_formula_keeps_the_integral_and_fraction() {
+        let source = r#"<p><math display="block"><mrow><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup><mo>,</mo><mspace width="1em"/><msubsup><mo>∫</mo><mn>0</mn><mn>1</mn></msubsup><msup><mi>x</mi><mn>2</mn></msup><mi>dx</mi><mo>=</mo><mfrac><mn>1</mn><mn>3</mn></mfrac></mrow></math></p>"#;
+        let graph = import(source);
+        let formulas = all_inline_math(&graph);
+        assert_eq!(formulas.len(), 1, "{:?}", formulas.iter().map(|formula| &formula.source).collect::<Vec<_>>());
+        let formula_source = &formulas[0].source;
+        assert!(formula_source.contains("\\quad"), "{formula_source}");
+        assert!(formula_source.contains("\\int}") && formula_source.contains("_{0}^{1}"), "{formula_source}");
+        assert!(formula_source.contains("\\frac{1}{3}"), "{formula_source}");
+        assert!(formula_source.contains("dx"), "{formula_source}");
+        assert!(contains_expression(&formulas[0].expression, &|expression| matches!(expression, MathExpression::Fraction { .. })), "{formula_source}");
+        assert!(!has_loss(&graph, "import.html.math_unsupported"), "{:?}", graph.coverage.loss);
+    }
+
+    #[test]
     fn unknown_mathml_construct_keeps_text_and_reports_a_loss() {
         let graph = import(r#"<p><math><mo>+</mo><ms>kept text</ms></math></p>"#);
         let formulas = all_inline_math(&graph);
