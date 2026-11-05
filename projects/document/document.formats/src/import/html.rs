@@ -276,6 +276,16 @@ fn collect_unsupported_element_losses(element: &Element, graph: &mut DocumentGra
             status: SemanticStatus::Unsupported,
         });
     }
+    // A `style` attribute keeps its element text but not its presentation.
+    // Recording the loss keeps the downgrade explicit instead of dropping the
+    // declaration silently.
+    if attribute(element, "style").is_some() {
+        graph.push_loss(LossMarker {
+            code: "import.html.unsupported_style".into(),
+            message: format!("`style` attribute on `<{tag}>` keeps the element text but drops the inline CSS declaration"),
+            status: SemanticStatus::Partial,
+        });
+    }
     if matches!(
         tag.as_str(),
         "script" | "style" | "form" | "input" | "select" | "textarea" | "button" | "canvas" | "video" | "audio" | "iframe"
@@ -327,6 +337,65 @@ fn cell_span(attribute_name: &str, cell: &Element, graph: &mut DocumentGraph) ->
         status: SemanticStatus::Partial,
     });
     1
+}
+
+/// Rectangularize a table with merged cells.
+///
+/// The IR keeps `rowspan`/`colspan`, but the Markdown writer falls back to
+/// inline HTML when either is present, and inline HTML is not rendered by the
+/// downstream layout. Every source cell is placed at its origin, the slots it
+/// covers hold empty content, and all spans become 1. Returns the flattened
+/// rows and whether any span was dropped.
+fn flatten_table_spans(rows: Vec<document_ir::TableRow>) -> (Vec<document_ir::TableRow>, bool) {
+    let spanning = rows.iter().any(|row| row.cells.iter().any(|cell| cell.rowspan > 1 || cell.colspan > 1));
+    if !spanning {
+        return (rows, false);
+    }
+    let columns = rows
+        .iter()
+        .map(|row| row.cells.iter().map(|cell| cell.colspan.max(1) as usize).sum::<usize>())
+        .max()
+        .unwrap_or(0);
+    let mut grid: Vec<Vec<Option<Vec<Inline>>>> = vec![vec![None; columns]; rows.len()];
+    for (row_index, row) in rows.iter().enumerate() {
+        let mut column = 0;
+        for cell in &row.cells {
+            while column < columns && grid[row_index][column].is_some() {
+                column += 1;
+            }
+            if column >= columns {
+                break;
+            }
+            let colspan = cell.colspan.max(1) as usize;
+            let rowspan = cell.rowspan.max(1) as usize;
+            for covered_row in row_index..(row_index + rowspan).min(rows.len()) {
+                for covered_column in column..(column + colspan).min(columns) {
+                    if grid[covered_row][covered_column].is_none() {
+                        grid[covered_row][covered_column] =
+                            Some(if covered_row == row_index && covered_column == column {
+                                cell.content.clone()
+                            }
+                            else {
+                                Vec::new()
+                            });
+                    }
+                }
+            }
+            column += colspan;
+        }
+    }
+    let flattened = rows
+        .into_iter()
+        .zip(grid)
+        .map(|(row, cells)| document_ir::TableRow {
+            is_header: row.is_header,
+            cells: cells
+                .into_iter()
+                .map(|content| document_ir::TableCell { content: content.unwrap_or_default(), colspan: 1, rowspan: 1 })
+                .collect(),
+        })
+        .collect();
+    (flattened, true)
 }
 
 fn decode_hex(text: &str) -> Option<String> {
@@ -510,6 +579,21 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                     status: SemanticStatus::Partial,
                 });
             }
+            // GFM tables cannot express merged cells, and the Markdown writer
+            // falls back to inline HTML for a spanning table. Inline HTML is not
+            // rendered by the downstream layout, so the table would disappear.
+            // Flatten spans into a rectangular grid (the covered slots stay
+            // empty) and record the downgrade so the table stays a semantic
+            // `Block::Table` and renders as a pipe table.
+            let (rows, flattened_spans) = flatten_table_spans(rows);
+            if flattened_spans {
+                graph.push_loss(LossMarker {
+                    code: "import.html.table_spans".into(),
+                    message: "merged table cells are flattened into empty continuation slots so the table stays a pipe table"
+                        .into(),
+                    status: SemanticStatus::Partial,
+                });
+            }
             let mut blocks = Vec::new();
             // Text placed directly inside `<table>` is foster parented before
             // the table by browsers, so it becomes a preceding paragraph
@@ -562,7 +646,11 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
         // re-parses it into a shape model and never leaks its label text into
         // prose.
         "svg" => vec![(Block::RawHtml { html: raw_element_markup(element, source) }, span)],
-        "section" | "article" | "main" | "div" | "figure" | "nav" => {
+        // Endnotes commonly sit in a trailing `<footer>` or `<aside>`. Those
+        // wrappers are block containers, so the footnote section inside is
+        // lowered as definitions instead of leaking its `id`/`class` as inline
+        // attributes of a trailing paragraph.
+        "section" | "article" | "main" | "div" | "figure" | "nav" | "footer" | "aside" => {
             if let Some(definitions) = lower_footnote_section(element) {
                 definitions
             }
@@ -645,33 +733,45 @@ fn lower_footnote_section(element: &Element) -> Option<Vec<(Block, std::ops::Ran
 ///
 /// Only explicit markers qualify: the exporter's `data-footnote-label`, an
 /// anchor class of `footnote-ref`, or `role="doc-noteref"`. A plain intra-page
-/// anchor stays a link, and Pandoc-style `a.footnote-ref > sup` is accepted.
+/// anchor stays a link. Two authored shapes are accepted: the exporter's
+/// `sup.footnote-reference[data-footnote-label]` which carries its text
+/// directly, and Pandoc-style `a.footnote-ref > sup` or
+/// `sup[data-footnote-label] > a`.
 fn footnote_reference_inline(element: &Element) -> Option<Inline> {
-    let link = if element.tag_name.eq_ignore_ascii_case("a") {
+    let anchor = element
+        .children
+        .iter()
+        .filter_map(as_element)
+        .find(|child| child.tag_name.eq_ignore_ascii_case("a"));
+    let marker = if has_footnote_marker(element) {
         element
     }
     else {
-        element.children.iter().filter_map(as_element).find(|child| child.tag_name.eq_ignore_ascii_case("a"))?
+        let link = if element.tag_name.eq_ignore_ascii_case("a") { element } else { anchor? };
+        if !has_footnote_marker(link) {
+            return None;
+        }
+        link
     };
-    if !has_footnote_marker(element) && !has_footnote_marker(link) {
-        return None;
-    }
-    let href = attribute(link, "href").unwrap_or_default();
+    let href = attribute(marker, "href").or_else(|| anchor.and_then(|link| attribute(link, "href"))).unwrap_or_default();
     let from_href =
         href.trim().strip_prefix("#fn").map(|rest| rest.trim_start_matches('-').to_string()).filter(|label| !label.is_empty());
-    let label = attribute(element, "data-footnote-label")
-        .or_else(|| attribute(link, "data-footnote-label"))
+    let label = attribute(marker, "data-footnote-label")
+        .or_else(|| anchor.and_then(|link| attribute(link, "data-footnote-label")))
         .or(from_href)?
         .trim()
         .to_string();
     if label.is_empty() {
         return None;
     }
-    let text = text_content(link).trim().to_string();
+    let text = text_content(marker).trim().to_string();
     // GFM footnote references have no custom display: the marker text is the
-    // label. Keep `display` only when the authored text differs, so the
-    // Markdown writer can tell an authored display apart from the default.
-    let display = (!text.is_empty() && text != label).then(|| vec![Inline::Text { text }]);
+    // label, and `[^label]` is the plain GFM spelling an author may write in
+    // HTML. Keep `display` only when the authored text differs from both, so
+    // the Markdown writer can tell an authored display apart from the default.
+    let gfm_marker = format!("[^{label}]");
+    let is_default = text.is_empty() || text == label || text == gfm_marker;
+    let display = (!is_default).then(|| vec![Inline::Text { text }]);
     Some(Inline::Note { label, display })
 }
 
@@ -904,6 +1004,8 @@ fn is_block_element(element: &Element) -> bool {
             | "div"
             | "figure"
             | "nav"
+            | "footer"
+            | "aside"
     )
 }
 
@@ -1022,16 +1124,20 @@ fn lower_inline_element(element: &Element, graph: &mut DocumentGraph, source: &s
         }
         _ => nested,
     };
-    let attributes = inline_attributes(element);
+    let attributes = inline_attributes(element, graph);
     if attributes.is_empty() { inlines } else { vec![Inline::Attributed { attributes, children: inlines }] }
 }
 
 /// Collect the identity and class attributes of an inline element so authored
-/// anchors and style hooks survive into the semantic layer. `<img>` elements
-/// additionally keep their authored `width`/`height` in the ordered pairs so
-/// bitmap consumers can recover the display size.
-fn inline_attributes(element: &Element) -> Attributes {
+/// anchors and style hooks survive into the semantic layer.
+///
+/// `<img>` `width`/`height` have no field in the IR image node, and passing them
+/// through as ordered pairs would turn the bitmap into a sized `<span>` wrapper
+/// on the Markdown side. The display size is therefore recorded as a partial
+/// loss while the image keeps its source and alt text.
+fn inline_attributes(element: &Element, graph: &mut DocumentGraph) -> Attributes {
     let mut attributes = Attributes::default();
+    let mut image_size = Vec::new();
     for attribute in &element.attributes {
         if attribute.name.eq_ignore_ascii_case("id") {
             if let Some(value) = attribute.value.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
@@ -1051,9 +1157,19 @@ fn inline_attributes(element: &Element) -> Attributes {
             && (attribute.name.eq_ignore_ascii_case("width") || attribute.name.eq_ignore_ascii_case("height"))
         {
             if let Some(value) = attribute.value.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-                attributes.pairs.push(AttributePair { key: attribute.name.to_ascii_lowercase(), value: value.to_string() });
+                image_size.push(format!("{}={value}", attribute.name.to_ascii_lowercase()));
             }
         }
+    }
+    if !image_size.is_empty() {
+        graph.push_loss(LossMarker {
+            code: "import.html.image_dimensions".into(),
+            message: format!(
+                "image display size `{}` has no IR field, so the bitmap keeps its source without a display size",
+                image_size.join(" ")
+            ),
+            status: SemanticStatus::Partial,
+        });
     }
     attributes
 }
