@@ -174,7 +174,7 @@ fn heading_scale(level: u8) -> f64 {
     }
 }
 
-fn twips(points: f64) -> i64 {
+pub(super) fn twips(points: f64) -> i64 {
     (points * TWIPS_PER_POINT).round() as i64
 }
 

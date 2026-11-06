@@ -12,6 +12,7 @@ use crate::FormatError;
 use super::{
     footnotes::{collect_footnote_catalog, parse_footnote_reference_token, render_footnotes_xml},
     numbering::{ORDERED_NUM_ID, UNORDERED_NUM_ID},
+    page::{DocxPageSetup, twips},
     rels::DocumentRelsRegistry,
 };
 
@@ -72,7 +73,7 @@ pub fn render_document_xml(graph: &DocumentGraph) -> Result<DocxRenderOutput, Fo
 </w:document>"#
         ),
         include_numbering: uses_numbering,
-        document_rels_xml: rels.render_document_rels_xml(),
+        document_rels_xml: rels.render_document_rels_xml(uses_numbering),
         media_parts: rels.media_parts(),
         image_extensions: rels.image_extensions(),
         footnotes_xml,
@@ -261,11 +262,30 @@ fn write_table(
     if rows.is_empty() {
         return Ok(());
     }
-    out.push_str("<w:tbl>");
+    // Word renders a bare `w:tbl` with no borders and autofit widths derived
+    // from content. The body declares the text box, so every table spans it
+    // exactly with a fixed one-column grid, hairline borders and explicit cell
+    // widths.
+    let setup = DocxPageSetup::from_graph(graph);
+    let columns = rows.iter().map(|row| row.cells.len()).max().unwrap_or(1).max(1);
+    let total = twips((setup.page_width - setup.margin_left - setup.margin_right).max(1.0));
+    let widths = column_widths(total, columns);
+    out.push_str("<w:tbl><w:tblPr>");
+    let _ = write!(out, "<w:tblW w:w=\"{total}\" w:type=\"dxa\"/><w:tblLayout w:type=\"fixed\"/>");
+    out.push_str("<w:tblBorders>");
+    for side in ["top", "left", "bottom", "right", "insideH", "insideV"] {
+        let _ = write!(out, "<w:{side} w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+    }
+    out.push_str("</w:tblBorders></w:tblPr><w:tblGrid>");
+    for width in &widths {
+        let _ = write!(out, "<w:gridCol w:w=\"{width}\"/>");
+    }
+    out.push_str("</w:tblGrid>");
     for row in rows {
         out.push_str("<w:tr>");
-        for cell in &row.cells {
-            out.push_str("<w:tc><w:p>");
+        for (index, cell) in row.cells.iter().enumerate() {
+            let width = widths.get(index).copied().unwrap_or_default();
+            let _ = write!(out, "<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr><w:p>");
             write_inlines(out, &cell.content, graph, rels)?;
             out.push_str("</w:p></w:tc>");
         }
@@ -273,6 +293,14 @@ fn write_table(
     }
     out.push_str("</w:tbl>");
     Ok(())
+}
+
+/// Split the text box width into equal columns, giving the remainder to the
+/// leading ones so the grid columns always sum to the table width.
+fn column_widths(total: i64, columns: usize) -> Vec<i64> {
+    let base = total / columns as i64;
+    let remainder = total - base * columns as i64;
+    (0..columns).map(|index| base + i64::from((index as i64) < remainder)).collect()
 }
 
 fn write_inlines(

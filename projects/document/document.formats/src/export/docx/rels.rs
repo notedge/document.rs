@@ -88,14 +88,22 @@ impl DocumentRelsRegistry {
     /// Renders `word/_rels/document.xml.rels` for collected relationships.
     ///
     /// The styles part is always packaged, so its relationship is appended
-    /// last and never shifts the ids the body already references.
-    pub fn render_document_rels_xml(&self) -> String {
+    /// last and never shifts the ids the body already references. The numbering
+    /// part follows the styles entry, because Word only applies list numbering
+    /// when the document part points at it.
+    pub fn render_document_rels_xml(&self, include_numbering: bool) -> String {
         const STYLES_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles";
+        const NUMBERING_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering";
         if self.entries.is_empty() {
+            let numbering = if include_numbering {
+                format!("\n  <Relationship Id=\"rId2\" Type=\"{NUMBERING_REL}\" Target=\"numbering.xml\"/>")
+            } else {
+                String::new()
+            };
             return format!(
                 r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="{STYLES_REL}" Target="styles.xml"/>
+  <Relationship Id="rId1" Type="{STYLES_REL}" Target="styles.xml"/>{numbering}
 </Relationships>"#
             );
         }
@@ -135,6 +143,13 @@ impl DocumentRelsRegistry {
         xml.push_str("\" Type=\"");
         xml.push_str(STYLES_REL);
         xml.push_str("\" Target=\"styles.xml\"/>");
+        if include_numbering {
+            xml.push_str("\n  <Relationship Id=\"rId");
+            xml.push_str(&(self.entries.len() + 2).to_string());
+            xml.push_str("\" Type=\"");
+            xml.push_str(NUMBERING_REL);
+            xml.push_str("\" Target=\"numbering.xml\"/>");
+        }
         xml.push_str("\n</Relationships>");
         xml
     }

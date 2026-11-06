@@ -288,6 +288,12 @@ fn docx_export_round_trips_lists_with_numbering() {
     let exported = export_docx_bytes(&graph).expect("export docx");
     let payload = String::from_utf8_lossy(&exported);
     assert!(payload.contains("word/numbering.xml"));
+    assert!(
+        payload.contains(
+            "Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering\" Target=\"numbering.xml\"/>"
+        ),
+        "the document part must point at the numbering part: {payload}"
+    );
     assert!(payload.contains("w:ilvl=\"1\"><w:numFmt"));
     let round = import_docx_bytes("round.docx", &exported).expect("re-import docx");
     let markdown = export_markdown(&round).expect("export markdown");
@@ -347,6 +353,25 @@ fn docx_export_round_trips_tables() {
     let zip = stored_zip(&[("word/document.xml", document_xml)]);
     let graph = import_docx_bytes("table.docx", &zip).expect("import docx");
     let exported = export_docx_bytes(&graph).expect("export docx");
+    let exported_xml = String::from_utf8_lossy(&exported);
+    // A table without `w:tblPr` opens borderless and lets Word autofit the
+    // columns from content. The export must declare the width, the grid and
+    // the borders itself.
+    assert!(exported_xml.contains("<w:tblPr>"), "{exported_xml}");
+    assert!(exported_xml.contains("<w:tblW w:w=\"9026\" w:type=\"dxa\"/>"), "{exported_xml}");
+    assert!(exported_xml.contains("<w:tblBorders>"), "{exported_xml}");
+    for side in ["top", "left", "bottom", "right", "insideH", "insideV"] {
+        assert!(exported_xml.contains(&format!("<w:{side} w:val=\"single\"")), "{side} border is missing");
+    }
+    assert!(
+        exported_xml.contains("<w:tblGrid><w:gridCol w:w=\"4513\"/><w:gridCol w:w=\"4513\"/></w:tblGrid>"),
+        "the two columns must split the text box equally: {exported_xml}"
+    );
+    assert!(exported_xml.contains("<w:tcW w:w=\"4513\" w:type=\"dxa\"/>"), "{exported_xml}");
+    assert!(
+        !exported_xml.contains("relationships/numbering"),
+        "a table-only document must not declare the numbering relationship: {exported_xml}"
+    );
     let round = import_docx_bytes("round.docx", &exported).expect("re-import docx");
     let markdown = export_markdown(&round).expect("export markdown");
     assert!(markdown.contains("| H1 | H2 |"));
