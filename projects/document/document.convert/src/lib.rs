@@ -66,9 +66,8 @@ pub const READERS: &[&str] = &["docx", "doc", "pdf", "epub", "html", "markdown",
 
 /// Writer handlers wired into this build (lowercase).
 ///
-/// Same rule as [`READERS`]: wiring is not availability. In particular `docx`
-/// and `pdf` are wired but their `Export` capability is `Unavailable`, so no
-/// route targets them.
+/// Same rule as [`READERS`]: wiring is not availability. Each writer must also
+/// carry a routable `Export` capability in `document_formats::capabilities()`.
 pub const WRITERS: &[&str] = &["markdown", "docx", "pdf", "html", "epub"];
 
 /// Look up one direction of a format in the single capability table.

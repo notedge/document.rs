@@ -51,9 +51,9 @@ pub fn capabilities() -> Vec<FormatCapability> {
     {
         capabilities.push(FormatCapability { id: "docx", direction: FormatDirection::Import, status: FormatStatus::Partial });
         // The conservative DOCX exporter covers headings, paragraphs, lists,
-        // tables, code, media and footnotes. `Block::Math`, `Block::RawHtml`
-        // and opaque blocks are refused with an unsupported diagnostic instead
-        // of being silently dropped, so the route stays partially deliverable.
+        // tables, code, media, footnotes and OMML math. Nodes the IR cannot
+        // express are written as visible text or kept as raw markup instead of
+        // being silently dropped, so the route stays partially deliverable.
         capabilities.push(FormatCapability { id: "docx", direction: FormatDirection::Export, status: FormatStatus::Partial });
     }
     #[cfg(feature = "doc")]
