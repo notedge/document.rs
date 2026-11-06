@@ -6,7 +6,10 @@
 
 use acorn_core::{Budget, BudgetTracker};
 use acorn_epub::OcfPackage;
-use document_formats::{export::epub::export_epub_bytes, import::markdown::import_markdown_bytes};
+use document_formats::{
+    export::{epub::export_epub_bytes, markdown::export_markdown},
+    import::{epub::import_epub_bytes, markdown::import_markdown_bytes, notedown::import_notedown_bytes},
+};
 
 fn make_simple_markdown() -> &'static str {
     r#"# A Small Book
@@ -31,6 +34,32 @@ And a list:
 - two
 - three
 "#
+}
+
+#[test]
+fn epub_export_keeps_the_title_at_the_start_of_the_body_chapter() {
+    // `notedown` (and `markdown`) lower a heading to a flat `Section` whose body
+    // lives in following sibling blocks. The chapter planner must therefore
+    // keep authored order and let a heading open the chapter that owns its
+    // body, instead of hoisting every non-heading block into a lead chapter.
+    let graph = import_notedown_bytes("book.nd", "# Sample Book\n\nHello EPUB\n").expect("import notedown");
+    let bytes = export_epub_bytes(&graph).expect("export epub");
+
+    let package = OcfPackage::open("book.epub", bytes.clone()).expect("open as OCF");
+    let mut ledger = BudgetTracker::new(Budget::default());
+    let first = String::from_utf8(package.read_member("OEBPS/chapter-000.xhtml", &mut ledger).expect("read chapter-000"))
+        .expect("chapter-000 must be UTF-8");
+    assert!(first.contains("<h1>Sample Book</h1>"), "the title must open the first chapter: {first}");
+    assert!(first.contains("Hello EPUB"), "the body must stay in the chapter opened by its title: {first}");
+    assert!(
+        package.read_member("OEBPS/chapter-001.xhtml", &mut ledger).is_err(),
+        "one title plus one body must not split into two chapters"
+    );
+
+    let reopened = import_epub_bytes("book.epub", &bytes).expect("reopen epub");
+    let markdown = export_markdown(&reopened).expect("export markdown");
+    assert!(markdown.trim_start().starts_with("# Sample Book"), "reopen must yield title first: {markdown}");
+    assert!(markdown.contains("Hello EPUB"), "{markdown}");
 }
 
 #[test]

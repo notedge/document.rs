@@ -12,5 +12,5 @@ mod epub_html_roundtrip;
 mod markdown_to_docx;
 #[cfg(all(feature = "markdown", feature = "epub"))]
 mod markdown_to_epub;
-#[cfg(all(feature = "markdown", feature = "epub"))]
+#[cfg(all(feature = "markdown", feature = "epub", feature = "notedown"))]
 mod markdown_to_epub_export;

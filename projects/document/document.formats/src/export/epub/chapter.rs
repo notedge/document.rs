@@ -87,29 +87,36 @@ fn plan_by_top_level_sections(graph: &DocumentGraph) -> Option<Vec<ChapterPlan>>
     if top_level.is_empty() {
         return None;
     }
-    let mut prelude = Vec::new();
-    let mut sections: Vec<(NodeId, Vec<NodeId>)> = Vec::new();
+    // A level-1 heading opens a chapter and every following top-level block
+    // joins it until the next level-1 heading. Importers lower headings to flat
+    // `Section` blocks, so the body is a sibling of the heading rather than one
+    // of its children — appending in authored order is what keeps the title at
+    // the start of the chapter it belongs to.
+    let mut groups: Vec<(Option<NodeId>, Vec<NodeId>)> = Vec::new();
     for node_id in top_level {
         let Some(node) = graph.block(node_id)
         else {
             continue;
         };
-        match &node.block {
-            Block::Section { level, title, children } if *level == 1 => {
+        if let Block::Section { level, children, .. } = &node.block {
+            if *level == 1 {
                 let mut chapter_blocks = vec![node_id];
                 chapter_blocks.extend(children.iter().copied());
-                sections.push((node_id, chapter_blocks));
+                groups.push((Some(node_id), chapter_blocks));
+                continue;
             }
-            _ => prelude.push(node_id),
+        }
+        match groups.last_mut() {
+            Some((_, blocks)) => blocks.push(node_id),
+            None => groups.push((None, vec![node_id])),
         }
     }
-    let mut plans = Vec::new();
-    if !prelude.is_empty() {
-        let label = graph.metadata.title.clone().unwrap_or_else(|| "Front Matter".into());
-        plans.push(ChapterPlan { label, blocks: prelude, synthetic: true });
-    }
-    for (node_id, blocks) in sections {
-        let label = section_title_plain_text(graph, node_id).unwrap_or_else(|| "Chapter".into());
+    let mut plans = Vec::with_capacity(groups.len());
+    for (heading, blocks) in groups {
+        let label = match heading {
+            Some(node_id) => section_title_plain_text(graph, node_id).unwrap_or_else(|| "Chapter".into()),
+            None => graph.metadata.title.clone().unwrap_or_else(|| "Front Matter".into()),
+        };
         plans.push(ChapterPlan { label, blocks, synthetic: true });
     }
     if plans.is_empty() { None } else { Some(plans) }
