@@ -97,6 +97,7 @@ pub fn hydrate_package_assets(graph: &mut DocumentGraph, package: &OcfPackage, l
         };
         match package.read_member(source, ledger) {
             Ok(bytes) => {
+                asset.content_identity = Some(blake3::hash(&bytes).to_hex().to_string());
                 asset.bytes = Some(bytes);
             }
             Err(error) => {

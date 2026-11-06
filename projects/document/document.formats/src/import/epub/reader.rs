@@ -87,14 +87,20 @@ pub fn import_epub_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
         }
     }
 
+    let mut imported_pages = 0usize;
     for spine_item in &opf.spine {
         if nav_manifest_id.as_deref() == Some(spine_item.idref.as_str()) {
             continue;
         }
-        let manifest = opf
-            .manifest
-            .get(&spine_item.idref)
-            .ok_or_else(|| FormatError::parse("epub", format!("spine idref `{}` missing from manifest", spine_item.idref)))?;
+        let Some(manifest) = opf.manifest.get(&spine_item.idref)
+        else {
+            graph.push_loss(LossMarker {
+                code: "import.epub.spine_item_unresolved".into(),
+                message: format!("spine idref `{}` is missing from the manifest", spine_item.idref),
+                status: SemanticStatus::Unresolved,
+            });
+            continue;
+        };
         if !manifest.media_type.contains("xhtml") && !manifest.media_type.contains("html") {
             graph.push_loss(LossMarker {
                 code: "import.epub.unsupported_manifest_type".into(),
@@ -105,8 +111,29 @@ pub fn import_epub_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
         }
 
         let member_path = OcfPackage::resolve_href(package.root_opf_path(), &manifest.href);
-        let xhtml = package.read_member(&member_path, &mut ledger).map_err(map_ocf_error)?;
-        let blocks = blocks_from_xhtml_with_context(&xhtml, &mut graph, Some(member_path.as_str()))?;
+        let xhtml = match package.read_member(&member_path, &mut ledger) {
+            Ok(xhtml) => xhtml,
+            Err(error) => {
+                graph.push_loss(LossMarker {
+                    code: "import.epub.spine_member_missing".into(),
+                    message: format!("spine member `{member_path}` cannot be read: {}", map_ocf_error(error)),
+                    status: SemanticStatus::Unresolved,
+                });
+                continue;
+            }
+        };
+        let blocks = match blocks_from_xhtml_with_context(&xhtml, &mut graph, Some(member_path.as_str())) {
+            Ok(blocks) => blocks,
+            Err(error) => {
+                graph.push_loss(LossMarker {
+                    code: "import.epub.spine_member_unresolved".into(),
+                    message: format!("spine member `{member_path}` cannot be lowered: {error}"),
+                    status: SemanticStatus::Unresolved,
+                });
+                continue;
+            }
+        };
+        imported_pages += 1;
         for block in blocks {
             let node = graph.push_block(block);
             graph.attach_source(SourceRef {
@@ -118,6 +145,20 @@ pub fn import_epub_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
         for loss in super::xhtml::losses_from_xhtml(&xhtml)? {
             graph.push_loss(loss);
         }
+    }
+    if opf.spine.is_empty() {
+        graph.push_loss(LossMarker {
+            code: "import.epub.spine_empty".into(),
+            message: "the OPF package declares no spine items, so no reading order could be imported".into(),
+            status: SemanticStatus::Unresolved,
+        });
+    }
+    else if imported_pages == 0 {
+        graph.push_loss(LossMarker {
+            code: "import.epub.spine_empty".into(),
+            message: "no spine item produced readable content, so the reading order is empty".into(),
+            status: SemanticStatus::Unresolved,
+        });
     }
 
     hydrate_package_assets(&mut graph, &package, &mut ledger);

@@ -738,6 +738,129 @@ fn epub_import_lowers_tables_and_nested_lists() {
     assert!(markdown.contains("- Outer"));
     assert!(markdown.contains("  - Inner"));
 }
+#[test]
+fn epub_spine_idref_missing_from_manifest_is_reported_and_later_pages_continue() {
+    let opf = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Broken Spine</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="missing"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>"#;
+    let zip = stored_zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container_xml()),
+        ("OEBPS/content.opf", opf),
+        ("OEBPS/chapter2.xhtml", br#"<html><body><p>Second chapter still imports</p></body></html>"#),
+    ]);
+    let graph = import_epub_bytes("broken-spine.epub", &zip).expect("spine anomaly must not abort the book");
+    assert!(
+        graph
+            .coverage
+            .loss
+            .iter()
+            .any(|loss| loss.code == "import.epub.spine_item_unresolved"
+                && loss.status == document_ir::SemanticStatus::Unresolved),
+        "{:?}",
+        graph.coverage.loss
+    );
+    assert!(export_markdown(&graph).expect("export markdown").contains("Second chapter still imports"));
+}
+
+#[test]
+fn epub_missing_spine_member_is_reported_and_later_pages_continue() {
+    let opf = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Missing Member</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="missing.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="chapter2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>"#;
+    let zip = stored_zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container_xml()),
+        ("OEBPS/content.opf", opf),
+        ("OEBPS/chapter2.xhtml", br#"<html><body><p>Readable chapter follows</p></body></html>"#),
+    ]);
+    let graph = import_epub_bytes("missing-member.epub", &zip).expect("spine anomaly must not abort the book");
+    assert!(
+        graph
+            .coverage
+            .loss
+            .iter()
+            .any(|loss| loss.code == "import.epub.spine_member_missing"
+                && loss.status == document_ir::SemanticStatus::Unresolved),
+        "{:?}",
+        graph.coverage.loss
+    );
+    assert!(export_markdown(&graph).expect("export markdown").contains("Readable chapter follows"));
+}
+
+#[test]
+fn epub_empty_spine_is_reported_instead_of_silently_succeeding() {
+    let opf = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>No Spine</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine/>
+</package>"#;
+    let zip = stored_zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container_xml()),
+        ("OEBPS/content.opf", opf),
+        ("OEBPS/chapter.xhtml", br#"<html><body><p>Unreachable</p></body></html>"#),
+    ]);
+    let graph = import_epub_bytes("empty-spine.epub", &zip).expect("import epub");
+    assert!(
+        graph
+            .coverage
+            .loss
+            .iter()
+            .any(|loss| loss.code == "import.epub.spine_empty" && loss.status == document_ir::SemanticStatus::Unresolved),
+        "{:?}",
+        graph.coverage.loss
+    );
+}
+
+#[test]
+fn epub_assets_carry_content_identity_after_hydration() {
+    let zip = epub_with_image_zip();
+    let graph = import_epub_bytes("identity.epub", &zip).expect("import epub");
+    let image =
+        graph.assets.iter().find(|asset| asset.source.as_deref() == Some("OEBPS/images/cover.png")).expect("cover asset");
+    let expected = blake3::hash(b"\x89PNG\r\n").to_hex().to_string();
+    assert_eq!(image.content_identity.as_deref(), Some(expected.as_str()));
+}
+
+fn container_xml() -> &'static [u8] {
+    br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#
+}
+
 mod import_ast_lowering;
 mod import_navigation;
 mod import_xhtml;
