@@ -54,6 +54,7 @@ pub fn presentation_to_graph(presentation: &PptxPresentation, options: &GraphOpt
         language: None,
         authors: Vec::new(),
         tags: vec!["pptx".to_owned()],
+        properties: Vec::new(),
     });
     for issue in &presentation.issues {
         graph.push_loss(to_loss(issue));

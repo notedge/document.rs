@@ -38,6 +38,7 @@ pub fn import_epub_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
         language: opf.metadata.language.clone(),
         authors: opf.metadata.creators.clone(),
         tags: Vec::new(),
+        properties: Vec::new(),
     };
     let unmapped_metadata = unmapped_metadata_fields(&opf_xml);
     if !unmapped_metadata.is_empty() {

@@ -15,7 +15,13 @@ use oak_html::{
 fn html_export_preserves_structure_and_escapes_content() {
     let mut ids = IdAllocator::default();
     let mut graph = DocumentGraph::new(ids.document_id());
-    graph.metadata = DocumentMetadata { title: Some("<Title>".into()), language: None, authors: Vec::new(), tags: Vec::new() };
+    graph.metadata = DocumentMetadata {
+        title: Some("<Title>".into()),
+        language: None,
+        authors: Vec::new(),
+        tags: Vec::new(),
+        properties: Vec::new(),
+    };
     graph.push_block(Block::Paragraph {
         content: vec![
             Inline::Text { text: "a < b".into() },

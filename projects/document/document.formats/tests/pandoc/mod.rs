@@ -288,14 +288,17 @@ fn full_fixture() -> String {
 }
 
 #[test]
-fn import_builds_sections_without_inventing_headings_and_records_metadata_losses() {
+fn import_builds_sections_without_inventing_headings_and_preserves_typed_metadata() {
     let graph = import(&full_fixture());
     assert_eq!(graph.metadata.title.as_deref(), Some("文档"));
     assert_eq!(graph.metadata.language.as_deref(), Some("zh"));
     assert_eq!(graph.metadata.authors, vec!["Alice".to_string()]);
     assert_eq!(graph.metadata.tags, vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(graph.metadata.properties.len(), 1);
+    assert_eq!(graph.metadata.properties[0].key, "custom");
+    assert_eq!(graph.metadata.properties[0].value, document_ir::MetadataValue::Boolean(true));
     assert!(
-        graph.coverage.loss.iter().any(|loss| loss.code == "import.pandoc-json.meta_unmapped"),
+        !graph.coverage.loss.iter().any(|loss| loss.code == "import.pandoc-json.meta_unmapped"),
         "{:?}",
         graph.coverage.loss
     );
@@ -495,4 +498,34 @@ fn unrelated_custom_inline_style_fails_the_export() {
     });
     let error = export_pandoc_json(&graph).expect_err("unknown style must fail");
     assert!(format!("{error}").contains("inline style `sparkle`"), "{error}");
+}
+
+#[test]
+fn export_reemits_typed_metadata_entries() {
+    let graph = import(&full_fixture());
+    let exported = export_pandoc_json(&graph).expect("export");
+    let custom = exported.document.meta.iter().find(|(key, _)| key == "custom").expect("custom metadata");
+    assert!(matches!(custom.1, MetaValue::Bool(true)));
+
+    let restored = import(&exported.to_json_text().expect("json"));
+    assert_eq!(restored.metadata.properties[0].key, "custom");
+    assert_eq!(restored.metadata.properties[0].value, document_ir::MetadataValue::Boolean(true));
+}
+
+#[test]
+fn export_writes_numeric_metadata_as_strings_and_reports_loss() {
+    let mut graph = DocumentGraph::new(document_ir::IdAllocator::default().document_id());
+    graph.metadata.properties = vec![
+        document_ir::MetadataEntry { key: "edition".into(), value: document_ir::MetadataValue::Integer(3) },
+        document_ir::MetadataEntry { key: "ratio".into(), value: document_ir::MetadataValue::Float(0.25) },
+    ];
+
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(matches!(&exported.document.meta[0].1, MetaValue::String(value) if value == "3"));
+    assert!(matches!(&exported.document.meta[1].1, MetaValue::String(value) if value == "0.25"));
+    assert!(
+        exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.metadata_number"),
+        "{:?}",
+        exported.losses
+    );
 }

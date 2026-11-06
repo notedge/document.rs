@@ -4,6 +4,7 @@ use crate::{
     asset::Asset,
     block::{Block, BlockNode},
     id::{AssetId, DocumentId, LinkId, NodeId},
+    metadata::MetadataEntry,
     page::PageSetup,
     relation::{Relation, RelationEndpoint, RelationKind},
     source::{CoverageReport, SourceRef, SourceSpan},
@@ -22,6 +23,9 @@ pub struct DocumentMetadata {
     pub authors: Vec<String>,
     /// Free-form tags or keywords.
     pub tags: Vec<String>,
+    /// Typed metadata outside the fixed fields, in stable authored order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<MetadataEntry>,
 }
 
 /// Semantic document graph — import layers construct this, export layers
@@ -64,7 +68,13 @@ impl DocumentGraph {
         Self {
             id,
             revision: 0,
-            metadata: DocumentMetadata { title: None, language: None, authors: Vec::new(), tags: Vec::new() },
+            metadata: DocumentMetadata {
+                title: None,
+                language: None,
+                authors: Vec::new(),
+                tags: Vec::new(),
+                properties: Vec::new(),
+            },
             blocks: Vec::new(),
             relations: Vec::new(),
             assets: Vec::new(),

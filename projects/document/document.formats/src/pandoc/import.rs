@@ -120,6 +120,7 @@ impl Importer {
         let mut language = None;
         let mut authors = Vec::new();
         let mut tags = Vec::new();
+        let mut properties = Vec::new();
         for (key, value) in meta {
             let pointer = format!("/meta/{}", escape_pointer_token(key));
             match key.as_str() {
@@ -127,15 +128,44 @@ impl Importer {
                 "author" | "authors" => authors.extend(self.meta_texts(value, &pointer)?),
                 "lang" | "language" => language = Some(self.meta_text(value, &pointer)?),
                 "keywords" | "tags" => tags.extend(self.meta_texts(value, &pointer)?),
-                other => self.losses.push(LossMarker {
-                    code: "import.pandoc-json.meta_unmapped".into(),
-                    message: format!("metadata key `{other}` has no field in the IR and was not preserved"),
-                    status: SemanticStatus::Partial,
+                _ => properties.push(document_ir::MetadataEntry {
+                    key: key.clone(),
+                    value: self.meta_typed(value, &pointer),
                 }),
             }
         }
-        self.graph.set_metadata(document_ir::DocumentMetadata { title, language, authors, tags });
+        self.graph.set_metadata(document_ir::DocumentMetadata { title, language, authors, tags, properties });
         Ok(())
+    }
+
+    /// Lower a Pandoc metadata value into the typed IR payload.
+    ///
+    /// Pandoc has no numeric metadata constructor, so numbers stay text when
+    /// exporting. Inline and block metadata keep their flattened text because
+    /// document metadata has no node identity to attach rich content to.
+    fn meta_typed(&mut self, value: &MetaValue, pointer: &str) -> document_ir::MetadataValue {
+        match value {
+            MetaValue::Bool(flag) => document_ir::MetadataValue::Boolean(*flag),
+            MetaValue::String(text) => document_ir::MetadataValue::Text(text.clone()),
+            MetaValue::Inlines(inlines) => document_ir::MetadataValue::Text(model_inline_text(inlines)),
+            MetaValue::Blocks(blocks) => document_ir::MetadataValue::Text(blocks_text(blocks)),
+            MetaValue::List(items) => document_ir::MetadataValue::List(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| self.meta_typed(item, &format!("{pointer}/{index}")))
+                    .collect(),
+            ),
+            MetaValue::Map(entries) => document_ir::MetadataValue::Map(
+                entries
+                    .iter()
+                    .map(|(key, item)| document_ir::MetadataEntry {
+                        key: key.clone(),
+                        value: self.meta_typed(item, &format!("{pointer}/{}", escape_pointer_token(key))),
+                    })
+                    .collect(),
+            ),
+        }
     }
 
     fn meta_text(&mut self, value: &MetaValue, pointer: &str) -> Result<String, FormatError> {

@@ -2,8 +2,8 @@
 //! boundaries.
 
 use document_ir::{
-    Asset, AssetId, AssetKind, Block, DocumentEnvelope, DocumentGraph, DocumentMetadata, IdAllocator, Inline, LinkId, NodeId,
-    Relation, RelationEndpoint, RelationKind, SemanticStatus, SourceKind, SourceRef, TableRow,
+    Asset, AssetId, AssetKind, Block, DocumentEnvelope, DocumentGraph, DocumentMetadata, IdAllocator, Inline, LinkId, MetadataEntry,
+    MetadataValue, NodeId, Relation, RelationEndpoint, RelationKind, SemanticStatus, SourceKind, SourceRef, TableRow, ValidationIssue,
 };
 
 fn sample_graph() -> (DocumentGraph, NodeId, AssetId, LinkId) {
@@ -216,6 +216,7 @@ fn metadata_and_asset_path_changes_preserve_link_identity() {
         language: None,
         authors: Vec::new(),
         tags: Vec::new(),
+        properties: Vec::new(),
     });
     assert!(graph.set_asset_source(asset_id, Some("media/new.png".to_string())));
 
@@ -283,4 +284,70 @@ fn math_and_inferred_pdf_layout_keep_explicit_semantics() {
         precision: SemanticStatus::Inferred,
     });
     assert_eq!(graph.sources_for(inferred)[0].precision, SemanticStatus::Inferred);
+}
+
+#[test]
+fn typed_metadata_survives_wire_round_trip() {
+    let mut graph = DocumentGraph::new(IdAllocator::default().document_id());
+    graph.metadata = DocumentMetadata {
+        title: Some("Typed metadata".to_string()),
+        language: Some("zh".to_string()),
+        authors: vec!["Author".to_string()],
+        tags: vec!["tag".to_string()],
+        properties: vec![
+            MetadataEntry { key: "copyright".to_string(), value: MetadataValue::Text("2026".to_string()) },
+            MetadataEntry { key: "verified".to_string(), value: MetadataValue::Boolean(true) },
+            MetadataEntry { key: "edition".to_string(), value: MetadataValue::Integer(2) },
+            MetadataEntry { key: "ratio".to_string(), value: MetadataValue::Float(0.5) },
+            MetadataEntry {
+                key: "sources".to_string(),
+                value: MetadataValue::List(vec![
+                    MetadataValue::Map(vec![
+                        MetadataEntry { key: "name".to_string(), value: MetadataValue::Text("primary".to_string()) },
+                        MetadataEntry { key: "reliable".to_string(), value: MetadataValue::Boolean(false) },
+                    ]),
+                ]),
+            },
+        ],
+    };
+
+    assert!(graph.validate().is_valid(), "issues: {:?}", graph.validate().issues);
+    let encoded = serde_json::to_string(&graph).expect("serialize");
+    let restored: DocumentGraph = serde_json::from_str(&encoded).expect("deserialize");
+    assert_eq!(restored.metadata, graph.metadata);
+}
+
+#[test]
+fn legacy_wire_metadata_without_properties_still_loads() {
+    let mut graph = DocumentGraph::new(IdAllocator::default().document_id());
+    graph.metadata.title = Some("Legacy".to_string());
+    let mut value = serde_json::to_value(&graph).expect("serialize");
+    value["metadata"].as_object_mut().expect("metadata object").remove("properties");
+
+    let restored: DocumentGraph = serde_json::from_value(value).expect("deserialize legacy metadata");
+    assert_eq!(restored.metadata.title.as_deref(), Some("Legacy"));
+    assert!(restored.metadata.properties.is_empty());
+}
+
+#[test]
+fn validator_rejects_invalid_typed_metadata() {
+    let mut graph = DocumentGraph::new(IdAllocator::default().document_id());
+    graph.metadata.properties = vec![
+        MetadataEntry { key: String::new(), value: MetadataValue::Text("anonymous".to_string()) },
+        MetadataEntry { key: "title".to_string(), value: MetadataValue::Text("reserved".to_string()) },
+        MetadataEntry { key: "dup".to_string(), value: MetadataValue::Boolean(true) },
+        MetadataEntry { key: "dup".to_string(), value: MetadataValue::Float(f64::INFINITY) },
+    ];
+
+    let report = graph.validate();
+    assert!(!report.is_valid());
+    assert!(report.issues.iter().any(|issue| matches!(issue, ValidationIssue::EmptyMetadataKey { .. })));
+    assert!(report.issues.iter().any(|issue| matches!(issue, ValidationIssue::ReservedMetadataKey { key } if key == "title")));
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|issue| matches!(issue, ValidationIssue::DuplicateMetadataKey { key, .. } if key == "dup"))
+    );
+    assert!(report.issues.iter().any(|issue| matches!(issue, ValidationIssue::NonFiniteMetadataFloat { .. })));
 }

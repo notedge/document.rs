@@ -57,6 +57,7 @@ pub(crate) fn pdf_metadata(bytes: &[u8]) -> Option<DocumentMetadata> {
         tags: keywords
             .map(|value| value.split(',').map(str::trim).filter(|item| !item.is_empty()).map(str::to_owned).collect())
             .unwrap_or_default(),
+        properties: Vec::new(),
     })
 }
 

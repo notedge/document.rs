@@ -122,6 +122,7 @@ fn hydrate_core_metadata(package: &OpcPackage, ledger: &mut BudgetTracker, graph
         language: text("language"),
         authors: text("creator").into_iter().collect(),
         tags,
+        properties: Vec::new(),
     };
 }
 

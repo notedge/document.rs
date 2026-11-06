@@ -60,7 +60,7 @@ impl Exporter<'_> {
         self.losses.push(LossMarker { code: code.into(), message, status });
     }
 
-    fn encode_metadata(&self) -> Vec<(String, MetaValue)> {
+    fn encode_metadata(&mut self) -> Vec<(String, MetaValue)> {
         let mut meta = Vec::new();
         if let Some(title) = &self.graph.metadata.title {
             meta.push(("title".into(), MetaValue::Inlines(vec![Inline::Str(title.clone())])));
@@ -80,7 +80,47 @@ impl Exporter<'_> {
                 MetaValue::List(self.graph.metadata.tags.iter().cloned().map(MetaValue::String).collect()),
             ));
         }
+        for entry in &self.graph.metadata.properties {
+            let value = self.encode_metadata_value(&entry.value);
+            meta.push((entry.key.clone(), value));
+        }
         meta
+    }
+
+    /// Encode one typed metadata value.
+    ///
+    /// Pandoc JSON has no numeric metadata constructor, so integers and floats
+    /// are written as `MetaString` and reported as lossy.
+    fn encode_metadata_value(&mut self, value: &document_ir::MetadataValue) -> MetaValue {
+        match value {
+            document_ir::MetadataValue::Text(text) => MetaValue::String(text.clone()),
+            document_ir::MetadataValue::Boolean(flag) => MetaValue::Bool(*flag),
+            document_ir::MetadataValue::Integer(number) => {
+                self.loss(
+                    "export.pandoc-json.metadata_number",
+                    format!("Pandoc JSON has no numeric metadata constructor, wrote `{number}` as MetaString"),
+                    SemanticStatus::Partial,
+                );
+                MetaValue::String(number.to_string())
+            }
+            document_ir::MetadataValue::Float(number) => {
+                self.loss(
+                    "export.pandoc-json.metadata_number",
+                    format!("Pandoc JSON has no numeric metadata constructor, wrote `{number}` as MetaString"),
+                    SemanticStatus::Partial,
+                );
+                MetaValue::String(number.to_string())
+            }
+            document_ir::MetadataValue::List(items) => {
+                MetaValue::List(items.iter().map(|item| self.encode_metadata_value(item)).collect())
+            }
+            document_ir::MetadataValue::Map(entries) => MetaValue::Map(
+                entries
+                    .iter()
+                    .map(|entry| (entry.key.clone(), self.encode_metadata_value(&entry.value)))
+                    .collect(),
+            ),
+        }
     }
 
     fn export_top_level(&mut self) -> Result<Vec<Block>, FormatError> {

@@ -106,6 +106,7 @@ pub fn import_tex_bytes(label: &str, text: &str) -> Result<DocumentGraph, Format
             language: None,
             authors: std::mem::take(&mut state.authors),
             tags: Vec::new(),
+            properties: Vec::new(),
         });
     }
 

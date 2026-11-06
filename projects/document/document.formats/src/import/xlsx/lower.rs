@@ -55,6 +55,7 @@ pub fn workbook_to_graph(workbook: &XlsxWorkbook, options: &GraphOptions) -> Doc
         language: None,
         authors: Vec::new(),
         tags: vec!["xlsx".to_owned()],
+        properties: Vec::new(),
     });
 
     for issue in &workbook.issues {

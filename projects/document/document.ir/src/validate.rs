@@ -5,6 +5,7 @@ use crate::{
     graph::DocumentGraph,
     id::{AssetId, DocumentId, LinkId, NodeId},
     inline::Inline,
+    metadata::{MetadataEntry, MetadataValue},
     relation::{RelationEndpoint, RelationKind},
 };
 use std::collections::{HashMap, HashSet};
@@ -165,6 +166,30 @@ pub enum ValidationIssue {
         /// Actual table row count.
         total_rows: usize,
     },
+    /// Metadata key is empty.
+    EmptyMetadataKey {
+        /// Path to the offending entry, such as `properties[2]`.
+        path: String,
+    },
+    /// Metadata map repeats a key.
+    DuplicateMetadataKey {
+        /// Repeated key.
+        key: String,
+        /// Index of the first occurrence.
+        first: usize,
+        /// Index of the repeated occurrence.
+        repeated: usize,
+    },
+    /// Metadata uses a key owned by a fixed document metadata field.
+    ReservedMetadataKey {
+        /// Reserved key.
+        key: String,
+    },
+    /// Floating-point metadata value is not finite.
+    NonFiniteMetadataFloat {
+        /// Path to the offending value.
+        path: String,
+    },
 }
 
 /// Collected validation result.
@@ -192,7 +217,12 @@ impl DocumentGraph {
         self.check_sources(&node_ids, &mut report);
         self.check_block_refs(&node_ids, &asset_ids, &mut report);
         self.check_containment_cycles(&node_ids, &mut report);
+        self.check_metadata(&mut report);
         report
+    }
+
+    fn check_metadata(&self, report: &mut ValidationReport) {
+        check_metadata_entries(&self.metadata.properties, "properties", true, report);
     }
 
     fn collect_node_ids(&self, report: &mut ValidationReport) -> HashSet<NodeId> {
@@ -494,4 +524,50 @@ fn check_table_colspans(table_id: NodeId, rows: &[crate::block::TableRow], repor
             }
         }
     }
+}
+
+/// Check one metadata map scope for unique, non-empty, non-reserved keys.
+fn check_metadata_entries(entries: &[MetadataEntry], path: &str, top_level: bool, report: &mut ValidationReport) {
+    let mut seen: HashMap<&str, usize> = HashMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let entry_path = format!("{path}[{index}]");
+        if entry.key.is_empty() {
+            report.issues.push(ValidationIssue::EmptyMetadataKey { path: entry_path.clone() });
+        }
+        if top_level && is_reserved_metadata_key(&entry.key) {
+            report.issues.push(ValidationIssue::ReservedMetadataKey { key: entry.key.clone() });
+        }
+        if let Some(first) = seen.get(entry.key.as_str()) {
+            report.issues.push(ValidationIssue::DuplicateMetadataKey {
+                key: entry.key.clone(),
+                first: *first,
+                repeated: index,
+            });
+        }
+        else {
+            seen.insert(entry.key.as_str(), index);
+        }
+        check_metadata_value(&entry.value, &entry_path, report);
+    }
+}
+
+fn check_metadata_value(value: &MetadataValue, path: &str, report: &mut ValidationReport) {
+    match value {
+        MetadataValue::Float(number) if !number.is_finite() => {
+            report.issues.push(ValidationIssue::NonFiniteMetadataFloat { path: path.to_string() });
+        }
+        MetadataValue::List(items) => {
+            for (index, item) in items.iter().enumerate() {
+                check_metadata_value(item, &format!("{path}[{index}]"), report);
+            }
+        }
+        MetadataValue::Map(entries) => check_metadata_entries(entries, path, false, report),
+        MetadataValue::Text(_) | MetadataValue::Integer(_) | MetadataValue::Float(_) | MetadataValue::Boolean(_) => {}
+    }
+}
+
+/// Keys owned by the fixed metadata fields, so they cannot also appear as
+/// typed properties.
+fn is_reserved_metadata_key(key: &str) -> bool {
+    matches!(key, "title" | "author" | "authors" | "lang" | "language" | "keywords" | "tags")
 }

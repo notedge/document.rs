@@ -28,6 +28,7 @@ fn revision_tracks_semantic_updates() {
         language: None,
         authors: Vec::new(),
         tags: Vec::new(),
+        properties: Vec::new(),
     });
     assert_eq!(graph.revision, 1);
 

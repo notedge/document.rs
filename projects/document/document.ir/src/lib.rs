@@ -11,6 +11,7 @@ mod graph;
 mod id;
 mod inline;
 mod math;
+mod metadata;
 mod page;
 mod relation;
 mod source;
@@ -25,6 +26,7 @@ pub use block::{Block, BlockNode, ListItem, TableCell, TableRow};
 pub use graph::{DocumentGraph, DocumentMetadata, IdAllocator};
 pub use id::{AssetId, DocumentId, LinkId, NodeId};
 pub use inline::{AttributePair, Attributes, BreakKind, Inline};
+pub use metadata::{MetadataEntry, MetadataValue};
 pub use math::{
     MathAtom, MathClass, MathColumnAlignment, MathDelimiter, MathDelimiterKind, MathDisplay, MathEnvironment,
     MathEnvironmentKind, MathExpression, MathFormula, MathFractionLine, MathRow, MathRowNumbering, MathRowPlacement, MathSpace,

@@ -590,6 +590,7 @@ fn metadata_round_trips_through_ir_edit_and_pdf() {
         language: None,
         authors: vec!["Original author".into()],
         tags: vec!["one".into(), "two".into()],
+        properties: Vec::new(),
     };
     let imported = import_pdf_bytes("metadata.pdf", &export_pdf_bytes(&graph).expect("export PDF")).expect("import PDF");
     assert_eq!(imported.metadata.title.as_deref(), Some("Original title"));
