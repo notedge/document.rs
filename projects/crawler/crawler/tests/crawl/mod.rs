@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use crawler::{
-    CrawlOptions, Extractor, FixtureBrowserProvider, HtmlExtractor, resume_crawl_from_store, run_crawl, run_crawl_with_options,
-    run_crawl_with_store, run_extract,
+    CancelSignal, CrawlOptions, Extractor, FixtureBrowserProvider, HtmlExtractor, resume_crawl_from_store, run_crawl,
+    run_crawl_with_options, run_crawl_with_store, run_extract,
 };
 use crawler_fetch::{MemoryEntry, MemoryTransport};
 use crawler_store::{MemoryStore, Store, StoreConfig};
@@ -226,12 +226,12 @@ fn crawl_skips_urls_denied_by_robots_txt() {
     let extractors: [&dyn Extractor; 1] = [&html];
     let output = run_crawl(request, transport, &extractors).expect("crawl");
     assert_eq!(output.report.committed, 2);
-    assert_eq!(output.report.failed, 1);
+    assert_eq!(output.report.failed, 0);
+    assert_eq!(output.report.skipped, 1);
     assert!(output.report.events.events().iter().any(|event| matches!(
         event,
-        CrawlEvent::Failed { url, reason }
-            if url.as_str() == "https://example.com/secret"
-                && reason.contains("robots policy denied")
+        CrawlEvent::Skipped { url, reason }
+            if url.as_str() == "https://example.com/secret" && reason == "robots-denied"
     )));
 }
 
@@ -304,7 +304,11 @@ fn browser_fallback_skips_challenge_page_when_policy_allows() {
 
 #[test]
 fn browser_fallback_fails_challenge_page_when_policy_stops() {
-    let transport = MemoryTransport::new();
+    let mut transport = MemoryTransport::new();
+    transport.insert(
+        "https://example.com/robots.txt",
+        MemoryEntry { status: 200, headers: BTreeMap::from([("content-type".into(), "text/plain".into())]), body: Vec::new() },
+    );
     let mut browser = FixtureBrowserProvider::new();
     browser.insert(BrowserSnapshot {
         requested_url: Url::parse("https://example.com/private").expect("url"),
@@ -339,7 +343,11 @@ fn browser_fallback_fails_challenge_page_when_policy_stops() {
 #[test]
 fn browser_fallback_pauses_and_resumes_after_operator_snapshot() {
     let seed = Url::parse("https://example.com/private").expect("url");
-    let transport = MemoryTransport::new();
+    let mut transport = MemoryTransport::new();
+    transport.insert(
+        "https://example.com/robots.txt",
+        MemoryEntry { status: 200, headers: BTreeMap::from([("content-type".into(), "text/plain".into())]), body: Vec::new() },
+    );
     let mut browser = FixtureBrowserProvider::new();
     browser.insert(BrowserSnapshot {
         requested_url: seed.clone(),
@@ -465,4 +473,111 @@ fn extract_mode_reuses_artifact_without_transport() {
     let result = run_extract(&artifact, &extractors, ExtractBudget::default(), &ExtractContext::default());
     assert_eq!(result.status, ExtractStatus::Partial);
     assert!(result.document.is_some());
+}
+
+/// Cancellation flag shared with the run loop.
+struct Flag(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl CancelSignal for Flag {
+    fn is_cancelled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// Transport that trips the cancellation flag after serving a page request.
+struct CancelOnPageFetch {
+    inner: MemoryTransport,
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl crawler_fetch::Transport for CancelOnPageFetch {
+    fn fetch(&self, request: &crawler_fetch::FetchRequest) -> crawler_types::Result<crawler_types::FetchArtifact> {
+        let artifact = self.inner.fetch(request);
+        if !request.url.path().eq_ignore_ascii_case("/robots.txt") {
+            self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        artifact
+    }
+}
+
+fn page_transport(paths: &[(&str, &str)]) -> MemoryTransport {
+    let mut transport = MemoryTransport::new();
+    for (path, title) in paths {
+        transport.insert(
+            format!("https://example.com{path}"),
+            MemoryEntry {
+                status: 200,
+                headers: BTreeMap::from([("content-type".into(), "text/html".into())]),
+                body: format!("<html><head><title>{title}</title></head><body>{title}</body></html>").into_bytes(),
+            },
+        );
+    }
+    transport
+}
+
+#[test]
+fn cancelled_run_stops_before_admission() {
+    let flag = Flag(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)));
+    let request = CrawlRequest::from_seeds(["https://example.com/a", "https://example.com/b"]).expect("seeds");
+    let html = HtmlExtractor;
+    let extractors: [&dyn Extractor; 1] = [&html];
+    let output = run_crawl_with_options(
+        request,
+        page_transport(&[("/a", "A"), ("/b", "B")]),
+        &extractors,
+        CrawlOptions { cancel: Some(&flag), ..Default::default() },
+    )
+    .expect("crawl");
+    assert_eq!(output.report.budget_status, CrawlBudgetStatus::Cancelled);
+    assert_eq!(output.report.remaining_frontier, 2);
+    assert_eq!(output.report.committed, 0);
+    assert!(
+        output.report.diagnostics.diagnostics.iter().any(|diagnostic| diagnostic.code().as_str() == pd::RUN_CANCELLED),
+        "cancelled runs carry a structured diagnostic"
+    );
+}
+
+#[test]
+fn cancellation_after_a_page_keeps_the_remainder_pending() {
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let transport = CancelOnPageFetch { inner: page_transport(&[("/a", "A"), ("/b", "B")]), flag: flag.clone() };
+    let request = CrawlRequest::from_seeds(["https://example.com/a", "https://example.com/b"]).expect("seeds");
+    let html = HtmlExtractor;
+    let extractors: [&dyn Extractor; 1] = [&html];
+    let mut store = MemoryStore::open(StoreConfig::memory()).expect("store");
+    let output = run_crawl_with_store(
+        request,
+        transport,
+        &extractors,
+        CrawlOptions { cancel: Some(&Flag(flag)), ..Default::default() },
+        &mut store,
+    )
+    .expect("crawl");
+    assert_eq!(output.report.committed, 1);
+    assert_eq!(output.report.budget_status, CrawlBudgetStatus::Cancelled);
+    assert_eq!(output.report.remaining_frontier, 1);
+    assert_eq!(store.pending_frontier_count().expect("pending count"), 1, "the unstarted item stays in the frontier");
+}
+
+#[test]
+fn robots_denied_pages_are_skipped_not_failed() {
+    let mut transport = MemoryTransport::new();
+    transport.insert(
+        "https://example.com/robots.txt",
+        MemoryEntry {
+            status: 200,
+            headers: BTreeMap::from([("content-type".into(), "text/plain".into())]),
+            body: b"User-agent: *\nDisallow: /blocked\n".to_vec(),
+        },
+    );
+    let request = CrawlRequest::from_seed("https://example.com/blocked").expect("seed");
+    let html = HtmlExtractor;
+    let extractors: [&dyn Extractor; 1] = [&html];
+    let output = run_crawl(request, transport, &extractors).expect("crawl");
+    assert_eq!(output.report.skipped, 1);
+    assert_eq!(output.report.failed, 0);
+    assert!(output.report.events.events().iter().any(|event| matches!(
+        event,
+        CrawlEvent::Skipped { reason, .. } if reason == "robots-denied"
+    )));
 }

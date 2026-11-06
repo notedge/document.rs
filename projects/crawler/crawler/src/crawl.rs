@@ -72,6 +72,16 @@ impl PageYield {
     }
 }
 
+/// Host-injected cancellation signal.
+///
+/// The crawl loop checks the signal before admission and after each claim. A
+/// cancelled run stops admitting new work, releases any claim it already took
+/// as pending, and leaves the remaining frontier visible in the report.
+pub trait CancelSignal {
+    /// Whether the host asked the run to stop.
+    fn is_cancelled(&self) -> bool;
+}
+
 /// Optional browser and fallback settings for a crawl run.
 #[derive(Clone, Copy)]
 pub struct CrawlOptions<'a> {
@@ -84,6 +94,8 @@ pub struct CrawlOptions<'a> {
     /// Strategy fingerprint frozen in the store so a resume cannot silently
     /// continue under a different fallback strategy.
     pub strategy_fingerprint: Option<&'a str>,
+    /// Cancellation signal checked by the run loop.
+    pub cancel: Option<&'a dyn CancelSignal>,
 }
 
 impl<'a> Default for CrawlOptions<'a> {
@@ -93,6 +105,7 @@ impl<'a> Default for CrawlOptions<'a> {
             browser_fallback: BrowserFallbackPolicy::Never,
             challenge_policy: ChallengePolicy::Stop,
             strategy_fingerprint: None,
+            cancel: None,
         }
     }
 }
@@ -281,12 +294,29 @@ fn run_crawl_loop<T: Transport>(
     let mut artifacts = Vec::new();
     let extract_budget = ExtractBudget::default();
     let mut sitemap_discovered = HashSet::new();
+    let mut cancelled = false;
 
     loop {
+        if is_cancelled(options) {
+            cancelled = true;
+            break;
+        }
         let Some((item, claim)) = next_work(&mut state, &mut store, &mut frontier)?
         else {
             break;
         };
+        if is_cancelled(options) {
+            // The claim was already taken, so return it to pending instead of
+            // letting it ride out the lease. Work not yet admitted is dropped.
+            if claim.is_some() {
+                finish_work(&mut store, &mut frontier, claim.as_ref(), true);
+            }
+            else {
+                state.queue.requeue(item);
+            }
+            cancelled = true;
+            break;
+        }
         if state.requests_used >= request.budget.max_requests {
             if claim.is_none() {
                 state.queue.requeue(item);
@@ -318,7 +348,10 @@ fn run_crawl_loop<T: Transport>(
         }
     }
 
-    if state.last_paused_item.is_some() {
+    if cancelled {
+        record_cancelled(&mut state, &store);
+    }
+    else if state.last_paused_item.is_some() {
         state.report.budget_status = CrawlBudgetStatus::Cancelled;
         state.report.remaining_frontier = remaining_frontier(&state, &store);
     }
@@ -331,6 +364,26 @@ fn remaining_frontier(state: &CrawlState, store: &Option<&mut dyn Store>) -> u32
         Some(store) => store.pending_frontier_count().unwrap_or(0) as u32,
         None => state.queue.len() as u32,
     }
+}
+
+fn is_cancelled(options: CrawlOptions<'_>) -> bool {
+    options.cancel.is_some_and(CancelSignal::is_cancelled)
+}
+
+/// Mark the run cancelled and keep the pending frontier visible in the report.
+fn record_cancelled(state: &mut CrawlState, store: &Option<&mut dyn Store>) {
+    let remaining = remaining_frontier(state, store);
+    state.report.budget_status = CrawlBudgetStatus::Cancelled;
+    state.report.remaining_frontier = remaining;
+    let diagnostic = boost_diagnostic::Diagnostic::new(
+        pd::code(pd::RUN_CANCELLED),
+        DiagnosticSeverity::Warning,
+        pd::origin_crawl(),
+        Message::new("crawler.diagnostic.runCancelled")
+            .with_arg("remainingFrontier", MessageArg::U64(remaining as u64))
+            .with_fallback(format!("crawl cancelled with {remaining} frontier item(s) remaining")),
+    );
+    state.report.push_diagnostic(diagnostic);
 }
 
 /// Process one claimed or queued item and report whether it paused the run.
@@ -396,6 +449,11 @@ fn process_one_item<T: Transport>(
             }
         }
         Err(error) => {
+            if error.code().is_some_and(|code| code == pd::ROBOTS_DENIED) {
+                record_crawl_diagnostic(state, &error);
+                record_skipped(state, &item, "robots-denied");
+                return Ok(false);
+            }
             record_crawl_diagnostic(state, &error);
             let fetch_error = error.to_string();
             match try_browser_fallback(&item, options) {
