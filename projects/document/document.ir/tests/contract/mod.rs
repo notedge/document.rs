@@ -2,8 +2,9 @@
 //! boundaries.
 
 use document_ir::{
-    Asset, AssetId, AssetKind, Block, DocumentEnvelope, DocumentGraph, DocumentMetadata, IdAllocator, Inline, LinkId, MetadataEntry,
-    MetadataValue, NodeId, Relation, RelationEndpoint, RelationKind, SemanticStatus, SourceKind, SourceRef, TableRow, ValidationIssue,
+    Asset, AssetId, AssetKind, Block, DocumentEnvelope, DocumentGraph, DocumentMetadata, IdAllocator, Inline, LinkId,
+    MetadataEntry, MetadataValue, NodeId, Relation, RelationEndpoint, RelationKind, SemanticStatus, SourceKind, SourceRef,
+    TableRow, ValidationIssue,
 };
 
 fn sample_graph() -> (DocumentGraph, NodeId, AssetId, LinkId) {
@@ -301,12 +302,10 @@ fn typed_metadata_survives_wire_round_trip() {
             MetadataEntry { key: "ratio".to_string(), value: MetadataValue::Float(0.5) },
             MetadataEntry {
                 key: "sources".to_string(),
-                value: MetadataValue::List(vec![
-                    MetadataValue::Map(vec![
-                        MetadataEntry { key: "name".to_string(), value: MetadataValue::Text("primary".to_string()) },
-                        MetadataEntry { key: "reliable".to_string(), value: MetadataValue::Boolean(false) },
-                    ]),
-                ]),
+                value: MetadataValue::List(vec![MetadataValue::Map(vec![
+                    MetadataEntry { key: "name".to_string(), value: MetadataValue::Text("primary".to_string()) },
+                    MetadataEntry { key: "reliable".to_string(), value: MetadataValue::Boolean(false) },
+                ])]),
             },
         ],
     };
@@ -344,10 +343,75 @@ fn validator_rejects_invalid_typed_metadata() {
     assert!(report.issues.iter().any(|issue| matches!(issue, ValidationIssue::EmptyMetadataKey { .. })));
     assert!(report.issues.iter().any(|issue| matches!(issue, ValidationIssue::ReservedMetadataKey { key } if key == "title")));
     assert!(
-        report
-            .issues
-            .iter()
-            .any(|issue| matches!(issue, ValidationIssue::DuplicateMetadataKey { key, .. } if key == "dup"))
+        report.issues.iter().any(|issue| matches!(issue, ValidationIssue::DuplicateMetadataKey { key, .. } if key == "dup"))
     );
     assert!(report.issues.iter().any(|issue| matches!(issue, ValidationIssue::NonFiniteMetadataFloat { .. })));
+}
+
+#[test]
+fn quote_payload_is_children_only() {
+    let mut graph = DocumentGraph::new(IdAllocator::default().document_id());
+    let paragraph = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "quoted".into() }] });
+    graph.push_block(Block::Quote { children: vec![paragraph] });
+
+    assert!(graph.validate().is_valid(), "issues: {:?}", graph.validate().issues);
+    let quote_json = serde_json::to_string(&graph.blocks[1].block).expect("serialize quote");
+    assert!(!quote_json.contains("\"content\""), "quotes must not serialize inline content: {quote_json}");
+
+    let encoded = serde_json::to_string(&graph).expect("serialize graph");
+    let restored: DocumentGraph = serde_json::from_str(&encoded).expect("deserialize graph");
+    let Block::Quote { children } = &restored.blocks[1].block
+    else {
+        panic!("expected quote");
+    };
+    assert_eq!(children, &vec![restored.blocks[0].id]);
+    assert_eq!(restored.blocks[0].id, paragraph);
+}
+
+#[test]
+fn legacy_quote_content_loads_as_a_paragraph_child() {
+    let legacy = r#"{
+        "schema_version": "notedown-ir/v1",
+        "document": {
+            "id": 1,
+            "revision": 0,
+            "metadata": { "title": null, "language": null, "authors": [], "tags": [] },
+            "blocks": [
+                {
+                    "id": 1,
+                    "block": {
+                        "Quote": {
+                            "content": [
+                                { "Text": { "text": "legacy quote" } }
+                            ],
+                            "children": []
+                        }
+                    }
+                }
+            ],
+            "relations": [],
+            "assets": [],
+            "sources": [],
+            "coverage": { "complete": true, "loss": [] },
+            "next_node": 1
+        }
+    }"#;
+
+    let envelope: DocumentEnvelope = serde_json::from_str(legacy).expect("load legacy quote");
+    envelope.ensure_supported().expect("supported schema");
+    let graph = &envelope.document;
+    assert!(graph.validate().is_valid(), "issues: {:?}", graph.validate().issues);
+    assert_eq!(graph.blocks.len(), 2);
+
+    let Block::Quote { children } = &graph.blocks[0].block
+    else {
+        panic!("expected quote");
+    };
+    assert_eq!(children.len(), 1);
+    let paragraph = graph.blocks.iter().find(|node| node.id == children[0]).expect("synthetic paragraph");
+    let Block::Paragraph { content } = &paragraph.block
+    else {
+        panic!("expected paragraph");
+    };
+    assert_eq!(content, &vec![Inline::Text { text: "legacy quote".into() }]);
 }

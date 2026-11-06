@@ -64,40 +64,9 @@ fn scan_markup_losses(text: &str) -> Vec<LossMarker> {
     losses
 }
 
-pub(crate) fn quote_block_from_blocks(blocks: Vec<Block>) -> Block {
-    let mut content = Vec::new();
-    for (index, block) in blocks.iter().enumerate() {
-        if index > 0 {
-            push_inline(&mut content, Inline::Text { text: "\n".into() });
-        }
-        match block {
-            Block::Paragraph { content: paragraph } => {
-                for inline in paragraph {
-                    push_inline(&mut content, inline.clone());
-                }
-            }
-            Block::Quote { content: quote, .. } => {
-                for inline in quote {
-                    push_inline(&mut content, inline.clone());
-                }
-            }
-            Block::Section { title, .. } => {
-                for inline in title {
-                    push_inline(&mut content, inline.clone());
-                }
-            }
-            Block::Code { content: code, .. } => {
-                push_inline(&mut content, Inline::Text { text: code.clone() });
-            }
-            _ => {}
-        }
-    }
-    if content.is_empty() {
-        Block::Quote { content: vec![Inline::Text { text: String::new() }], children: Vec::new() }
-    }
-    else {
-        Block::Quote { content, children: Vec::new() }
-    }
+pub(crate) fn quote_block_from_blocks(blocks: Vec<Block>, graph: &mut DocumentGraph) -> Block {
+    let children = blocks.into_iter().map(|block| graph.push_block(block)).collect();
+    Block::Quote { children }
 }
 
 pub(crate) fn push_inline(inlines: &mut Vec<Inline>, inline: Inline) {

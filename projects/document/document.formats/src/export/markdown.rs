@@ -111,11 +111,8 @@ fn write_block(
             ensure_reopenable_chart_language(language)?;
             write_fenced(out, Some(language), source);
         }
-        Block::Quote { content, children } => {
+        Block::Quote { children } => {
             let mut body = String::new();
-            if !content.is_empty() {
-                write_inlines(&mut body, content, image_urls)?;
-            }
             for child_id in children {
                 let child = graph
                     .block(*child_id)

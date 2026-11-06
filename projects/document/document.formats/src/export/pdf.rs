@@ -189,8 +189,7 @@ fn render_block(lines: &mut Vec<RenderLine>, graph: &DocumentGraph, block: &Bloc
             }
         }
         Block::Paragraph { content } => push_inline_lines(lines, graph, content)?,
-        Block::Quote { content, children } => {
-            push_inline_lines(lines, graph, content)?;
+        Block::Quote { children } => {
             for child_id in children {
                 let child = graph
                     .block(*child_id)

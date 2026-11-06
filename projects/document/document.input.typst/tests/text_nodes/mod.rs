@@ -23,7 +23,6 @@ fn collect_text(block: &Block, texts: &mut Vec<String>) {
     match block {
         Block::Section { title, .. } => walk(title, texts),
         Block::Paragraph { content } => walk(content, texts),
-        Block::Quote { content, .. } => walk(content, texts),
         Block::List { items, .. } => {
             for item in items {
                 walk(&item.content, texts);

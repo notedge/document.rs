@@ -5,7 +5,7 @@ use document_compose::Severity;
 use document_input_tex::import_source;
 use document_ir::Block;
 use document_layout::{
-    Diagrams, LayoutHint,
+    BodyMetrics, Diagrams, LayoutHint,
     document::layout_with_diagnostics,
     plan::{LayoutItem, TextRun},
 };
@@ -77,7 +77,7 @@ fn minimal_tex_document_reaches_an_svg_artifact() {
         "the section title must reach document semantics"
     );
 
-    let (plan, diagnostics) = layout_with_diagnostics(graph, &LayoutHint::a4(), &Diagrams::default());
+    let (plan, diagnostics) = layout_with_diagnostics(graph, &LayoutHint::a4(), &Diagrams::default(), &BodyMetrics::default());
     assert!(!plan.pages.is_empty(), "layout must emit at least one page");
     assert!(
         !diagnostics.iter().any(|d| d.code == "vutex.layout.math.unsupported_language"),

@@ -976,7 +976,7 @@ fn block_text_chars(block: &Block) -> Option<u64> {
             caption.as_deref().map(|caption| caption.chars().count() as u64).unwrap_or(0)
                 + rows.iter().flat_map(|row| &row.cells).map(|cell| inline_text_chars(&cell.content)).sum::<u64>()
         }
-        Block::Quote { content, .. } => inline_text_chars(content),
+        Block::Quote { .. } => return None,
         Block::Code { content, .. } => content.chars().count() as u64,
         Block::Math { formula } => formula.source.chars().count() as u64,
         Block::Diagram { source, .. } | Block::Chart { source, .. } => source.chars().count() as u64,

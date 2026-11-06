@@ -139,7 +139,7 @@ fn resolve_asset_targets(document: &mut DocumentGraph, base_url: &url::Url) {
 fn resolve_block_targets(block: &mut Block, base_url: &url::Url) {
     match block {
         Block::Section { title, .. } => resolve_inline_targets(title, base_url),
-        Block::Paragraph { content } | Block::Quote { content, .. } => resolve_inline_targets(content, base_url),
+        Block::Paragraph { content } => resolve_inline_targets(content, base_url),
         Block::List { items, .. } => {
             for item in items {
                 resolve_inline_targets(&mut item.content, base_url);
@@ -296,7 +296,7 @@ fn looks_like_rendered_diagram(markup: &str) -> bool {
 fn collect_bitmap_diagrams(block: &Block, out: &mut Vec<(String, String)>) {
     match block {
         Block::Section { title, .. } => collect_bitmap_inlines(title, out),
-        Block::Paragraph { content } | Block::Quote { content, .. } => collect_bitmap_inlines(content, out),
+        Block::Paragraph { content } => collect_bitmap_inlines(content, out),
         Block::List { items, .. } => {
             for item in items {
                 collect_bitmap_inlines(&item.content, out);

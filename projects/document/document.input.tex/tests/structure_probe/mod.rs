@@ -1,7 +1,7 @@
 //! TeX 导入 → layout 结构探针（钉死后可收成断言套件）。
 
 use document_input_tex::import_source;
-use document_layout::{Diagrams, LayoutHint, document::layout_with_diagnostics, plan::LayoutItem};
+use document_layout::{BodyMetrics, Diagrams, LayoutHint, document::layout_with_diagnostics, plan::LayoutItem};
 
 fn dump(label: &str, source: &str) {
     let document = import_source(label, source).expect("source must import");
@@ -16,7 +16,8 @@ fn dump(label: &str, source: &str) {
     }
     println!("report: {:#?}", document.report);
     println!("diagnostics: {:#?}", document.diagnostics);
-    let (plan, diagnostics) = layout_with_diagnostics(&document.graph, &LayoutHint::a4(), &Diagrams::default());
+    let (plan, diagnostics) =
+        layout_with_diagnostics(&document.graph, &LayoutHint::a4(), &Diagrams::default(), &BodyMetrics::default());
     println!("layout diagnostics: {:#?}", diagnostics);
     for page in &plan.pages {
         for item in &page.items {

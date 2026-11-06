@@ -1,4 +1,7 @@
-use document_formats::{export::markdown::export_markdown, import::epub::import_epub_bytes};
+use document_formats::{
+    export::{epub::export_epub_bytes, markdown::export_markdown},
+    import::epub::import_epub_bytes,
+};
 use document_ir::{Block, Inline, SemanticStatus, SourceKind};
 
 fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -515,12 +518,30 @@ fn epub_with_block_elements_zip() -> Vec<u8> {
 fn epub_import_lowers_container_blockquote_code_and_hr() {
     let zip = epub_with_block_elements_zip();
     let graph = import_epub_bytes("blocks.epub", &zip).expect("import epub");
+    let children = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Quote { children } => Some(children.as_slice()),
+            _ => None,
+        })
+        .expect("quote expected");
+    assert!(!children.is_empty(), "quote body must be materialized as children");
+    assert!(
+        children.iter().all(|child_id| matches!(graph.block(*child_id).map(|node| &node.block), Some(Block::Paragraph { .. }))),
+        "blockquote body must lower to paragraph children: {children:#?}"
+    );
     let markdown = export_markdown(&graph).expect("export markdown");
     assert!(markdown.contains("Inside section"));
     assert!(markdown.contains("> Quoted line"));
     assert!(markdown.contains("```rust"));
     assert!(markdown.contains("fn main() {}"));
     assert!(markdown.contains("---"));
+
+    let bytes = export_epub_bytes(&graph).expect("export epub");
+    let reopened = import_epub_bytes("blocks-roundtrip.epub", &bytes).expect("reopen epub");
+    let markdown = export_markdown(&reopened).expect("export reopened markdown");
+    assert!(markdown.contains("> Quoted line"), "{markdown}");
 }
 
 #[test]
@@ -940,8 +961,7 @@ fn docx_and_epub_cross_import_share_content_but_not_provenance() {
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:body><w:p><w:r><w:t>Hello EPUB</w:t></w:r></w:p></w:body>
 </w:document>"#;
-    let from_docx = import_docx_bytes("cross.docx", &stored_zip(&[("word/document.xml", document_xml)]))
-        .expect("import docx");
+    let from_docx = import_docx_bytes("cross.docx", &stored_zip(&[("word/document.xml", document_xml)])).expect("import docx");
     let from_epub = import_epub_bytes("cross.epub", &minimal_epub_zip()).expect("import epub");
 
     let docx_paragraph = paragraph_with_text(&from_docx, "Hello EPUB");
@@ -953,8 +973,6 @@ fn docx_and_epub_cross_import_share_content_but_not_provenance() {
     assert_eq!(docx_sources.len(), 1);
     assert_eq!(epub_sources.len(), 1);
     assert!(matches!(&docx_sources[0].kind, SourceKind::XmlRange { path } if path == "word/document.xml"));
-    assert!(
-        matches!(&epub_sources[0].kind, SourceKind::PackageMember { path } if path == "OEBPS/chapter.xhtml")
-    );
+    assert!(matches!(&epub_sources[0].kind, SourceKind::PackageMember { path } if path == "OEBPS/chapter.xhtml"));
     assert_ne!(docx_sources[0].kind, epub_sources[0].kind);
 }

@@ -687,7 +687,7 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
         }
         "blockquote" => {
             let mut content = Vec::new();
-            let mut children = Vec::new();
+            let mut nested = Vec::new();
             for (child, child_span) in lower_children(&element.children, graph, source) {
                 match child {
                     Block::Paragraph { content: paragraph } => {
@@ -696,10 +696,17 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                         }
                         content.extend(paragraph);
                     }
-                    block => children.push(push_block_with_source(graph, block, child_span)),
+                    block => nested.push(push_block_with_source(graph, block, child_span)),
                 }
             }
-            vec![(Block::Quote { content, children }, span)]
+            // The quote body is a real paragraph child before nested blocks, so
+            // no inline payload lives inside `Block::Quote` anymore.
+            let mut children = Vec::new();
+            if !content.is_empty() {
+                children.push(push_block_with_source(graph, Block::Paragraph { content }, span.clone()));
+            }
+            children.extend(nested);
+            vec![(Block::Quote { children }, span)]
         }
         "pre" => {
             if let Some((language, chart)) = explicit_chart_marker(element, source) {

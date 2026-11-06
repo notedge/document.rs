@@ -28,6 +28,13 @@ fn graph_with(id: u64, block: Block) -> DocumentGraph {
     graph
 }
 
+fn quote_graph(id: u64, children: Vec<Inline>) -> DocumentGraph {
+    let mut graph = DocumentGraph::new(DocumentId(id));
+    let paragraph = graph.push_block(Block::Paragraph { content: children });
+    graph.push_block(Block::Quote { children: vec![paragraph] });
+    graph
+}
+
 fn cell(content: Vec<Inline>) -> TableCell {
     TableCell { content, colspan: 1, rowspan: 1 }
 }
@@ -99,8 +106,7 @@ fn italic_runs_survive_inside_a_list_item() {
 
 #[test]
 fn inline_code_runs_survive_inside_a_quote() {
-    let graph =
-        graph_with(43, Block::Quote { content: vec![text("run "), code("npm test"), text(" now")], children: Vec::new() });
+    let graph = quote_graph(43, vec![text("run "), code("npm test"), text(" now")]);
     let plan = layout(&graph);
     let runs = text_runs(&plan.pages[0]);
 
@@ -158,7 +164,8 @@ fn unstyled_block_content_stays_normal_serif() {
             is_checked: None,
         }],
     });
-    graph.push_block(Block::Quote { content: vec![text("plain quote")], children: Vec::new() });
+    let quote = graph.push_block(Block::Paragraph { content: vec![text("plain quote")] });
+    graph.push_block(Block::Quote { children: vec![quote] });
     graph.push_block(Block::Table {
         caption: None,
         rows: vec![TableRow { is_header: false, cells: vec![cell(vec![text("plain cell")])] }],
@@ -259,21 +266,18 @@ fn table_row_height_follows_the_tallest_wrapped_cell() {
 #[test]
 fn tall_inline_formula_grows_the_quote_rule() {
     let hint = LayoutHint::a4();
-    let graph = graph_with(
+    let graph = quote_graph(
         49,
-        Block::Quote {
-            content: vec![
-                text("before "),
-                Inline::InlineMath {
-                    formula: document_formats::lower_tex_formula_source(
-                        "\\frac{\\frac{a}{b}}{\\frac{c}{d}}",
-                        document_ir::MathDisplay::Inline,
-                    ),
-                },
-                text(" after"),
-            ],
-            children: Vec::new(),
-        },
+        vec![
+            text("before "),
+            Inline::InlineMath {
+                formula: document_formats::lower_tex_formula_source(
+                    "\\frac{\\frac{a}{b}}{\\frac{c}{d}}",
+                    document_ir::MathDisplay::Inline,
+                ),
+            },
+            text(" after"),
+        ],
     );
     let plan = layout_with_hint(&graph, &hint);
     let rule = plan.pages[0]

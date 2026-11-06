@@ -4,6 +4,39 @@ use document_formats::{
 };
 use document_ir::{Block, BreakKind, DocumentGraph, DocumentId, Inline, RelationKind, SemanticStatus, SourceKind};
 
+fn quote_paragraph(graph: &DocumentGraph) -> &[Inline] {
+    let children = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Quote { children } => Some(children.as_slice()),
+            _ => None,
+        })
+        .expect("quote expected");
+    children
+        .iter()
+        .find_map(|child_id| match graph.block(*child_id).map(|node| &node.block) {
+            Some(Block::Paragraph { content }) => Some(content.as_slice()),
+            _ => None,
+        })
+        .expect("quote body must be a paragraph child")
+}
+
+#[test]
+fn html_blockquote_round_trips_quoted_text() {
+    let source = "<body><blockquote><p>Quoted line</p></blockquote></body>";
+    let graph = import_html_text("quote.html", source).expect("import html quote");
+    let content = quote_paragraph(&graph);
+    assert_eq!(content.iter().map(Inline::plain_text).collect::<String>(), "Quoted line");
+
+    let html = export_html(&graph).expect("export html quote");
+    assert!(html.contains("<blockquote>") && html.contains("<p>Quoted line</p>"), "{html}");
+
+    let reopened = import_html_text("quote-roundtrip.html", &html).expect("reopen html quote");
+    let content = quote_paragraph(&reopened);
+    assert_eq!(content.iter().map(Inline::plain_text).collect::<String>(), "Quoted line");
+}
+
 #[test]
 fn html_diagram_round_trips_through_the_diagram_attribute() {
     let mut graph = DocumentGraph::new(DocumentId(1));

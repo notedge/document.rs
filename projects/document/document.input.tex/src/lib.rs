@@ -381,7 +381,6 @@ fn block_inline_slices<'a>(block: &'a Block, slices: &mut Vec<&'a [Inline]>) {
     match block {
         Block::Section { title, .. } => slices.push(title),
         Block::Paragraph { content } => slices.push(content),
-        Block::Quote { content, .. } => slices.push(content),
         Block::List { items, .. } => {
             for item in items {
                 slices.push(&item.content);

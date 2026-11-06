@@ -79,7 +79,7 @@ fn note_labels(graph: &DocumentGraph) -> Vec<String> {
     let mut labels = Vec::new();
     for node in &graph.blocks {
         match &node.block {
-            Block::Paragraph { content } | Block::Quote { content, .. } => scan(content, &mut labels),
+            Block::Paragraph { content } => scan(content, &mut labels),
             Block::Section { title, .. } => scan(title, &mut labels),
             Block::List { items, .. } => {
                 for item in items {
@@ -113,7 +113,6 @@ fn has_attributed_class(graph: &DocumentGraph, class: &str) -> bool {
     graph.blocks.iter().any(|node| match &node.block {
         Block::Paragraph { content } => scan(content, class),
         Block::Section { title, .. } => scan(title, class),
-        Block::Quote { content, .. } => scan(content, class),
         Block::List { items, .. } => items.iter().any(|item| scan(&item.content, class)),
         Block::Table { rows, .. } => rows.iter().any(|row| row.cells.iter().any(|cell| scan(&cell.content, class))),
         _ => false,

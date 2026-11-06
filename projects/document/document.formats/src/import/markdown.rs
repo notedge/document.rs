@@ -1869,13 +1869,13 @@ fn lower_html_table_block(html: &str, graph: &mut DocumentGraph) -> Option<Block
     }
 }
 
-/// Lower a blockquote into inline content plus nested block children.
+/// Lower a blockquote into a quote whose children carry its whole body.
 ///
 /// `oak-markdown` keeps a blockquote's `>` markers and inner list/heading
 /// markers inside one flat node, so nested structure cannot be read from the
 /// tree. The dequoted body is re-read with the same import profile: a body that
-/// lowers to paragraphs becomes quoted inline content, and any deeper block
-/// (list, heading, table, code, nested quote) becomes a real quote child.
+/// lowers to paragraphs becomes a real `Paragraph` child, and any deeper block
+/// (list, heading, table, code, nested quote) becomes another quote child.
 fn lower_blockquote(
     node: RedNode<MarkdownLanguage>,
     source: &SourceText,
@@ -1887,18 +1887,26 @@ fn lower_blockquote(
     if body != raw && !body.trim().is_empty() {
         if let Ok(inner) = import_markdown_bytes("blockquote", &body) {
             let mut payloads = root_block_payloads(&inner);
-            let mut content = Vec::new();
+            let mut children = Vec::new();
             if let Some(Block::Paragraph { content: paragraph }) = payloads.first().cloned() {
-                content = split_text_newlines(paragraph);
+                let content = split_text_newlines(paragraph);
+                if !content.is_empty() {
+                    children.push(graph.push_block(Block::Paragraph { content }));
+                }
                 payloads.remove(0);
             }
-            if !content.is_empty() || !payloads.is_empty() {
-                let children = payloads.into_iter().map(|block| graph.push_block(block)).collect();
-                return Block::Quote { content, children };
+            children.extend(payloads.into_iter().map(|block| {
+                let rehosted = rehost_block(&block, &inner, graph);
+                graph.push_block(rehosted)
+            }));
+            if !children.is_empty() {
+                return Block::Quote { children };
             }
         }
     }
-    Block::Quote { content: lower_blockquote_inlines(node, source, context), children: Vec::new() }
+    let content = lower_blockquote_inlines(node, source, context);
+    let children = if content.is_empty() { Vec::new() } else { vec![graph.push_block(Block::Paragraph { content })] };
+    Block::Quote { children }
 }
 
 /// Split raw newlines inside text runs into soft breaks so quoted inline
@@ -1922,6 +1930,45 @@ fn split_text_newlines(inlines: Vec<Inline>) -> Vec<Inline> {
         out.push(inline);
     }
     out
+}
+
+/// Copy a block payload from a freshly imported graph into the target graph.
+///
+/// Nested blocks carry [`NodeId`] values that belong to the source graph, so a
+/// payload cannot be moved verbatim across graphs. Children are re-pushed and
+/// remapped here before the block itself is materialized.
+fn rehost_block(block: &Block, source_graph: &DocumentGraph, graph: &mut DocumentGraph) -> Block {
+    match block {
+        Block::Section { level, title, children } => {
+            Block::Section { level: *level, title: title.clone(), children: rehost_children(children, source_graph, graph) }
+        }
+        Block::Quote { children } => Block::Quote { children: rehost_children(children, source_graph, graph) },
+        Block::List { ordered, items } => Block::List {
+            ordered: *ordered,
+            items: items
+                .iter()
+                .map(|item| ListItem {
+                    content: item.content.clone(),
+                    children: rehost_children(&item.children, source_graph, graph),
+                    number: item.number,
+                    is_task: item.is_task,
+                    is_checked: item.is_checked,
+                })
+                .collect(),
+        },
+        other => other.clone(),
+    }
+}
+
+fn rehost_children(children: &[NodeId], source_graph: &DocumentGraph, graph: &mut DocumentGraph) -> Vec<NodeId> {
+    children
+        .iter()
+        .filter_map(|child_id| source_graph.block(*child_id))
+        .map(|node| {
+            let block = rehost_block(&node.block, source_graph, graph);
+            graph.push_block(block)
+        })
+        .collect()
 }
 
 /// Remove one `>` marker per line so the quoted body can be parsed again.

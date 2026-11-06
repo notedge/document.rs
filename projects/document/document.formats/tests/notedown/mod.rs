@@ -302,8 +302,12 @@ fn notedown_round_trip_preserves_supported_semantics() {
     assert!(
         reopened.blocks.iter().any(|node| matches!(
             &node.block,
-            Block::Quote { content, .. }
-                if content.iter().any(|inline| matches!(inline, Inline::Text { text } if text.contains("Quoted")))
+            Block::Quote { children }
+                if children.iter().any(|child_id| matches!(
+                    reopened.block(*child_id).map(|child| &child.block),
+                    Some(Block::Paragraph { content })
+                        if content.iter().any(|inline| matches!(inline, Inline::Text { text } if text.contains("Quoted")))
+                ))
         )),
         "{:?}",
         reopened.blocks

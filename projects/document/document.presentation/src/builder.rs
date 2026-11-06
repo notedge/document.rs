@@ -101,6 +101,7 @@ fn root_ids(graph: &DocumentGraph) -> Vec<NodeId> {
     for node in &graph.blocks {
         match &node.block {
             Block::Section { children, .. } => referenced.extend(children.iter().copied()),
+            Block::Quote { children, .. } => referenced.extend(children.iter().copied()),
             Block::List { items, .. } => {
                 for item in items {
                     referenced.extend(item.children.iter().copied());
@@ -267,11 +268,24 @@ fn collect_flow(graph: &DocumentGraph, ids: &[NodeId], blocks: &mut Vec<FlowBloc
             Block::Math { formula } => {
                 blocks.push(FlowBlock::CodeBlock { language: None, text: formula.source.clone() });
             }
-            Block::Quote { content, children } => {
-                blocks.push(FlowBlock::Quote { runs: runs_of(content) });
-                // Nested blocks owned by the quotation follow it in the flow so
-                // quoted lists and code stay visible.
-                collect_flow(graph, children, blocks);
+            Block::Quote { children } => {
+                let mut runs = Vec::new();
+                let mut rest = Vec::new();
+                for child_id in children {
+                    match graph.block(*child_id).map(|node| &node.block) {
+                        Some(Block::Paragraph { content }) => {
+                            if !runs.is_empty() {
+                                push_run(&mut runs, "\n", FontStyle::Normal, None, None);
+                            }
+                            flow_runs(content, FontStyle::Normal, None, None, &mut runs);
+                        }
+                        _ => rest.push(*child_id),
+                    }
+                }
+                blocks.push(FlowBlock::Quote { runs });
+                // Non-paragraph children have no single quote run surface, so
+                // they keep following the quotation in document order.
+                collect_flow(graph, &rest, blocks);
             }
             Block::Table { caption, rows } => {
                 blocks.push(FlowBlock::Table {

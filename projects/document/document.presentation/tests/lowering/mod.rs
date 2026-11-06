@@ -236,10 +236,10 @@ fn flow_nested_list_stays_inside_parent_item() {
 #[test]
 fn flow_quote_runs_keep_inline_code_as_monospace() {
     let mut graph = DocumentGraph::new(DocumentId(4));
-    graph.push_block(Block::Quote {
+    let quote = graph.push_block(Block::Paragraph {
         content: vec![text("Use "), Inline::InlineCode { text: "vutex".to_string() }, text(" here.")],
-        children: Vec::new(),
     });
+    graph.push_block(Block::Quote { children: vec![quote] });
 
     let presentation = build_flow_presentation(&graph);
 

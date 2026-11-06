@@ -8,7 +8,7 @@ fn image(source: &str) -> Inline {
 }
 
 fn bound_assets(block: &Block) -> Vec<Option<AssetId>> {
-    let (Block::Paragraph { content } | Block::Quote { content, .. }) = block
+    let Block::Paragraph { content } = block
     else {
         return Vec::new();
     };

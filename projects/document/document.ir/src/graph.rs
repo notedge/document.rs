@@ -4,6 +4,7 @@ use crate::{
     asset::Asset,
     block::{Block, BlockNode},
     id::{AssetId, DocumentId, LinkId, NodeId},
+    inline::Inline,
     metadata::MetadataEntry,
     page::PageSetup,
     relation::{Relation, RelationEndpoint, RelationKind},
@@ -31,6 +32,7 @@ pub struct DocumentMetadata {
 /// Semantic document graph — import layers construct this, export layers
 /// consume it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "WireDocumentGraph")]
 pub struct DocumentGraph {
     /// Stable document identity.
     pub id: DocumentId,
@@ -60,6 +62,110 @@ pub struct DocumentGraph {
     /// Internal allocator for auto-assigned node ids.
     #[serde(default)]
     next_node: u64,
+}
+
+/// Wire view used to load documents written before quotes became block
+/// containers.
+#[derive(Deserialize)]
+struct WireDocumentGraph {
+    id: DocumentId,
+    revision: u64,
+    metadata: DocumentMetadata,
+    blocks: Vec<WireBlockNode>,
+    relations: Vec<Relation>,
+    assets: Vec<Asset>,
+    sources: Vec<SourceRef>,
+    coverage: CoverageReport,
+    #[serde(default)]
+    page_setup: Option<PageSetup>,
+    #[serde(default)]
+    block_spans: Vec<Option<SourceSpan>>,
+    #[serde(default)]
+    loss_spans: Vec<Option<SourceSpan>>,
+    #[serde(default)]
+    next_node: u64,
+}
+
+#[derive(Deserialize)]
+struct WireBlockNode {
+    id: NodeId,
+    block: WireBlock,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WireBlock {
+    /// Legacy quote payload with inline content.
+    LegacyQuote {
+        #[serde(rename = "Quote")]
+        quote: WireLegacyQuote,
+    },
+    /// Current block payload.
+    Current(Block),
+}
+
+#[derive(Deserialize)]
+struct WireLegacyQuote {
+    content: Vec<Inline>,
+    #[serde(default)]
+    children: Vec<NodeId>,
+}
+
+impl From<WireDocumentGraph> for DocumentGraph {
+    fn from(wire: WireDocumentGraph) -> Self {
+        let WireDocumentGraph {
+            id,
+            revision,
+            metadata,
+            blocks,
+            relations,
+            assets,
+            sources,
+            coverage,
+            page_setup,
+            block_spans,
+            loss_spans,
+            next_node,
+        } = wire;
+        let max_id = blocks.iter().map(|node| node.id.0).max().unwrap_or(0);
+        let mut graph = Self {
+            id,
+            revision,
+            metadata,
+            blocks: Vec::with_capacity(blocks.len()),
+            relations,
+            assets,
+            sources,
+            coverage,
+            page_setup,
+            block_spans: Vec::with_capacity(blocks.len()),
+            loss_spans,
+            next_node: next_node.max(max_id),
+        };
+        let mut legacy_quotes = Vec::new();
+        for (index, node) in blocks.into_iter().enumerate() {
+            let span = block_spans.get(index).copied().flatten();
+            match node.block {
+                WireBlock::LegacyQuote { quote } => {
+                    if !quote.content.is_empty() {
+                        legacy_quotes.push((graph.blocks.len(), quote.content));
+                    }
+                    graph.blocks.push(BlockNode { id: node.id, block: Block::Quote { children: quote.children } });
+                }
+                WireBlock::Current(block) => {
+                    graph.blocks.push(BlockNode { id: node.id, block });
+                }
+            }
+            graph.block_spans.push(span);
+        }
+        for (quote_index, content) in legacy_quotes {
+            let child = graph.push_block_at(Block::Paragraph { content }, None);
+            if let Block::Quote { children } = &mut graph.blocks[quote_index].block {
+                children.insert(0, child);
+            }
+        }
+        graph
+    }
 }
 
 impl DocumentGraph {

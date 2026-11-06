@@ -98,7 +98,7 @@ fn image_source(graph: &document_ir::DocumentGraph) -> String {
 
 fn find_image(block: &document_ir::Block) -> Option<String> {
     let content = match block {
-        document_ir::Block::Paragraph { content } | document_ir::Block::Quote { content, .. } => content.as_slice(),
+        document_ir::Block::Paragraph { content } => content.as_slice(),
         _ => return None,
     };
     content.iter().find_map(|inline| match inline {

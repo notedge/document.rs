@@ -10,7 +10,7 @@ use document_formats::pandoc::{
         TableHead, Target,
     },
 };
-use document_ir::{Block as IrBlock, DocumentGraph, SemanticStatus};
+use document_ir::{Block as IrBlock, DocumentGraph, Inline as IrInline, SemanticStatus};
 
 fn encode_text(document: &PandocDocument) -> String {
     encode(document, &PandocBudget::default()).expect("encode")
@@ -359,6 +359,36 @@ fn ir_semantic_round_trip_is_stable_after_export() {
 }
 
 #[test]
+fn pandoc_blockquote_round_trips_quoted_text() {
+    let document = PandocDocument {
+        api_version: API_VERSION,
+        meta: Vec::new(),
+        blocks: vec![Block::BlockQuote(vec![Block::Para(vec![Inline::Str("Quoted line".into())])])],
+    };
+    let graph = import(&encode_text(&document));
+    let children = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            IrBlock::Quote { children } => Some(children.as_slice()),
+            _ => None,
+        })
+        .expect("quote expected");
+    assert!(children.iter().any(|child_id| matches!(
+        graph.block(*child_id).map(|node| &node.block),
+        Some(IrBlock::Paragraph { content })
+            if content.iter().any(|inline| matches!(inline, IrInline::Text { text } if text == "Quoted line"))
+    )));
+
+    let exported = export_pandoc_json(&graph).expect("export");
+    let json = exported.to_json_text().expect("json");
+    let decoded = decode_text(&json);
+    assert!(matches!(decoded.blocks.as_slice(), [Block::BlockQuote(_)]), "{:?}", decoded.blocks);
+    let reimported = import(&json);
+    assert_eq!(graph.blocks, reimported.blocks);
+}
+
+#[test]
 fn adapter_round_trips_the_full_constructor_fixture() {
     let text = encode_text(&all_constructors_document());
     let graph = import(&text);
@@ -523,9 +553,5 @@ fn export_writes_numeric_metadata_as_strings_and_reports_loss() {
     let exported = export_pandoc_json(&graph).expect("export");
     assert!(matches!(&exported.document.meta[0].1, MetaValue::String(value) if value == "3"));
     assert!(matches!(&exported.document.meta[1].1, MetaValue::String(value) if value == "0.25"));
-    assert!(
-        exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.metadata_number"),
-        "{:?}",
-        exported.losses
-    );
+    assert!(exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.metadata_number"), "{:?}", exported.losses);
 }

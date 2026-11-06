@@ -1,6 +1,6 @@
 use document_compose::Severity;
 use document_input_markdown::{import_source, render_svg};
-use document_ir::{Block, DocumentGraph};
+use document_ir::{Block, DocumentGraph, Inline};
 use document_layout::Diagrams;
 
 fn render(source: &str) -> document_input_markdown::MarkdownRender {
@@ -73,9 +73,17 @@ fn table_alignment_downgrade_is_reported() {
 fn quote_content_reaches_the_svg() {
     let source = "> Quoted line\n";
     let imported = import_source("virtual://quote.md", source).expect("quote must import");
+    let graph = &imported.graph;
     assert!(
-        find_block(&imported.graph, |block| matches!(block, Block::Quote { content, .. } if !content.is_empty())),
-        "quote content must be lowered"
+        find_block(graph, |block| match block {
+            Block::Quote { children } => children.iter().any(|child_id| matches!(
+                graph.block(*child_id).map(|child| &child.block),
+                Some(Block::Paragraph { content })
+                    if content.iter().any(|inline| matches!(inline, Inline::Text { text } if text.contains("Quoted line")))
+            )),
+            _ => false,
+        }),
+        "quote body must be a paragraph child"
     );
 
     let rendered = render(source);

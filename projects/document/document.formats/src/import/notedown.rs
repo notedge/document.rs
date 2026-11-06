@@ -39,7 +39,7 @@ fn lower_notedown_tree(
     let root = RedNode::new(green_tree, 0);
     let mut graph = DocumentGraph::new(document_id_for(label));
     let mut losses: LossQueue = Vec::new();
-    let blocks = lower_root_blocks(root, source, &mut losses);
+    let blocks = lower_root_blocks(root, source, &mut losses, &mut graph);
     for block in blocks {
         graph.push_block(block);
     }
@@ -67,7 +67,12 @@ fn lower_notedown_tree(
     Ok(graph)
 }
 
-fn lower_root_blocks(node: RedNode<NoteLanguage>, source: &SourceText, losses: &mut LossQueue) -> Vec<Block> {
+fn lower_root_blocks(
+    node: RedNode<NoteLanguage>,
+    source: &SourceText,
+    losses: &mut LossQueue,
+    graph: &mut DocumentGraph,
+) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut pending_list: Option<(bool, Vec<ListItem>)> = None;
 
@@ -76,7 +81,7 @@ fn lower_root_blocks(node: RedNode<NoteLanguage>, source: &SourceText, losses: &
             match child_node.element_type() {
                 NoteElementType::Heading => {
                     flush_list(&mut blocks, &mut pending_list);
-                    if let Some(block) = lower_block_node(child_node, source, NoteElementType::Heading, losses) {
+                    if let Some(block) = lower_block_node(child_node, source, NoteElementType::Heading, losses, graph) {
                         blocks.push(block);
                     }
                 }
@@ -125,7 +130,7 @@ fn lower_root_blocks(node: RedNode<NoteLanguage>, source: &SourceText, losses: &
                 }
                 other => {
                     flush_list(&mut blocks, &mut pending_list);
-                    if let Some(block) = lower_block_node(child_node, source, other, losses) {
+                    if let Some(block) = lower_block_node(child_node, source, other, losses, graph) {
                         blocks.push(block);
                     }
                 }
@@ -149,6 +154,7 @@ fn lower_block_node(
     source: &SourceText,
     kind: NoteElementType,
     losses: &mut LossQueue,
+    graph: &mut DocumentGraph,
 ) -> Option<Block> {
     match kind {
         NoteElementType::Heading => {
@@ -170,10 +176,16 @@ fn lower_block_node(
             if content.is_empty() { None } else { Some(Block::Code { language, content }) }
         }
         NoteElementType::Table => Some(Block::Table { caption: None, rows: extract_table_rows(node, source, losses) }),
-        NoteElementType::Blockquote => Some(Block::Quote {
-            content: vec![Inline::Text { text: extract_notedown_blockquote_text(node, source) }],
-            children: Vec::new(),
-        }),
+        NoteElementType::Blockquote => {
+            let text = extract_notedown_blockquote_text(node, source);
+            if text.is_empty() {
+                Some(Block::Quote { children: Vec::new() })
+            }
+            else {
+                let child = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text }] });
+                Some(Block::Quote { children: vec![child] })
+            }
+        }
         NoteElementType::HorizontalRule => {
             Some(Block::Opaque { kind: "thematic_break".into(), payload_hint: "---".into(), status: SemanticStatus::Partial })
         }

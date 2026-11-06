@@ -97,13 +97,16 @@ fn markdown_lists_lower_to_list_blocks() {
 fn markdown_quote_nested_blocks_round_trip() {
     let source = "> - a\n> - b\n";
     let graph = import_markdown_bytes("quote-list.md", source).expect("import quoted list");
-    let Block::Quote { content, children } =
+    let Block::Quote { children } =
         &graph.blocks.iter().find(|node| matches!(node.block, Block::Quote { .. })).expect("quote block").block
     else {
         unreachable!()
     };
-    assert!(content.is_empty(), "{content:#?}");
     assert_eq!(children.len(), 1, "{children:#?}");
+    assert!(
+        matches!(graph.block(children[0]).map(|node| &node.block), Some(Block::List { ordered: false, .. })),
+        "the quoted list is the only child: {children:#?}"
+    );
     let markdown = export_markdown(&graph).expect("export quoted list");
     assert_eq!(markdown, "> - a\n> - b\n\n");
 
@@ -120,10 +123,18 @@ fn markdown_quote_nested_blocks_round_trip() {
 fn markdown_blockquote_lowers_inline_content() {
     let source = "> **bold** text\n";
     let graph = import_markdown_bytes("quote.md", source).expect("import markdown");
-    let Block::Quote { content, .. } = &graph.blocks[0].block
+    let quote_node = graph.blocks.iter().find(|node| matches!(node.block, Block::Quote { .. })).expect("quote expected");
+    let Block::Quote { children } = &quote_node.block
     else {
-        panic!("quote expected: {:#?}", graph.blocks)
+        unreachable!()
     };
+    let content = children
+        .iter()
+        .find_map(|child_id| match graph.block(*child_id).map(|node| &node.block) {
+            Some(Block::Paragraph { content }) => Some(content),
+            _ => None,
+        })
+        .expect("quote body must be a paragraph child");
     assert!(
         content.iter().any(|inline| matches!(
             inline,
@@ -136,14 +147,23 @@ fn markdown_blockquote_lowers_inline_content() {
 
     let markdown = export_markdown(&graph).expect("export markdown");
     let reopened = import_markdown_bytes("quote-roundtrip.md", &markdown).expect("reopen markdown");
-    assert_eq!(reopened.blocks[0].block, graph.blocks[0].block);
+    assert_eq!(reopened.blocks, graph.blocks);
 
     let multiline = "> first line\n> second line\n";
     let multiline_graph = import_markdown_bytes("multiline-quote.md", multiline).expect("import multiline quote");
-    let Block::Quote { content, .. } = &multiline_graph.blocks[0].block
+    let quote_node =
+        multiline_graph.blocks.iter().find(|node| matches!(node.block, Block::Quote { .. })).expect("multiline quote expected");
+    let Block::Quote { children } = &quote_node.block
     else {
-        panic!("quote expected: {:#?}", multiline_graph.blocks)
+        unreachable!()
     };
+    let content = children
+        .iter()
+        .find_map(|child_id| match multiline_graph.block(*child_id).map(|node| &node.block) {
+            Some(Block::Paragraph { content }) => Some(content),
+            _ => None,
+        })
+        .expect("multiline quote body must be a paragraph child");
     assert!(
         content.iter().any(|inline| matches!(inline, Inline::Break { kind: document_ir::BreakKind::Soft })),
         "{content:#?}"
@@ -152,7 +172,7 @@ fn markdown_blockquote_lowers_inline_content() {
     let multiline_markdown = export_markdown(&multiline_graph).expect("export multiline quote");
     let multiline_reopened =
         import_markdown_bytes("multiline-quote-roundtrip.md", &multiline_markdown).expect("reopen multiline quote");
-    assert_eq!(multiline_reopened.blocks[0].block, multiline_graph.blocks[0].block);
+    assert_eq!(multiline_reopened.blocks, multiline_graph.blocks);
 }
 
 #[test]

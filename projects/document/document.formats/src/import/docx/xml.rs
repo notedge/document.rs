@@ -906,6 +906,11 @@ fn push_paragraph(graph: &mut DocumentGraph, paragraph: &ParagraphState) {
         graph.push_block(Block::Section { level, title: inlines, children: Vec::new() });
         return;
     }
+    if paragraph.style.as_deref().is_some_and(|style| style.eq_ignore_ascii_case("Quote")) {
+        let child = graph.push_block(Block::Paragraph { content: inlines });
+        graph.push_block(Block::Quote { children: vec![child] });
+        return;
+    }
     if paragraph.style.is_some() {
         graph.push_loss(LossMarker {
             code: "reader.docx.unmapped_style".into(),

@@ -284,9 +284,8 @@ fn write_block(
             write_inlines(out, content, footnote_refs)?;
             out.push_str("</p>");
         }
-        Block::Quote { content, children } => {
+        Block::Quote { children } => {
             out.push_str("<blockquote>");
-            write_inlines(out, content, footnote_refs)?;
             for child_id in children {
                 let child = graph
                     .block(*child_id)
@@ -630,9 +629,7 @@ fn collect_export_losses(graph: &DocumentGraph) -> Vec<LossMarker> {
     for node in &graph.blocks {
         match &node.block {
             Block::Section { title, .. } => collect_inline_losses(graph, title, &mut losses, &mut seen),
-            Block::Paragraph { content } | Block::Quote { content, .. } => {
-                collect_inline_losses(graph, content, &mut losses, &mut seen)
-            }
+            Block::Paragraph { content } => collect_inline_losses(graph, content, &mut losses, &mut seen),
             Block::List { items, .. } => {
                 for item in items {
                     collect_inline_losses(graph, &item.content, &mut losses, &mut seen);

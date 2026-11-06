@@ -128,10 +128,7 @@ impl Importer {
                 "author" | "authors" => authors.extend(self.meta_texts(value, &pointer)?),
                 "lang" | "language" => language = Some(self.meta_text(value, &pointer)?),
                 "keywords" | "tags" => tags.extend(self.meta_texts(value, &pointer)?),
-                _ => properties.push(document_ir::MetadataEntry {
-                    key: key.clone(),
-                    value: self.meta_typed(value, &pointer),
-                }),
+                _ => properties.push(document_ir::MetadataEntry { key: key.clone(), value: self.meta_typed(value, &pointer) }),
             }
         }
         self.graph.set_metadata(document_ir::DocumentMetadata { title, language, authors, tags, properties });
@@ -150,11 +147,7 @@ impl Importer {
             MetaValue::Inlines(inlines) => document_ir::MetadataValue::Text(model_inline_text(inlines)),
             MetaValue::Blocks(blocks) => document_ir::MetadataValue::Text(blocks_text(blocks)),
             MetaValue::List(items) => document_ir::MetadataValue::List(
-                items
-                    .iter()
-                    .enumerate()
-                    .map(|(index, item)| self.meta_typed(item, &format!("{pointer}/{index}")))
-                    .collect(),
+                items.iter().enumerate().map(|(index, item)| self.meta_typed(item, &format!("{pointer}/{index}"))).collect(),
             ),
             MetaValue::Map(entries) => document_ir::MetadataValue::Map(
                 entries
@@ -463,16 +456,18 @@ impl Importer {
     }
 
     fn lower_quote(&mut self, blocks: &[Block], pointer: &str) -> Result<IrBlock, FormatError> {
-        let mut content = Vec::new();
+        let mut children = Vec::new();
         let start = match blocks.first() {
             Some(Block::Plain(inlines) | Block::Para(inlines)) => {
-                content = self.lower_inlines(inlines, &format!("{pointer}/c/0/c"))?;
+                let content = self.lower_inlines(inlines, &format!("{pointer}/c/0/c"))?;
+                let id = self.push_node(IrBlock::Paragraph { content }, &format!("{pointer}/c/0"));
+                children.push(id);
                 1
             }
             _ => 0,
         };
-        let children = self.lower_sequence(blocks, &format!("{pointer}/c"), start)?;
-        Ok(IrBlock::Quote { content, children })
+        children.extend(self.lower_sequence(blocks, &format!("{pointer}/c"), start)?);
+        Ok(IrBlock::Quote { children })
     }
 
     fn lower_ordered_list(&mut self, list: &OrderedList, pointer: &str) -> Result<IrBlock, FormatError> {

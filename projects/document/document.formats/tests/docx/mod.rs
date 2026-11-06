@@ -1,4 +1,7 @@
-use document_formats::{export::markdown::export_markdown, import::docx::import_docx_bytes};
+use document_formats::{
+    export::{docx::export_docx_bytes, markdown::export_markdown},
+    import::docx::import_docx_bytes,
+};
 use document_ir::{Block, BreakKind, Inline, SemanticStatus, SourceKind};
 
 fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -117,6 +120,37 @@ fn docx_section_properties_become_page_setup() {
         !graph.coverage.loss.iter().any(|loss| loss.code == "reader.docx.section_layout"),
         "a represented section must not be reported as a loss"
     );
+}
+
+#[test]
+fn docx_quote_round_trips_quoted_text() {
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:pPr><w:pStyle w:val="Quote"/></w:pPr><w:r><w:t>Quoted line</w:t></w:r></w:p>
+  </w:body>
+</w:document>"#;
+    let graph = import_docx_bytes("quote.docx", &docx_zip(document_xml)).expect("import DOCX quote");
+    let children = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Quote { children } => Some(children.as_slice()),
+            _ => None,
+        })
+        .expect("quote block expected");
+    assert!(children.iter().any(|child_id| matches!(
+        graph.block(*child_id).map(|node| &node.block),
+        Some(Block::Paragraph { content })
+            if content.iter().any(|inline| matches!(inline, Inline::Text { text } if text.contains("Quoted line")))
+    )));
+    let markdown = export_markdown(&graph).expect("export quoted markdown");
+    assert!(markdown.contains("> Quoted line"), "{markdown}");
+
+    let bytes = export_docx_bytes(&graph).expect("export DOCX quote");
+    let reopened = import_docx_bytes("quote-roundtrip.docx", &bytes).expect("reopen DOCX quote");
+    let markdown = export_markdown(&reopened).expect("export reopened markdown");
+    assert!(markdown.contains("> Quoted line"), "{markdown}");
 }
 
 #[test]
@@ -667,8 +701,8 @@ fn docx_import_records_footnotes_part_provenance() {
 <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:footnote w:id="1"><w:p><w:r><w:t>Footnote body.</w:t></w:r></w:p></w:footnote>
 </w:footnotes>"#;
-    let graph = import_docx_bytes("footnotes.docx", &docx_zip_with_footnotes(document_xml, footnotes_xml))
-        .expect("import docx");
+    let graph =
+        import_docx_bytes("footnotes.docx", &docx_zip_with_footnotes(document_xml, footnotes_xml)).expect("import docx");
 
     let definition = graph
         .blocks

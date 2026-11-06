@@ -391,6 +391,10 @@ fn normalize_heading_level(graph: &mut DocumentGraph, id: NodeId, parent_level: 
         Block::List { items, .. } => Some(items.iter().flat_map(|item| item.children.iter().copied()).collect::<Vec<_>>()),
         _ => None,
     };
+    let quote_children = match &node.block {
+        Block::Quote { children } => Some(children.clone()),
+        _ => None,
+    };
 
     if let Some((level, title, children)) = section {
         let target = (parent_level + 1).min(6);
@@ -409,11 +413,16 @@ fn normalize_heading_level(graph: &mut DocumentGraph, id: NodeId, parent_level: 
             normalize_heading_level(graph, child, parent_level, changed_nodes);
         }
     }
+    else if let Some(children) = quote_children {
+        for child in children {
+            normalize_heading_level(graph, child, parent_level, changed_nodes);
+        }
+    }
 }
 
 fn run_resolve_references(graph: &mut DocumentGraph, spec: &TransformPassSpec) -> (TransformPassReport, Vec<Diagnostic>) {
     let targets: HashMap<NodeId, String> =
-        graph.blocks.iter().map(|node| (node.id, readable_block_text(&node.block))).collect();
+        graph.blocks.iter().map(|node| (node.id, readable_block_text(graph, &node.block))).collect();
     let ids: Vec<NodeId> = graph.blocks.iter().map(|node| node.id).collect();
 
     let mut changed_nodes = 0usize;
@@ -485,10 +494,7 @@ fn resolve_block(
             let (content, changed) = resolve_inlines(content, targets, repaired_references, diagnostics, pass_name);
             changed.then_some(Block::Paragraph { content })
         }
-        Block::Quote { content, children } => {
-            let (content, changed) = resolve_inlines(content, targets, repaired_references, diagnostics, pass_name);
-            changed.then(|| Block::Quote { content, children: children.clone() })
-        }
+        Block::Quote { .. } => None,
         Block::List { ordered, items } => {
             let mut changed = false;
             let items = items
@@ -642,11 +648,15 @@ fn dangling_reference_diagnostic(pass_name: &str, target: NodeId) -> Diagnostic 
 /// Sections use their title, prose blocks their content, lists their items, and
 /// tables their caption or cells. Code, math, diagram, chart, and opaque payloads
 /// are authored source rather than prose, so they yield no display text.
-fn readable_block_text(block: &Block) -> String {
+fn readable_block_text(graph: &DocumentGraph, block: &Block) -> String {
     match block {
         Block::Section { title, .. } => plain_text_of(title),
         Block::Paragraph { content } => plain_text_of(content),
-        Block::Quote { content, .. } => plain_text_of(content),
+        Block::Quote { children } => {
+            joined_text(children.iter().map(|child_id| {
+                graph.block(*child_id).map_or_else(String::new, |child| readable_block_text(graph, &child.block))
+            }))
+        }
         Block::List { items, .. } => joined_text(items.iter().map(|item| plain_text_of(&item.content))),
         Block::Table { caption, rows } => match caption.as_deref().map(str::trim).filter(|caption| !caption.is_empty()) {
             Some(caption) => caption.to_string(),
@@ -753,6 +763,7 @@ fn descendants(graph: &DocumentGraph, id: NodeId) -> Vec<NodeId> {
 fn child_ids(block: &Block) -> Vec<NodeId> {
     match block {
         Block::Section { children, .. } => children.clone(),
+        Block::Quote { children } => children.clone(),
         Block::List { items, .. } => items.iter().flat_map(|item| item.children.iter().copied()).collect(),
         _ => Vec::new(),
     }
@@ -794,10 +805,7 @@ fn rewrite_block(block: &Block, search: &str, replacement: &str) -> Option<(Bloc
             let (content, occurrences) = rewrite_inlines(content, search, replacement);
             (occurrences > 0).then(|| (Block::Paragraph { content }, occurrences))
         }
-        Block::Quote { content, children } => {
-            let (content, occurrences) = rewrite_inlines(content, search, replacement);
-            (occurrences > 0).then(|| (Block::Quote { content, children: children.clone() }, occurrences))
-        }
+        Block::Quote { .. } => None,
         Block::List { ordered, items } => {
             let mut occurrences = 0;
             let items = items

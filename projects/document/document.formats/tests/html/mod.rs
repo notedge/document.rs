@@ -141,8 +141,8 @@ fn html_export_preserves_list_children_and_their_reference_targets() {
     let mut graph = DocumentGraph::new(IdAllocator::default().document_id());
     let paragraph = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "child paragraph".into() }] });
     let code = graph.push_block(Block::Code { language: Some("rust".into()), content: "value < limit".into() });
-    let quote =
-        graph.push_block(Block::Quote { content: vec![Inline::Text { text: "child quote".into() }], children: Vec::new() });
+    let quote_paragraph = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "child quote".into() }] });
+    let quote = graph.push_block(Block::Quote { children: vec![quote_paragraph] });
     let nested_list = graph.push_block(Block::List {
         ordered: true,
         items: vec![document_ir::ListItem {
@@ -168,14 +168,14 @@ fn html_export_preserves_list_children_and_their_reference_targets() {
     let mut session = ParseSession::<HtmlLanguage>::default();
     let document = builder.build(&source, &[], &mut session).result.expect("Oak HTML reopen");
     let view = HtmlDocumentView::from_document(&document);
-    for selector in ["li #node-1 > p", "li #node-2 > pre > code", "li #node-3 > blockquote", "li #node-4 > ol"] {
+    for selector in ["li #node-1 > p", "li #node-2 > pre > code", "li #node-4 > blockquote", "li #node-5 > ol"] {
         let (_, matches) = select_css_elements(&view, selector, Default::default()).expect("child selector");
         assert_eq!(matches.len(), 1, "{selector}: {html}");
     }
     assert_eq!(html.matches("child paragraph").count(), 1);
     assert_eq!(html.matches("child quote").count(), 1);
     assert!(html.contains("value &lt; limit"));
-    assert!(html.contains(r##"href="#node-4""##));
+    assert!(html.contains(r##"href="#node-5""##));
 }
 
 #[test]

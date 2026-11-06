@@ -146,10 +146,10 @@ fn reflow_list_items_emit_italic_inline() {
 #[test]
 fn reflow_quote_emits_code_inline() {
     let mut graph = DocumentGraph::new(DocumentId(57));
-    graph.push_block(Block::Quote {
+    let quote = graph.push_block(Block::Paragraph {
         content: vec![text("Run "), Inline::InlineCode { text: "vutex".to_string() }, text(" first")],
-        children: Vec::new(),
     });
+    graph.push_block(Block::Quote { children: vec![quote] });
     let html = render_html_reflow(&build_flow_presentation(&graph)).expect("reflow html");
 
     assert!(html.contains("<blockquote data-vutex-block=\"quote\"><p>Run <code>vutex</code> first</p></blockquote>"), "{html}");

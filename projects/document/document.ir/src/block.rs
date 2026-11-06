@@ -35,8 +35,6 @@ pub enum Block {
     },
     /// Block quotation.
     Quote {
-        /// Quoted inline content that is not owned by a nested block.
-        content: Vec<Inline>,
         /// Nested block node ids rendered inside the quotation.
         children: Vec<NodeId>,
     },

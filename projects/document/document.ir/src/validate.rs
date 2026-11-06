@@ -283,8 +283,7 @@ impl DocumentGraph {
                 Block::Paragraph { content } => {
                     check_inline_refs(node.id, content, &context, report);
                 }
-                Block::Quote { content, children } => {
-                    check_inline_refs(node.id, content, &context, report);
+                Block::Quote { children } => {
                     for child in children {
                         if !node_ids.contains(child) {
                             report.issues.push(ValidationIssue::UnknownQuoteChild { quote: node.id, child: *child });

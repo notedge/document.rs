@@ -115,10 +115,7 @@ impl Exporter<'_> {
                 MetaValue::List(items.iter().map(|item| self.encode_metadata_value(item)).collect())
             }
             document_ir::MetadataValue::Map(entries) => MetaValue::Map(
-                entries
-                    .iter()
-                    .map(|entry| (entry.key.clone(), self.encode_metadata_value(&entry.value)))
-                    .collect(),
+                entries.iter().map(|entry| (entry.key.clone(), self.encode_metadata_value(&entry.value))).collect(),
             ),
         }
     }
@@ -194,14 +191,7 @@ impl Exporter<'_> {
                 }
             }
             IrBlock::Table { caption, rows } => Block::Table(self.export_table(caption, rows)?),
-            IrBlock::Quote { content, children } => {
-                let mut blocks = Vec::new();
-                if !content.is_empty() {
-                    blocks.push(Block::Plain(self.export_inlines(content)?));
-                }
-                blocks.extend(self.export_sequence(children)?);
-                Block::BlockQuote(blocks)
-            }
+            IrBlock::Quote { children } => Block::BlockQuote(self.export_sequence(children)?),
             IrBlock::Code { language, content } => {
                 let mut classes = Vec::new();
                 if let Some(language) = language {

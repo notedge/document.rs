@@ -129,15 +129,22 @@ fn write_block(
             write_run_text(out, source)?;
             out.push_str("</w:p>");
         }
-        Block::Quote { content, children } => {
-            out.push_str("<w:p><w:pPr><w:pStyle w:val=\"Quote\"/></w:pPr>");
-            write_inlines(out, content, graph, rels)?;
-            out.push_str("</w:p>");
+        Block::Quote { children } => {
+            if children.is_empty() {
+                out.push_str("<w:p><w:pPr><w:pStyle w:val=\"Quote\"/></w:pPr></w:p>");
+            }
             for child_id in children {
                 let child = graph
                     .block(*child_id)
                     .ok_or_else(|| FormatError::invalid_input(format!("missing quote child {child_id:?}")))?;
-                write_block(out, &child.block, graph, rels)?;
+                if let Block::Paragraph { content } = &child.block {
+                    out.push_str("<w:p><w:pPr><w:pStyle w:val=\"Quote\"/></w:pPr>");
+                    write_inlines(out, content, graph, rels)?;
+                    out.push_str("</w:p>");
+                }
+                else {
+                    write_block(out, &child.block, graph, rels)?;
+                }
             }
         }
         Block::List { ordered, items } => {

@@ -243,7 +243,7 @@ fn collect_preserved_math(graph: &DocumentGraph) -> Vec<PreservedItem> {
                     }
                 }
             }
-            Block::Quote { content, .. } => collect_inline_math(content, &mut items),
+            Block::Paragraph { content } => collect_inline_math(content, &mut items),
             Block::Math { formula } => preserve_math(formula, &mut items),
             _ => {}
         }

@@ -282,7 +282,7 @@ fn plain_text(document: &DocumentGraph) -> String {
 fn block_text(block: &Block) -> String {
     match block {
         Block::Section { title, .. } => inline_text(title),
-        Block::Paragraph { content } | Block::Quote { content, .. } => inline_text(content),
+        Block::Paragraph { content } => inline_text(content),
         _ => String::new(),
     }
 }

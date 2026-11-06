@@ -368,6 +368,7 @@ fn root_ids(graph: &DocumentGraph) -> Vec<NodeId> {
     for node in &graph.blocks {
         match &node.block {
             Block::Section { children, .. } => referenced.extend(children.iter().copied()),
+            Block::Quote { children, .. } => referenced.extend(children.iter().copied()),
             Block::List { items, .. } => {
                 for item in items {
                     referenced.extend(item.children.iter().copied());
@@ -1161,37 +1162,26 @@ impl<'a> PageBuilder<'a> {
         }
     }
 
-    fn emit_quote(&mut self, content: &[Inline], indent: f64) {
+    fn emit_quote(&mut self, graph: &DocumentGraph, children: &[NodeId], indent: f64) {
         let tokens = self.hint.style;
         let size = self.body_size();
         let quote_indent = indent + tokens.quote_indent;
-        let atoms = self.compose_atoms(content, size, quote_indent, BODY_FACE, ImageMode::AltText);
-        let lines = break_inline_atoms(&self.text, atoms, size, self.content_width(quote_indent), 0.0);
-        // The rule spans the real line extents, so a tall formula inside the
-        // quote grows the rule instead of hanging outside it.
-        let height: f64 = lines
-            .iter()
-            .map(|line| {
-                let metrics = self.inline_line_metrics(line, size);
-                metrics.raise + metrics.height
-            })
-            .sum();
         self.pad(size * 0.4);
-        self.ensure_space(height);
-        if tokens.quote_rule > 0.0 {
+        // Keep the opening line and the rule on one page whenever possible.
+        self.ensure_space(self.line_box(size) * 2.0);
+        let top = self.cursor;
+        self.render_blocks(graph, children, quote_indent);
+        let bottom = self.cursor;
+        if tokens.quote_rule > 0.0 && bottom > top {
             let x = self.left(indent) + 2.0;
-            let top = self.cursor;
             self.push(LayoutItem::Rule(Rule {
                 x1: x,
                 y1: top,
                 x2: x,
-                y2: top + height,
+                y2: bottom,
                 thickness: tokens.quote_rule,
                 color: Some(tokens.quote_rule_color),
             }));
-        }
-        for line in &lines {
-            self.emit_inline_line_at(line, size, quote_indent, 0.0, Some(tokens.quote_text_color));
         }
         self.pad(size * 0.5);
     }
@@ -1546,11 +1536,8 @@ impl<'a> PageBuilder<'a> {
                     self.emit_list(*ordered, items, indent, graph);
                     self.pad(self.body_size() * 0.4);
                 }
-                Block::Quote { content, children } => {
-                    self.emit_quote(content, indent);
-                    // Nested blocks owned by the quotation stay inside it; dropping
-                    // them would make quoted lists and code vanish from the page.
-                    self.render_blocks(graph, children, indent + 16.0);
+                Block::Quote { children } => {
+                    self.emit_quote(graph, children, indent);
                 }
                 Block::Code { content, language } => {
                     // A TikZ fence whose scene the host registered is a

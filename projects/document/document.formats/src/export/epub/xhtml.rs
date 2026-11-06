@@ -192,9 +192,8 @@ fn write_block(
             write_inlines(out, content, source_map, footnote_refs)?;
             out.push_str("</p>\n");
         }
-        Block::Quote { content, children } => {
+        Block::Quote { children } => {
             out.push_str("<blockquote>");
-            write_inlines(out, content, source_map, footnote_refs)?;
             for child_id in children {
                 let Some(child) = graph.block(*child_id)
                 else {

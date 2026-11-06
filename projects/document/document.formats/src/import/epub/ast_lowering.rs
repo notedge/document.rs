@@ -143,11 +143,12 @@ fn lower_semantic_block(
                     None
                 }
                 else {
-                    Some(Block::Quote { content: vec![Inline::Text { text: plain }], children: Vec::new() })
+                    let child = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: plain }] });
+                    Some(Block::Quote { children: vec![child] })
                 }
             }
             else {
-                Some(quote_block_from_blocks(inner))
+                Some(quote_block_from_blocks(inner, graph))
             }
         }
         "pre" => {
