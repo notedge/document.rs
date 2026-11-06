@@ -81,6 +81,12 @@ struct RobotsCacheEntry {
     expires_at_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct NamespaceQuota {
+    max_bytes: u64,
+    max_records: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SessionSnapshot {
     runs: BTreeMap<String, RunState>,
@@ -93,6 +99,8 @@ struct SessionSnapshot {
     objects: BTreeMap<String, StoredObject>,
     #[serde(default)]
     browser_cache: BTreeMap<String, BrowserSnapshotRecord>,
+    #[serde(default)]
+    namespace_quotas: BTreeMap<String, NamespaceQuota>,
 }
 
 /// One committed page exposed by the legacy session migration path.
@@ -131,6 +139,8 @@ pub(crate) struct StoreSession {
     #[serde(default)]
     browser_cache: BTreeMap<String, BrowserSnapshotRecord>,
     #[serde(default)]
+    namespace_quotas: BTreeMap<String, NamespaceQuota>,
+    #[serde(default)]
     claim_lease: Duration,
     snapshot: SessionSnapshot,
     last_claim: Option<ClaimToken>,
@@ -146,6 +156,7 @@ impl StoreSession {
             robots_cache: BTreeMap::new(),
             objects: BTreeMap::new(),
             browser_cache: BTreeMap::new(),
+            namespace_quotas: BTreeMap::new(),
             claim_lease,
             snapshot: SessionSnapshot {
                 runs: BTreeMap::new(),
@@ -154,6 +165,7 @@ impl StoreSession {
                 robots_cache: BTreeMap::new(),
                 objects: BTreeMap::new(),
                 browser_cache: BTreeMap::new(),
+                namespace_quotas: BTreeMap::new(),
             },
             last_claim: None,
             active_page_tx: None,
@@ -176,6 +188,7 @@ impl StoreSession {
             robots_cache: self.robots_cache.clone(),
             objects: self.objects.clone(),
             browser_cache: self.browser_cache.clone(),
+            namespace_quotas: self.namespace_quotas.clone(),
         };
     }
 
@@ -186,6 +199,7 @@ impl StoreSession {
         self.robots_cache = self.snapshot.robots_cache.clone();
         self.objects = self.snapshot.objects.clone();
         self.browser_cache = self.snapshot.browser_cache.clone();
+        self.namespace_quotas = self.snapshot.namespace_quotas.clone();
         self.last_claim = None;
         self.active_page_tx = None;
         if let Some(run_id) = &self.active_run_id {
@@ -654,8 +668,47 @@ impl StoreSession {
     pub(crate) fn put_response_cache(&mut self, artifact: &FetchArtifact) -> Result<()> {
         let bytes = serde_json::to_vec(artifact).map_err(|error| StoreError::StoreCorrupt(error.to_string()))?;
         self.response_cache.insert(artifact.cache_key.clone(), bytes);
+        self.enforce_response_quota();
         self.persist_snapshot();
         Ok(())
+    }
+
+    pub(crate) fn set_namespace_quota(&mut self, namespace: &str, max_bytes: u64, max_records: u64) {
+        self.namespace_quotas.insert(namespace.to_owned(), NamespaceQuota { max_bytes, max_records });
+        self.persist_snapshot();
+    }
+
+    pub(crate) fn response_cache_stats(&self) -> (u64, u64, Option<u64>) {
+        let bytes_used = self.response_cache.values().map(|bytes| bytes.len() as u64).sum();
+        let quota = self.namespace_quotas.get("cache/response/").map(|quota| quota.max_bytes);
+        (self.response_cache.len() as u64, bytes_used, quota)
+    }
+
+    fn enforce_response_quota(&mut self) {
+        let Some(quota) = self.namespace_quotas.get("cache/response/").copied()
+        else {
+            return;
+        };
+        loop {
+            let bytes_used: u64 = self.response_cache.values().map(|bytes| bytes.len() as u64).sum();
+            if (self.response_cache.len() as u64) <= quota.max_records && bytes_used <= quota.max_bytes {
+                return;
+            }
+            let victim = self
+                .response_cache
+                .iter()
+                .min_by_key(|(_, bytes)| {
+                    serde_json::from_slice::<FetchArtifact>(bytes)
+                        .map(|artifact| artifact.retrieved_at_epoch)
+                        .unwrap_or_default()
+                })
+                .map(|(key, _)| key.clone());
+            let Some(victim) = victim
+            else {
+                return;
+            };
+            self.response_cache.remove(&victim);
+        }
     }
 
     pub(crate) fn get_robots_cache(&self, site_key: &str) -> Result<Option<Vec<u8>>> {

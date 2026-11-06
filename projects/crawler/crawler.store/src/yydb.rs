@@ -15,8 +15,8 @@ use crawler_types::{CrawlEvent, CrawlRequest, FetchArtifact, FrontierItem, PageC
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
 use yydb::{
-    Batch, Connection, Error as YydbError, EvictionPolicy, LeaseExpectation, LeaseToken, NamespaceQuota,
-    ObjectKind as YydbObjectKind, ObjectRef as YydbObjectRef, ReleaseOutcome as YydbReleaseOutcome,
+    Batch, Connection, Error as YydbError, LeaseExpectation, LeaseToken, ObjectKind as YydbObjectKind,
+    ObjectRef as YydbObjectRef, ReleaseOutcome as YydbReleaseOutcome,
 };
 
 use crate::{
@@ -843,6 +843,14 @@ impl Store for YydbStore {
         Ok(())
     }
 
+    fn reclaim_orphans(&mut self) -> Result<u64> {
+        YydbStore::reclaim_cas_orphans(self)
+    }
+
+    fn set_namespace_quota(&mut self, namespace: &str, max_bytes: u64, max_records: u64) -> Result<()> {
+        YydbStore::set_namespace_quota(self, namespace, max_bytes, max_records)
+    }
+
     fn doctor(&self) -> Result<StoreDiagnosticReport> {
         let report = self.connection()?.doctor().map_err(map_yydb_error)?;
         let mut issues = report
@@ -864,7 +872,7 @@ impl Store for YydbStore {
                 message: format!("{} orphan objects are not referenced by committed metadata", report.orphan_object_count),
             });
         }
-        let namespaces = report
+        let mut namespaces = report
             .namespaces
             .into_iter()
             .map(|namespace| StoreNamespaceStats {
@@ -874,7 +882,26 @@ impl Store for YydbStore {
                 quota_max_bytes: namespace.quota_max_bytes,
                 ttl_expired_pending: namespace.ttl_expired_pending,
             })
-            .collect();
+            .collect::<Vec<_>>();
+        // The memory backend always surfaces the response cache namespace, so
+        // the yydb backend reports it too and reads the bound back from its own
+        // record instead of the upstream quota table.
+        let (record_count, bytes_used) = self.response_cache_stats()?;
+        let quota_max_bytes = self.read_namespace_quota("cache/response/")?.map(|(bytes, _)| bytes);
+        if let Some(entry) = namespaces.iter_mut().find(|entry| entry.prefix == "cache/response/") {
+            entry.record_count = record_count;
+            entry.bytes_used = bytes_used;
+            entry.quota_max_bytes = quota_max_bytes;
+        }
+        else {
+            namespaces.push(StoreNamespaceStats {
+                prefix: "cache/response/".into(),
+                record_count,
+                bytes_used,
+                quota_max_bytes,
+                ttl_expired_pending: 0,
+            });
+        }
         // Upstream checkpoint lag resets on every read because `__yydb/meta/*`
         // is dropped by the pinned format, so the store keeps its own
         // `run/{run_id}/checkpoint/{sequence}` records as the source of truth.
@@ -916,7 +943,7 @@ impl Store for YydbStore {
         let key = keyspace::response_cache(&artifact.cache_key);
         let bytes = serde_json::to_vec(artifact).map_err(|error| StoreError::StoreCorrupt(error.to_string()))?;
         self.connection()?.put(key, bytes).map_err(map_yydb_error)?;
-        Ok(())
+        self.enforce_response_quota()
     }
 
     fn get_robots_cache(&self, site_key: &str) -> Result<Option<Vec<u8>>> {
@@ -1038,7 +1065,7 @@ impl YydbStore {
     }
 
     /// Delete unreferenced CAS objects and report how many were removed.
-    pub fn reclaim_orphans(&mut self) -> Result<u64> {
+    pub fn reclaim_cas_orphans(&mut self) -> Result<u64> {
         let conn = self.connection()?;
         let orphans = conn.scan_orphans("").map_err(map_yydb_error)?;
         let report = conn.reclaim_orphans(&orphans).map_err(map_yydb_error)?;
@@ -1047,11 +1074,85 @@ impl YydbStore {
 
     /// Bound a namespace such as `cache/response/` by bytes and records.
     ///
-    /// YYDB evicts least-recently-used records to stay inside the quota, so a
-    /// cache write can silently displace an older entry instead of growing.
+    /// The bound lives in a crawler store record instead of the upstream quota
+    /// table because the pinned YYDB revision drops `__yydb/meta/*` on every
+    /// reload, which resets the LRU clock and turns its eviction order into
+    /// lexical key order. Enforcing here keeps eviction oldest-first and
+    /// identical to the memory backend.
     pub fn set_namespace_quota(&self, namespace: &str, max_bytes: u64, max_records: u64) -> Result<()> {
-        let quota = NamespaceQuota { max_bytes, max_records, eviction_policy: EvictionPolicy::Lru };
-        self.connection()?.set_namespace_quota(namespace, quota).map_err(map_yydb_error)
+        let key = keyspace::namespace_quota(namespace);
+        self.connection()?.put(key, encode_quota(max_bytes, max_records)).map_err(map_yydb_error)
+    }
+
+    /// Read a bound written by [`Self::set_namespace_quota`].
+    fn read_namespace_quota(&self, namespace: &str) -> Result<Option<(u64, u64)>> {
+        let key = keyspace::namespace_quota(namespace);
+        let Some(bytes) = self.connection()?.get(&key).map_err(map_yydb_error)?
+        else {
+            return Ok(None);
+        };
+        Ok(decode_quota(&bytes))
+    }
+
+    /// Record count and value bytes held by the response cache namespace.
+    fn response_cache_stats(&self) -> Result<(u64, u64)> {
+        let entries = self.response_cache_entries()?;
+        Ok((entries.len() as u64, entries.iter().map(|(_, _, len)| *len).sum()))
+    }
+
+    /// Collect `(key, retrieved_at_epoch, value_bytes)` for every cached response.
+    fn response_cache_entries(&self) -> Result<Vec<(String, u64, u64)>> {
+        const PREFIX: &str = "cache/response/";
+        const PAGE: usize = 256;
+        let mut entries = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let page = self.connection()?.scan_prefix(PREFIX, after.as_deref(), PAGE).map_err(map_yydb_error)?;
+            let Some(last) = page.last()
+            else {
+                break;
+            };
+            after = Some(last.0.clone());
+            let full = page.len() == PAGE;
+            for (key, value) in page {
+                let epoch = serde_json::from_slice::<FetchArtifact>(&value)
+                    .map(|artifact| artifact.retrieved_at_epoch)
+                    .unwrap_or_default();
+                entries.push((key, epoch, value.len() as u64));
+            }
+            if !full {
+                break;
+            }
+        }
+        Ok(entries)
+    }
+
+    /// Evict the oldest cached responses until the stored bound is met.
+    fn enforce_response_quota(&mut self) -> Result<()> {
+        let Some((max_bytes, max_records)) = self.read_namespace_quota("cache/response/")?
+        else {
+            return Ok(());
+        };
+        let mut entries = self.response_cache_entries()?;
+        let mut bytes_used: u64 = entries.iter().map(|(_, _, len)| *len).sum();
+        let mut victims = Vec::new();
+        while (entries.len() as u64) > max_records || bytes_used > max_bytes {
+            let Some(index) = entries
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
+                .map(|(index, _)| index)
+            else {
+                break;
+            };
+            let (key, _, len) = entries.remove(index);
+            bytes_used = bytes_used.saturating_sub(len);
+            victims.push((key, None));
+        }
+        if victims.is_empty() {
+            return Ok(());
+        }
+        self.connection()?.write_batch(&victims).map_err(map_yydb_error)
     }
 
     /// Fold committed records into the main file and reset checkpoint lag.
@@ -1260,6 +1361,22 @@ fn migrate_legacy_session(conn: &Connection) -> Result<()> {
 
 fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     serde_json::to_vec(value).map_err(|error| StoreError::StoreCorrupt(error.to_string()))
+}
+
+/// Persist a namespace bound as little-endian `max_bytes` then `max_records`.
+fn encode_quota(max_bytes: u64, max_records: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(16);
+    out.extend(max_bytes.to_le_bytes());
+    out.extend(max_records.to_le_bytes());
+    out
+}
+
+/// Decode a persisted namespace bound.
+fn decode_quota(bytes: &[u8]) -> Option<(u64, u64)> {
+    let bytes: [u8; 16] = bytes.try_into().ok()?;
+    let max_bytes = u64::from_le_bytes(bytes[..8].try_into().ok()?);
+    let max_records = u64::from_le_bytes(bytes[8..].try_into().ok()?);
+    Some((max_bytes, max_records))
 }
 
 fn decode<T: DeserializeOwned>(bytes: &[u8], what: &str) -> Result<T> {

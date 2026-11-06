@@ -80,6 +80,11 @@ pub fn object_blob(fingerprint: &str) -> String {
     format!("object/{fingerprint}/blob")
 }
 
+/// Persisted quota bound for one namespace.
+pub fn namespace_quota(namespace: &str) -> String {
+    format!("store/quota/{namespace}")
+}
+
 /// Response cache record key.
 pub fn response_cache(cache_key: &str) -> String {
     format!("cache/response/{cache_key}")

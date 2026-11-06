@@ -8,7 +8,7 @@ use crate::{
     types::{
         BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord, CheckpointView, ClaimToken,
         ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, ResumeState, RunHandle, RunSpec,
-        StoreConfig, StoreDiagnosticReport,
+        StoreConfig, StoreDiagnosticReport, StoreNamespaceStats,
     },
 };
 
@@ -146,6 +146,17 @@ impl Store for MemoryStore {
         Ok(())
     }
 
+    fn reclaim_orphans(&mut self) -> Result<u64> {
+        // The memory backend keeps no CAS root, so it never accumulates blobs
+        // that outlive their metadata.
+        Ok(0)
+    }
+
+    fn set_namespace_quota(&mut self, namespace: &str, max_bytes: u64, max_records: u64) -> Result<()> {
+        self.session.set_namespace_quota(namespace, max_bytes, max_records);
+        Ok(())
+    }
+
     fn doctor(&self) -> Result<StoreDiagnosticReport> {
         let checkpoint_lag_records = self.session.checkpoint_lag();
         let mut issues = Vec::new();
@@ -156,7 +167,19 @@ impl Store for MemoryStore {
                 message: format!("checkpoint lags commit by {checkpoint_lag_records} records"),
             });
         }
-        Ok(StoreDiagnosticReport { checkpoint_lag_records, issues, ..StoreDiagnosticReport::default() })
+        let (record_count, bytes_used, quota_max_bytes) = self.session.response_cache_stats();
+        Ok(StoreDiagnosticReport {
+            checkpoint_lag_records,
+            namespaces: vec![StoreNamespaceStats {
+                prefix: "cache/response/".into(),
+                record_count,
+                bytes_used,
+                quota_max_bytes,
+                ttl_expired_pending: 0,
+            }],
+            issues,
+            ..StoreDiagnosticReport::default()
+        })
     }
 
     fn get_response_cache(&self, cache_key: &str) -> Result<Option<crawler_types::FetchArtifact>> {

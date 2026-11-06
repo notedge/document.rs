@@ -109,6 +109,18 @@ pub trait Store {
     /// Store an unreferenced CAS object for orphan reclamation tests.
     fn put_orphan_object(&mut self, bytes: &[u8]) -> Result<()>;
 
+    /// Delete CAS blobs whose metadata no longer references them.
+    ///
+    /// Backends without a separate CAS root return `0`.
+    fn reclaim_orphans(&mut self) -> Result<u64>;
+
+    /// Bound a namespace by bytes and record count.
+    ///
+    /// The bound applies to `cache/response/` and is enforced on every
+    /// response cache write by evicting the oldest `retrieved_at_epoch` first,
+    /// so memory and yydb backends evict in the same order.
+    fn set_namespace_quota(&mut self, namespace: &str, max_bytes: u64, max_records: u64) -> Result<()>;
+
     /// Run read-only consistency probes.
     fn doctor(&self) -> Result<StoreDiagnosticReport>;
 
