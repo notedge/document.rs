@@ -5,6 +5,8 @@
 //! embedded font cannot outline is reported instead of being drawn with a host
 //! serif face.
 
+use std::path::{Path, PathBuf};
+
 use document_compose::{
     Diagnostic,
     math::{
@@ -12,12 +14,30 @@ use document_compose::{
         formula_layout::{BBox, FontMetricsSnapshot},
     },
 };
+use document_fonts::{MathFontPack, install_math_fonts};
 use document_layout::{
     math::{LayoutNode, collect_paint, default_base_size, layout_formula_source},
     plan::{LayoutItem, LayoutPage, LayoutPlan},
 };
 use document_presentation::build_display_presentation;
 use document_renderer_pdf::{PdfFontPolicy, render_pdf_with_font_policy_and_diagnostics};
+
+/// Math bytes are host-owned, so read the VuTeX pack beside this repository,
+/// or the directory named by `VUTEX_FONT_DIR`. A missing pack fails the test.
+fn install_host_math_fonts() {
+    let dir = std::env::var("VUTEX_FONT_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(4)
+            .expect("workspace root")
+            .join("VuTeX")
+            .join("projects")
+            .join("vutex.rs")
+            .join("fonts")
+    });
+    assert!(dir.is_dir(), "pdf math tests need the host font pack at {}; set VUTEX_FONT_DIR", dir.display());
+    install_math_fonts(&MathFontPack::load_from(&dir).expect("math font pack"));
+}
 
 /// Page geometry every formula below is placed on.
 const PAGE_WIDTH: f64 = 400.0;
@@ -94,6 +114,7 @@ fn rectangle_fills(content: &str, min_width: f64) -> usize {
 
 /// Lay out one formula, lower it to display primitives, and render a PDF page.
 fn render_formula(source: &str) -> (Vec<u8>, Vec<LayoutItem>, Vec<Diagnostic>) {
+    install_host_math_fonts();
     let (result, _, _) =
         layout_formula_source(source, true, default_base_size(true)).unwrap_or_else(|e| panic!("layout {source}: {e}"));
     let mut diagnostics = Vec::new();
