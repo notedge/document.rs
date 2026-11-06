@@ -167,6 +167,11 @@ pub const CACHE_WRITE_FAILED: &str = "crawler.cache.write-failed";
 /// Revalidation request failed for an otherwise-usable cached entry.
 pub const CACHE_REVALIDATION_FAILED: &str = "crawler.cache.revalidation-failed";
 
+// ── publish ──
+
+/// Another publisher holds the sibling lock for the same output directory.
+pub const PUBLISH_CONFLICT: &str = "crawler.publish.conflict";
+
 // ── store ──
 
 /// Persistent store is unreachable or could not be opened.
@@ -231,6 +236,7 @@ mod tests {
             CACHE_READ_FAILED,
             CACHE_WRITE_FAILED,
             CACHE_REVALIDATION_FAILED,
+            PUBLISH_CONFLICT,
             STORE_UNAVAILABLE,
             STORE_CONFLICT,
             STORE_CORRUPT,
