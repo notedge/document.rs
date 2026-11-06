@@ -20,11 +20,30 @@ jobs:
         with:
           toolchain: nightly-2026-10-23
           components: rustfmt, clippy
+      # PDF, layout and pipeline tests read host-authored faces instead of
+      # skipping. The pack lives in VuTeX on `dev`, so fetch only that directory
+      # and reuse it across runs. Bump the key when the pack changes.
+      - name: Cache VuTeX font pack
+        id: vutex-fonts
+        uses: actions/cache@v4
+        with:
+          path: vutex-fonts/projects/vutex.rs/fonts
+          key: vutex-fonts-${{ runner.os }}-v1
+      - name: Checkout VuTeX font pack
+        if: steps.vutex-fonts.outputs.cache-hit != 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: notedge/VuTeX
+          ref: dev
+          path: vutex-fonts
+          sparse-checkout: projects/vutex.rs/fonts
       - name: Format
         run: cargo fmt --all -- --check
       - name: Build
         run: cargo build --release
       - name: Tests
+        env:
+          VUTEX_FONT_DIR: ${{ github.workspace }}/vutex-fonts/projects/vutex.rs/fonts
         run: cargo test --release
 
   # `document.formats` defaults to the `markdown` feature, so the default
