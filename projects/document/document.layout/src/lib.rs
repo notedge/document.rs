@@ -5,6 +5,7 @@
 pub mod diagram;
 pub mod document;
 pub mod hint;
+mod image;
 pub mod math;
 pub mod plan;
 

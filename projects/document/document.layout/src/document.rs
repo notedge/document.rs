@@ -559,6 +559,8 @@ struct PageBuilder<'a> {
     diagrams: &'a Diagrams,
     /// Storage locations the graph bound to its image assets.
     asset_sources: HashMap<AssetId, String>,
+    /// Intrinsic width over height for assets whose bytes were materialized.
+    asset_aspects: HashMap<AssetId, f64>,
     /// Top edge of the next line box, in page coordinates.
     cursor: f64,
     /// Degradations the pass applied, such as a math glyph without an outline.
@@ -569,12 +571,18 @@ impl<'a> PageBuilder<'a> {
     fn new(hint: LayoutHint, diagrams: &'a Diagrams, faces: &'a BodyMetrics, graph: &DocumentGraph) -> Self {
         let asset_sources =
             graph.assets.iter().filter_map(|asset| asset.source.as_ref().map(|source| (asset.id, source.clone()))).collect();
+        let asset_aspects = graph
+            .assets
+            .iter()
+            .filter_map(|asset| asset.bytes.as_deref().and_then(crate::image::aspect_ratio).map(|ratio| (asset.id, ratio)))
+            .collect();
         Self {
             hint,
             text: TextMeasure::new(faces),
             pages: vec![blank_page(&hint)],
             diagrams,
             asset_sources,
+            asset_aspects,
             cursor: hint.margin.top,
             diagnostics: Vec::new(),
         }
@@ -758,6 +766,7 @@ impl<'a> PageBuilder<'a> {
             match inline {
                 Inline::Image { source, alt, asset, .. } => {
                     let alt_text: String = alt.iter().map(Inline::plain_text).collect();
+                    let aspect = asset.as_ref().and_then(|asset| self.asset_aspects.get(asset)).copied();
                     let source = asset
                         .as_ref()
                         .and_then(|asset| self.asset_sources.get(asset))
@@ -767,7 +776,7 @@ impl<'a> PageBuilder<'a> {
                         ImageMode::Placeholder => {
                             flow.pending.flush(&mut flow.atoms);
                             self.emit_inline_lines(std::mem::take(&mut flow.atoms), size, indent);
-                            self.emit_image_placeholder(&alt_text, &source, indent);
+                            self.emit_image_placeholder(&alt_text, &source, aspect, indent);
                         }
                         ImageMode::AltText => flow.pending.push(&alt_text, face, href, title, &mut flow.atoms),
                     }
@@ -1036,16 +1045,32 @@ impl<'a> PageBuilder<'a> {
         self.emit_wrapped(&text, size, SERIF, indent);
     }
 
-    /// Reserve a fixed box for one authored image that renderers resolve.
+    /// Reserve a box for one authored image that renderers resolve.
     ///
     /// The box spans the content column unless the theme caps it through
-    /// `image_max_width`; layout never reads image bytes.
-    fn emit_image_placeholder(&mut self, alt: &str, source: &str, indent: f64) {
+    /// `image_max_width`. When the import layer materialized the asset bytes,
+    /// the header gives the intrinsic aspect ratio and the box keeps it, also
+    /// shrunk when a tall image would not fit the page. Layout reads headers
+    /// only, never pixels, so a missing payload falls back to the documented
+    /// 0.625 ratio.
+    fn emit_image_placeholder(&mut self, alt: &str, source: &str, aspect: Option<f64>, indent: f64) {
         let tokens = self.hint.style;
         let size = self.body_size();
         let cap = if tokens.image_max_width > 0.0 { tokens.image_max_width } else { f64::INFINITY };
-        let width = self.content_width(indent).min(cap);
-        let height = width * 0.625;
+        let available = self.content_width(indent).min(cap);
+        let page_content = (self.hint.page_height - self.hint.margin.top - self.hint.margin.bottom).max(0.0);
+        let (width, height) = match aspect {
+            Some(ratio) if ratio > 0.0 => {
+                let mut width = available;
+                let mut height = width / ratio;
+                if page_content > 0.0 && height > page_content {
+                    height = page_content;
+                    width = height * ratio;
+                }
+                (width, height)
+            }
+            _ => (available, available * 0.625),
+        };
         self.pad(size * 0.3);
         self.ensure_space(height);
         let x = self.left(indent);

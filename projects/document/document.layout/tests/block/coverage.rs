@@ -1,6 +1,6 @@
 //! Layout coverage for non-paragraph blocks and inline images.
 
-use document_ir::{Block, DocumentGraph, DocumentId, Inline, SemanticStatus, TableCell, TableRow};
+use document_ir::{Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, SemanticStatus, TableCell, TableRow};
 use document_layout::{
     layout,
     plan::{LayoutItem, LayoutPage, TextRun},
@@ -18,6 +18,63 @@ fn text_runs(page: &LayoutPage) -> Vec<&TextRun> {
             _ => None,
         })
         .collect()
+}
+
+fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend_from_slice(&13u32.to_be_bytes());
+    bytes.extend_from_slice(b"IHDR");
+    bytes.extend_from_slice(&width.to_be_bytes());
+    bytes.extend_from_slice(&height.to_be_bytes());
+    bytes.extend_from_slice(&[8, 2, 0, 0, 0]);
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes
+}
+
+#[test]
+fn layout_keeps_the_intrinsic_image_aspect_ratio() {
+    let mut graph = DocumentGraph::new(DocumentId(5));
+    let wide = graph.push_asset(Asset {
+        id: AssetId(1),
+        kind: AssetKind::Image,
+        content_identity: None,
+        source: Some("wide.png".to_string()),
+        media_type: Some("image/png".to_string()),
+        status: SemanticStatus::Partial,
+        bytes: Some(png_bytes(640, 320)),
+    });
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Image {
+            source: "wide.png".to_string(),
+            alt: vec![text("Wide figure")],
+            title: None,
+            asset: Some(wide),
+        }],
+    });
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Image {
+            source: "unknown.png".to_string(),
+            alt: vec![text("No payload")],
+            title: None,
+            asset: None,
+        }],
+    });
+
+    let plan = layout(&graph);
+    let images: Vec<_> = plan
+        .pages
+        .iter()
+        .flat_map(|page| page.items.iter())
+        .filter_map(|item| match item {
+            LayoutItem::ImagePlaceholder(image) => Some(image),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images.len(), 2);
+    let wide = images[0].width / images[0].height;
+    assert!((wide - 2.0).abs() < 1e-6, "640x320 keeps its 2:1 ratio, got {}x{}", images[0].width, images[0].height);
+    let fallback = images[1].width / images[1].height;
+    assert!((fallback - 1.6).abs() < 1e-6, "a missing payload keeps the 0.625 fallback, got {fallback}");
 }
 
 #[test]
