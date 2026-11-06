@@ -7,6 +7,8 @@ mod error;
 pub mod export;
 pub mod import;
 pub mod inspect;
+#[cfg(feature = "pandoc-json")]
+pub mod pandoc;
 #[cfg(any(feature = "docx", feature = "epub", feature = "html"))]
 mod query_gate;
 #[cfg(feature = "tex")]
@@ -111,6 +113,22 @@ pub fn capabilities() -> Vec<FormatCapability> {
             id: "pptx",
             direction: FormatDirection::Export,
             status: FormatStatus::Unavailable,
+        });
+    }
+    #[cfg(feature = "pandoc-json")]
+    {
+        // The strict wire codec covers the full typed model. The IR adapter is
+        // partial because containers and rich table/citation structure have no
+        // IR constructor and degrade with explicit loss markers.
+        capabilities.push(FormatCapability {
+            id: "pandoc-json",
+            direction: FormatDirection::Import,
+            status: FormatStatus::Partial,
+        });
+        capabilities.push(FormatCapability {
+            id: "pandoc-json",
+            direction: FormatDirection::Export,
+            status: FormatStatus::Partial,
         });
     }
     #[cfg(feature = "tex")]

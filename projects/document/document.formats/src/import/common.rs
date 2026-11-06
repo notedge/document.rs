@@ -2,6 +2,7 @@ use document_ir::{
     Asset, AssetId, AssetKind, Block, DocumentGraph, Inline, LinkId, Relation, RelationEndpoint, RelationKind, SemanticStatus,
 };
 
+#[cfg(any(feature = "markdown", feature = "notedown"))]
 pub(super) fn decode_escaped_text(text: &str) -> String {
     let mut decoded = String::with_capacity(text.len());
     let mut characters = text.chars().peekable();

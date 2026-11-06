@@ -24,6 +24,7 @@ oak-html = { workspace = true, optional = true }
 oak-xml = { workspace = true, optional = true }
 oak-tex = { workspace = true, optional = true }
 oak-typst = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 
 [features]
 default = ["markdown"]
@@ -38,6 +39,7 @@ epub = ["dep:acorn-core", "dep:acorn-epub", "dep:oak-core", "dep:oak-html", "dep
 html = ["dep:oak-core", "dep:oak-html", "dep:blake3", "tex"]
 tex = ["dep:oak-core", "dep:oak-tex"]
 typst = ["dep:oak-core", "dep:oak-typst"]
+pandoc-json = ["dep:serde_json"]
 
 [dev-dependencies]
 serde_json = { workspace = true }

@@ -63,3 +63,19 @@ fn capabilities_do_not_overstate_partial_formats() {
     #[cfg(not(feature = "epub"))]
     assert!(!caps.iter().any(|cap| cap.id == "epub"));
 }
+
+#[cfg(feature = "pandoc-json")]
+#[test]
+fn pandoc_json_declares_both_directions_as_partial() {
+    let caps = capabilities();
+    // The wire codec is complete for `[1,23,1]`, but the IR adapter projects
+    // containers, complex tables and citations with recorded losses, so neither
+    // direction is `Ready`.
+    for direction in [FormatDirection::Import, FormatDirection::Export] {
+        assert!(
+            caps.iter()
+                .any(|cap| { cap.id == "pandoc-json" && cap.direction == direction && cap.status == FormatStatus::Partial }),
+            "pandoc-json {direction:?}"
+        );
+    }
+}

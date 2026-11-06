@@ -26,6 +26,8 @@ mod integration;
 mod markdown;
 #[cfg(all(feature = "notedown", feature = "markdown", feature = "html"))]
 mod notedown;
+#[cfg(feature = "pandoc-json")]
+mod pandoc;
 #[cfg(feature = "pdf")]
 mod pdf;
 #[cfg(feature = "markdown")]
