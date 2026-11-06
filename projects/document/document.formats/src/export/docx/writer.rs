@@ -783,10 +783,7 @@ fn write_math_environment(out: &mut String, environment: &MathEnvironment, face:
 /// `Matrix` and `Gathered` keep the cell grid, and `Cases` keeps its brace,
 /// so only the row-per-equation families qualify.
 fn is_equation_array(environment: &MathEnvironment) -> bool {
-    if matches!(
-        environment.kind,
-        MathEnvironmentKind::Matrix | MathEnvironmentKind::Cases | MathEnvironmentKind::Gathered
-    ) {
+    if matches!(environment.kind, MathEnvironmentKind::Matrix | MathEnvironmentKind::Cases | MathEnvironmentKind::Gathered) {
         return false;
     }
     !environment.rows.is_empty() && environment.rows.iter().all(|row| row.cells.len() == 1)

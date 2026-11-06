@@ -879,7 +879,10 @@ fn docx_export_stacks_single_cell_environments_as_equation_array() {
     });
     let exported = export_docx_bytes(&graph).expect("export gather");
     let xml = String::from_utf8_lossy(&exported);
-    assert!(xml.contains("<m:eqArr><m:e><m:r><m:t>a</m:t></m:r></m:e><m:e>"), "a row-per-equation environment is `m:eqArr`: {xml}");
+    assert!(
+        xml.contains("<m:eqArr><m:e><m:r><m:t>a</m:t></m:r></m:e><m:e>"),
+        "a row-per-equation environment is `m:eqArr`: {xml}"
+    );
     assert!(!xml.contains("<m:m>"), "a gather must not become a cell matrix: {xml}");
     let reopened = import_docx_bytes("gather-round.docx", &exported).expect("reopen gather");
     let source = reopened.blocks.iter().find_map(|node| match &node.block {
@@ -900,19 +903,10 @@ fn docx_export_declares_diagram_and_chart_languages_in_styles() {
     // Every paragraph style the body references must exist in the styles part.
     assert!(xml.contains("w:pStyle w:val=\"Diagram:mermaid\""), "{xml}");
     assert!(xml.contains("w:pStyle w:val=\"Chart:vega-lite\""), "{xml}");
-    assert!(
-        xml.contains("w:styleId=\"Diagram:mermaid\""),
-        "the diagram language must be declared as a named style: {xml}"
-    );
-    assert!(
-        xml.contains("w:styleId=\"Chart:vega-lite\""),
-        "the chart language must be declared as a named style: {xml}"
-    );
+    assert!(xml.contains("w:styleId=\"Diagram:mermaid\""), "the diagram language must be declared as a named style: {xml}");
+    assert!(xml.contains("w:styleId=\"Chart:vega-lite\""), "the chart language must be declared as a named style: {xml}");
     // `VerbatimChar` was declared but never referenced by code before.
-    assert!(
-        xml.contains("<w:rStyle w:val=\"VerbatimChar\"/>"),
-        "code runs must reference the declared monospace style: {xml}"
-    );
+    assert!(xml.contains("<w:rStyle w:val=\"VerbatimChar\"/>"), "code runs must reference the declared monospace style: {xml}");
     let reopened = import_docx_bytes("diagram-round.docx", &exported).expect("reopen diagram and chart");
     let rendered = format!("{:?}", reopened.blocks);
     assert!(rendered.contains("Diagram"), "{rendered}");
