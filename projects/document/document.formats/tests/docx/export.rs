@@ -2,7 +2,9 @@ use document_formats::{
     export::{docx::export_docx_bytes, markdown::export_markdown},
     import::docx::import_docx_bytes,
 };
-use document_ir::{Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, ListItem, NodeId, SemanticStatus};
+use document_ir::{
+    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, ListItem, NodeId, SemanticStatus, TableCell, TableRow,
+};
 
 fn png_header(width: u32, height: u32) -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
@@ -376,6 +378,56 @@ fn docx_export_round_trips_tables() {
     let markdown = export_markdown(&round).expect("export markdown");
     assert!(markdown.contains("| H1 | H2 |"));
     assert!(markdown.contains("| A | B |"));
+}
+
+#[test]
+fn docx_export_writes_grid_span_and_vertical_merge() {
+    let mut graph = DocumentGraph::new(DocumentId(51));
+    graph.push_block(Block::Table {
+        caption: None,
+        rows: vec![
+            TableRow {
+                is_header: true,
+                cells: vec![TableCell { content: vec![Inline::Text { text: "Wide".into() }], colspan: 2, rowspan: 1 }],
+            },
+            TableRow {
+                is_header: false,
+                cells: vec![
+                    TableCell { content: vec![Inline::Text { text: "Tall".into() }], colspan: 1, rowspan: 2 },
+                    TableCell { content: vec![Inline::Text { text: "R1C2".into() }], colspan: 1, rowspan: 1 },
+                ],
+            },
+            TableRow {
+                is_header: false,
+                cells: vec![TableCell { content: vec![Inline::Text { text: "R2C2".into() }], colspan: 1, rowspan: 1 }],
+            },
+        ],
+    });
+    let exported = export_docx_bytes(&graph).expect("export docx");
+    let exported_xml = String::from_utf8_lossy(&exported);
+    // The grid follows the spans, not the raw cell count: the first row has a
+    // single cell that still occupies two columns.
+    assert!(
+        exported_xml.contains("<w:tblGrid><w:gridCol w:w=\"4513\"/><w:gridCol w:w=\"4513\"/></w:tblGrid>"),
+        "{exported_xml}"
+    );
+    assert!(
+        exported_xml.contains("<w:tcW w:w=\"9026\" w:type=\"dxa\"/><w:gridSpan w:val=\"2\"/></w:tcPr>"),
+        "a `colspan` cell must span both grid columns: {exported_xml}"
+    );
+    assert!(
+        exported_xml.contains("<w:tcW w:w=\"4513\" w:type=\"dxa\"/><w:vMerge w:val=\"restart\"/></w:tcPr><w:p>"),
+        "a `rowspan` cell must restart the vertical merge: {exported_xml}"
+    );
+    assert!(
+        exported_xml.contains("<w:tcW w:w=\"4513\" w:type=\"dxa\"/><w:vMerge/></w:tcPr><w:p/></w:tc>"),
+        "the next row must continue the vertical merge with an empty cell: {exported_xml}"
+    );
+    assert_eq!(exported_xml.matches("<w:vMerge w:val=\"restart\"/>").count(), 1, "{exported_xml}");
+    assert_eq!(exported_xml.matches("<w:vMerge/>").count(), 1, "{exported_xml}");
+    let continuation = exported_xml.find("<w:vMerge/>").expect("continuation cell");
+    let trailing = exported_xml.find("R2C2").expect("second row cell content");
+    assert!(continuation < trailing, "the continuation slot must precede the row's own cell: {exported_xml}");
 }
 
 #[test]

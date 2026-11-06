@@ -253,6 +253,48 @@ fn collect_nested_ids(block: &Block, ids: &mut HashSet<NodeId>, graph: &Document
     }
 }
 
+/// Where a grid slot came from: the cell at `row`/`cell` that covers it.
+#[derive(Clone, Copy)]
+struct GridOrigin {
+    row: usize,
+    cell: usize,
+    colspan: usize,
+    rowspan: usize,
+}
+
+/// Places every cell on the grid its spans declare. Slots covered by a
+/// `rowspan` keep pointing at the originating cell, so a later row still
+/// writes a continuation cell for them.
+fn place_cells(rows: &[TableRow]) -> (Vec<Vec<Option<GridOrigin>>>, usize) {
+    let mut slots: Vec<Vec<Option<GridOrigin>>> = vec![Vec::new(); rows.len()];
+    let mut columns = 0;
+    for (row_index, row) in rows.iter().enumerate() {
+        let mut column = 0;
+        for (cell_index, cell) in row.cells.iter().enumerate() {
+            while column < slots[row_index].len() && slots[row_index][column].is_some() {
+                column += 1;
+            }
+            let colspan = cell.colspan.max(1) as usize;
+            let rowspan = cell.rowspan.max(1) as usize;
+            let origin = GridOrigin { row: row_index, cell: cell_index, colspan, rowspan };
+            for covered_row in row_index..(row_index + rowspan).min(rows.len()) {
+                let width = column + colspan;
+                if slots[covered_row].len() < width {
+                    slots[covered_row].resize(width, None);
+                }
+                for slot in &mut slots[covered_row][column..width] {
+                    if slot.is_none() {
+                        *slot = Some(origin);
+                    }
+                }
+            }
+            column += colspan;
+        }
+        columns = columns.max(slots[row_index].len());
+    }
+    (slots, columns.max(1))
+}
+
 fn write_table(
     out: &mut String,
     rows: &[TableRow],
@@ -264,10 +306,11 @@ fn write_table(
     }
     // Word renders a bare `w:tbl` with no borders and autofit widths derived
     // from content. The body declares the text box, so every table spans it
-    // exactly with a fixed one-column grid, hairline borders and explicit cell
-    // widths.
+    // exactly with a fixed column grid, hairline borders and explicit cell
+    // widths. Spanned cells carry `w:gridSpan` / `w:vMerge`, and a slot covered
+    // by a `rowspan` still emits a continuation cell so the grid stays aligned.
     let setup = DocxPageSetup::from_graph(graph);
-    let columns = rows.iter().map(|row| row.cells.len()).max().unwrap_or(1).max(1);
+    let (slots, columns) = place_cells(rows);
     let total = twips((setup.page_width - setup.margin_left - setup.margin_right).max(1.0));
     let widths = column_widths(total, columns);
     out.push_str("<w:tbl><w:tblPr>");
@@ -281,13 +324,33 @@ fn write_table(
         let _ = write!(out, "<w:gridCol w:w=\"{width}\"/>");
     }
     out.push_str("</w:tblGrid>");
-    for row in rows {
+    for (row_index, row) in rows.iter().enumerate() {
         out.push_str("<w:tr>");
-        for (index, cell) in row.cells.iter().enumerate() {
-            let width = widths.get(index).copied().unwrap_or_default();
-            let _ = write!(out, "<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr><w:p>");
-            write_inlines(out, &cell.content, graph, rels)?;
-            out.push_str("</w:p></w:tc>");
+        let mut column = 0;
+        while column < columns {
+            let Some(origin) = slots[row_index].get(column).copied().flatten()
+            else {
+                column += 1;
+                continue;
+            };
+            let end = (column + origin.colspan).min(columns);
+            let width: i64 = widths[column..end].iter().sum();
+            let _ = write!(out, "<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/>");
+            if origin.colspan > 1 {
+                let _ = write!(out, "<w:gridSpan w:val=\"{}\"/>", origin.colspan);
+            }
+            if origin.row == row_index {
+                if origin.rowspan > 1 {
+                    out.push_str("<w:vMerge w:val=\"restart\"/>");
+                }
+                out.push_str("</w:tcPr><w:p>");
+                write_inlines(out, &row.cells[origin.cell].content, graph, rels)?;
+                out.push_str("</w:p></w:tc>");
+            }
+            else {
+                out.push_str("<w:vMerge/></w:tcPr><w:p/></w:tc>");
+            }
+            column += origin.colspan;
         }
         out.push_str("</w:tr>");
     }
