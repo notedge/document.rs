@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 
-use document_formats::export::html::{RenderedDiagram, export_html, export_html_with_diagrams};
-use document_ir::{Block, DocumentGraph, DocumentId, DocumentMetadata, IdAllocator, Inline, NodeId, RelationEndpoint};
+use document_formats::export::html::{RenderedDiagram, export_html, export_html_report, export_html_with_diagrams};
+use document_ir::{
+    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, DocumentMetadata, IdAllocator, Inline, NodeId,
+    RelationEndpoint, SemanticStatus,
+};
 use oak_core::{Builder, SourceText, parser::session::ParseSession};
 use oak_html::{
     HtmlBuilder, HtmlLanguage,
@@ -228,6 +231,80 @@ fn html_export_with_diagrams_is_byte_stable() {
     let first = export_html_with_diagrams(&graph, &diagrams).expect("first export");
     let second = export_html_with_diagrams(&graph, &diagrams).expect("second export");
     assert_eq!(first, second);
+}
+#[test]
+fn html_export_report_names_degraded_and_unresolved_semantics() {
+    let mut graph = DocumentGraph::new(IdAllocator::default().document_id());
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Citation { key: "doe2020".into(), display: None },
+            Inline::Link {
+                target: RelationEndpoint::Unresolved { label: "missing".into() },
+                display: vec![Inline::Text { text: "see missing".into() }],
+                title: None,
+            },
+            Inline::Image { source: "assets/unresolved.png".into(), alt: Vec::new(), title: None, asset: None },
+        ],
+    });
+    graph.push_block(Block::Opaque {
+        kind: "tex.newcommand".into(),
+        payload_hint: "\\foo".into(),
+        status: SemanticStatus::Partial,
+    });
+
+    let export = export_html_report(&graph).expect("html export report");
+    let codes: Vec<&str> = export.losses.iter().map(|loss| loss.code.as_str()).collect();
+    for expected in [
+        "export.html.citation_degraded",
+        "export.html.unresolved_link",
+        "export.html.image_asset_unresolved",
+        "export.html.opaque_projection",
+    ] {
+        assert!(codes.contains(&expected), "{expected} missing from {codes:?}");
+    }
+    assert_eq!(export.losses.len(), 4, "{codes:?}");
+    assert!(export.html.contains(r#"<span class="unresolved-link">see missing</span>"#), "{}", export.html);
+    assert!(export.html.contains(r#"<span class="citation" data-citation-key="doe2020">[doe2020]</span>"#), "{}", export.html);
+    assert!(export.html.contains(r#"<div class="opaque" data-opaque-kind="tex.newcommand">\foo</div>"#), "{}", export.html);
+
+    // The degraded markup is still well-formed for the HTML importer, so a
+    // reopen keeps the display text reachable instead of losing the construct.
+    let source = SourceText::new(export.html.as_str());
+    let builder = HtmlBuilder::new(HtmlLanguage::default());
+    let mut session = ParseSession::<HtmlLanguage>::default();
+    let document = builder.build(&source, &[], &mut session).result.expect("Oak HTML reopen");
+    let view = HtmlDocumentView::from_document(&document);
+    let (_, unresolved) =
+        select_css_elements(&view, "span.unresolved-link", Default::default()).expect("unresolved link selector");
+    let (_, citations) = select_css_elements(&view, "span.citation", Default::default()).expect("citation selector");
+    assert_eq!(unresolved.len(), 1);
+    assert_eq!(citations.len(), 1);
+}
+
+#[test]
+fn html_export_report_keeps_resolved_asset_out_of_loss_list() {
+    let mut graph = DocumentGraph::new(IdAllocator::default().document_id());
+    let asset_id = graph.push_asset(Asset {
+        id: AssetId(1),
+        kind: AssetKind::Image,
+        content_identity: Some("blake3-hash".into()),
+        source: Some("assets/diagram.png".into()),
+        media_type: Some("image/png".into()),
+        status: SemanticStatus::Resolved,
+        bytes: None,
+    });
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Image {
+            source: "assets/diagram.png".into(),
+            alt: vec![Inline::Text { text: "diagram".into() }],
+            title: None,
+            asset: Some(asset_id),
+        }],
+    });
+
+    let export = export_html_report(&graph).expect("html export report");
+    assert!(export.losses.is_empty(), "{:?}", export.losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>());
+    assert_eq!(export.html, export_html(&graph).expect("html export"));
 }
 mod asset_materialization;
 mod import;

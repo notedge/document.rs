@@ -3,9 +3,24 @@ use std::{
     fmt::Write as _,
 };
 
-use document_ir::{Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
+use document_ir::{
+    Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, LossMarker, NodeId, RelationEndpoint, SemanticStatus,
+    TableRow,
+};
 
 use crate::FormatError;
+
+/// HTML output plus the semantics the projection had to defer.
+///
+/// `export_html` stays a string-returning convenience for hosts that only need
+/// markup. Callers that report fidelity use [`export_html_report`] and surface
+/// `losses` next to the output.
+pub struct HtmlExport {
+    /// The exported HTML fragment.
+    pub html: String,
+    /// Semantics that have no HTML form and were degraded or projected inert.
+    pub losses: Vec<LossMarker>,
+}
 
 /// A diagram scene rendered by the host, embedded into the HTML output in
 /// place of the source-only fallback.
@@ -68,7 +83,12 @@ impl FootnoteRefIds {
 /// Diagram blocks without a host-rendered scene keep the source-only `<pre>`
 /// fallback. Hosts that render diagrams use [`export_html_with_diagrams`].
 pub fn export_html(graph: &DocumentGraph) -> Result<String, FormatError> {
-    export_html_with_diagrams(graph, &HashMap::new())
+    Ok(export_html_report(graph)?.html)
+}
+
+/// Export a document graph as HTML together with the fidelity report.
+pub fn export_html_report(graph: &DocumentGraph) -> Result<HtmlExport, FormatError> {
+    export_html_report_with_diagrams(graph, &HashMap::new())
 }
 
 /// Export a semantic document graph as a standalone HTML fragment, embedding
@@ -82,6 +102,14 @@ pub fn export_html_with_diagrams(
     graph: &DocumentGraph,
     diagrams: &HashMap<NodeId, RenderedDiagram>,
 ) -> Result<String, FormatError> {
+    Ok(export_html_report_with_diagrams(graph, diagrams)?.html)
+}
+
+/// Export as HTML and report every construct the projection could not carry.
+pub fn export_html_report_with_diagrams(
+    graph: &DocumentGraph,
+    diagrams: &HashMap<NodeId, RenderedDiagram>,
+) -> Result<HtmlExport, FormatError> {
     let validation = graph.validate();
     if !validation.is_valid() {
         return Err(FormatError::invalid_input(format!("invalid document graph: {:?}", validation.issues)));
@@ -118,7 +146,8 @@ pub fn export_html_with_diagrams(
         write_footnote_section(&mut out, &footnotes, &footnote_refs);
     }
     out.push_str("</article>");
-    Ok(out)
+
+    Ok(HtmlExport { html: out, losses: collect_export_losses(graph) })
 }
 
 /// Footnote definitions have no block form in HTML: they are collected into
@@ -501,10 +530,14 @@ fn write_inlines(out: &mut String, inlines: &[Inline], footnote_refs: &mut Footn
                     RelationEndpoint::ExternalUri(url) => url.clone(),
                     RelationEndpoint::Node(node) => format!("#node-{}", node.0),
                     _ => {
-                        return Err(FormatError::unsupported(
-                            "html",
-                            format!("link target `{target:?}` has no HTML destination mapping"),
-                        ));
+                        // No destination exists, so the link cannot stay a link.
+                        // Keep the authored display text visible and let the
+                        // fidelity report name the dropped target instead of
+                        // failing the whole document.
+                        out.push_str(r#"<span class="unresolved-link">"#);
+                        write_inlines(out, display, footnote_refs)?;
+                        out.push_str("</span>");
+                        continue;
                     }
                 };
                 out.push_str(r#"<a href=""#);
@@ -585,6 +618,112 @@ fn write_inlines(out: &mut String, inlines: &[Inline], footnote_refs: &mut Footn
         }
     }
     Ok(())
+}
+
+/// Collect the semantics an HTML projection has to degrade or project inert.
+///
+/// The writer already keeps the authored display text for each of these, so the
+/// report is the only place a consumer can learn that the markup is lossy.
+fn collect_export_losses(graph: &DocumentGraph) -> Vec<LossMarker> {
+    let mut losses = Vec::new();
+    let mut seen = HashSet::new();
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Section { title, .. } => collect_inline_losses(graph, title, &mut losses, &mut seen),
+            Block::Paragraph { content } | Block::Quote { content, .. } => {
+                collect_inline_losses(graph, content, &mut losses, &mut seen)
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_inline_losses(graph, &item.content, &mut losses, &mut seen);
+                }
+            }
+            Block::Table { rows, .. } => {
+                for row in rows {
+                    for cell in &row.cells {
+                        collect_inline_losses(graph, &cell.content, &mut losses, &mut seen);
+                    }
+                }
+            }
+            Block::Opaque { kind, .. } if kind == "thematic_break" || kind == "footnote_definition" => {}
+            Block::Opaque { kind, .. } => push_export_loss(
+                &mut losses,
+                &mut seen,
+                "export.html.opaque_projection",
+                format!("opaque block kind `{kind}` has no HTML form and is projected as inert markup"),
+                SemanticStatus::Partial,
+            ),
+            _ => {}
+        }
+    }
+    losses
+}
+
+fn collect_inline_losses(
+    graph: &DocumentGraph,
+    inlines: &[Inline],
+    losses: &mut Vec<LossMarker>,
+    seen: &mut HashSet<(String, String)>,
+) {
+    for inline in inlines {
+        match inline {
+            Inline::Styled { children, .. } | Inline::Attributed { children, .. } => {
+                collect_inline_losses(graph, children, losses, seen)
+            }
+            Inline::Link { target, display, .. } => {
+                if !matches!(target, RelationEndpoint::ExternalUri(_) | RelationEndpoint::Node(_)) {
+                    push_export_loss(
+                        losses,
+                        seen,
+                        "export.html.unresolved_link",
+                        format!("link target `{target:?}` has no HTML destination and is written as display text"),
+                        SemanticStatus::Unresolved,
+                    );
+                }
+                collect_inline_losses(graph, display, losses, seen);
+            }
+            Inline::Citation { key, display } => {
+                push_export_loss(
+                    losses,
+                    seen,
+                    "export.html.citation_degraded",
+                    format!("citation `{key}` has no HTML form without a citation database and is written as authored text"),
+                    SemanticStatus::Partial,
+                );
+                if let Some(display) = display {
+                    collect_inline_losses(graph, display, losses, seen);
+                }
+            }
+            Inline::Image { source, asset, .. } => {
+                let resolved = asset
+                    .and_then(|id| graph.assets.iter().find(|candidate| candidate.id == id))
+                    .is_some_and(|asset| asset.status == SemanticStatus::Resolved);
+                if !resolved {
+                    push_export_loss(
+                        losses,
+                        seen,
+                        "export.html.image_asset_unresolved",
+                        format!("image `{source}` has no resolved asset and keeps its source path only"),
+                        SemanticStatus::Unresolved,
+                    );
+                }
+            }
+            Inline::Note { display: Some(display), .. } => collect_inline_losses(graph, display, losses, seen),
+            _ => {}
+        }
+    }
+}
+
+fn push_export_loss(
+    losses: &mut Vec<LossMarker>,
+    seen: &mut HashSet<(String, String)>,
+    code: &str,
+    message: String,
+    status: SemanticStatus,
+) {
+    if seen.insert((code.to_string(), message.clone())) {
+        losses.push(LossMarker { code: code.into(), message, status });
+    }
 }
 
 fn write_attributes(out: &mut String, attributes: &Attributes) -> Result<(), FormatError> {
