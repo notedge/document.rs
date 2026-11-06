@@ -17,11 +17,20 @@ impl NumberingCatalog {
     /// Returns whether the list marker is ordered when numbering metadata is
     /// known.
     pub fn is_ordered(&self, num_id: u32, ilvl: u32) -> Option<bool> {
-        let abstract_id = self.num_to_abstract.get(&num_id)?;
-        let levels = self.abstract_levels.get(abstract_id)?;
-        let format = levels.get(&ilvl)?;
-        Some(num_fmt_is_ordered(format))
+        Some(num_fmt_is_ordered(self.marker_format(num_id, ilvl)?))
     }
+
+    /// Returns the raw `w:numFmt` value for a list level when known.
+    pub fn marker_format(&self, num_id: u32, ilvl: u32) -> Option<&str> {
+        let abstract_id = self.num_to_abstract.get(&num_id)?;
+        self.abstract_levels.get(abstract_id)?.get(&ilvl).map(String::as_str)
+    }
+}
+
+/// Whether a `w:numFmt` value survives the IR list model, which only carries
+/// `ordered` plus a sequential marker value.
+pub fn marker_format_is_representable(format: &str) -> bool {
+    matches!(format, "decimal" | "decimalZero" | "bullet")
 }
 
 /// Parses `word/numbering.xml` into a lookup table for list marker styles.

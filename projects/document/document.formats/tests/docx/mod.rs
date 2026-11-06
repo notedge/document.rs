@@ -1,5 +1,5 @@
 use document_formats::{export::markdown::export_markdown, import::docx::import_docx_bytes};
-use document_ir::{Block, BreakKind, Inline};
+use document_ir::{Block, BreakKind, Inline, SemanticStatus};
 
 fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut archive = Vec::new();
@@ -378,6 +378,47 @@ fn docx_imports_ordered_lists_from_numbering_xml() {
     let markdown = export_markdown(&graph).expect("export markdown");
     assert!(markdown.contains("1. One"));
     assert!(markdown.contains("2. Two"));
+    assert!(!graph.coverage.loss.iter().any(|loss| loss.code == "reader.docx.numbering_unresolved"));
+}
+
+const ROMAN_NUMBERING_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0">
+      <w:numFmt w:val="lowerRoman"/>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="2">
+    <w:abstractNumId w:val="0"/>
+  </w:num>
+</w:numbering>"#;
+
+#[test]
+fn docx_import_reports_numbering_formats_that_the_ir_cannot_carry() {
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr>
+      <w:r><w:t>One</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr>
+      <w:r><w:t>Two</w:t></w:r>
+    </w:p>
+  </w:body>
+</w:document>"#;
+    let zip = stored_zip(&[("word/document.xml", document_xml), ("word/numbering.xml", ROMAN_NUMBERING_XML)]);
+    let graph = import_docx_bytes("roman.docx", &zip).expect("import docx");
+    let loss =
+        graph.coverage.loss.iter().find(|loss| loss.code == "reader.docx.numbering_format").expect("numbering format loss");
+    assert_eq!(loss.status, SemanticStatus::Partial);
+    assert!(loss.message.contains("lowerRoman"), "{}", loss.message);
+    // The list stays an ordered list with sequential numbers, so only the
+    // marker glyph is lost.
+    let markdown = export_markdown(&graph).expect("export markdown");
+    assert!(markdown.contains("1. One"), "{markdown}");
+    assert!(markdown.contains("2. Two"), "{markdown}");
     assert!(!graph.coverage.loss.iter().any(|loss| loss.code == "reader.docx.numbering_unresolved"));
 }
 

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use document_ir::{
     Asset, AssetId, AssetKind, Block, BreakKind, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, MathDisplay,
@@ -9,7 +9,7 @@ use oak_xml::ast::{XmlElement, XmlValue};
 use super::{
     footnotes::FootnoteCatalog,
     math::{lower_omml, omath_children},
-    numbering::NumberingCatalog,
+    numbering::{NumberingCatalog, marker_format_is_representable},
     styles::StyleDefaults,
     table::{TableState, append_cell_paragraph, push_table_block},
     xml_extensions::{
@@ -807,6 +807,28 @@ fn flush_pending_list(graph: &mut DocumentGraph, body: &mut BodyState, numbering
             message: "list marker style inferred without word/numbering.xml".into(),
             status: SemanticStatus::Partial,
         });
+    }
+    // The IR list model carries `ordered` plus a sequential number only. Marker
+    // formats such as `lowerRoman` or `none` would be rewritten as decimal or
+    // bullet markers on export, so record the degradation instead of claiming a
+    // clean round-trip.
+    if let Some(num_id) = list.num_id {
+        let unrepresentable: BTreeSet<&str> = list
+            .items
+            .iter()
+            .filter_map(|item| numbering.marker_format(num_id, item.level))
+            .filter(|format| !marker_format_is_representable(format))
+            .collect();
+        if !unrepresentable.is_empty() {
+            graph.push_loss(LossMarker {
+                code: "reader.docx.numbering_format".into(),
+                message: format!(
+                    "list marker formats [{}] do not map to the IR and are written as decimal or bullet markers",
+                    unrepresentable.iter().copied().collect::<Vec<_>>().join(", ")
+                ),
+                status: SemanticStatus::Partial,
+            });
+        }
     }
     let mut cursor = 0;
     let items = build_nested_items(
