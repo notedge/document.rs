@@ -810,7 +810,114 @@ fn docx_export_keeps_cases_environment_rows_as_a_matrix() {
     let exported = export_docx_bytes(&graph).expect("export cases");
     let xml = String::from_utf8_lossy(&exported);
     assert!(xml.contains("<m:d><m:dPr><m:begChr m:val=\"{\"/>"), "cases keep the left brace");
-    assert!(xml.contains("<m:m><m:mr>"), "cases rows become an OMML matrix");
+    assert!(xml.contains("<m:m><m:mPr><m:mcs>"), "cases carry their authored left justification");
+    assert!(xml.contains("<m:mr>"), "cases rows become an OMML matrix");
+}
+
+#[test]
+fn docx_export_aligns_matrix_columns_with_mcs() {
+    let mut graph = DocumentGraph::new(DocumentId(66));
+    graph.push_block(Block::Math {
+        formula: document_ir::MathFormula {
+            source: "\\begin{matrix} a & b & c \\end{matrix}".into(),
+            language: Some("latex".into()),
+            display: document_ir::MathDisplay::Display,
+            expression: document_ir::MathExpression::Environment(document_ir::MathEnvironment {
+                kind: document_ir::MathEnvironmentKind::Matrix,
+                name: "matrix".into(),
+                starred: false,
+                rows: vec![document_ir::MathRow {
+                    cells: vec![math_atom("a"), math_atom("b"), math_atom("c")],
+                    placement: document_ir::MathRowPlacement::Normal,
+                    numbering: document_ir::MathRowNumbering::None,
+                }],
+                column_alignment: vec![
+                    document_ir::MathColumnAlignment::Left,
+                    document_ir::MathColumnAlignment::Left,
+                    document_ir::MathColumnAlignment::Right,
+                ],
+                column_pairs: None,
+                span: None,
+            }),
+        },
+    });
+    let exported = export_docx_bytes(&graph).expect("export aligned matrix");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(
+        xml.contains(
+            "<m:mPr><m:mcs><m:mc><m:mcPr><m:count m:val=\"2\"/><m:mcJc m:val=\"left\"/></m:mcPr></m:mc><m:mc><m:mcPr><m:count m:val=\"1\"/><m:mcJc m:val=\"right\"/></m:mcPr></m:mc></m:mcs></m:mPr>"
+        ),
+        "consecutive equal justifications collapse into one `m:mc` run: {xml}"
+    );
+}
+
+#[test]
+fn docx_export_stacks_single_cell_environments_as_equation_array() {
+    let mut graph = DocumentGraph::new(DocumentId(67));
+    graph.push_block(Block::Math {
+        formula: document_ir::MathFormula {
+            source: "\\begin{gather} a \\\\ b \\end{gather}".into(),
+            language: Some("latex".into()),
+            display: document_ir::MathDisplay::Display,
+            expression: document_ir::MathExpression::Environment(document_ir::MathEnvironment {
+                kind: document_ir::MathEnvironmentKind::Gather,
+                name: "gather".into(),
+                starred: false,
+                rows: ["a", "b"]
+                    .into_iter()
+                    .map(|text| document_ir::MathRow {
+                        cells: vec![math_atom(text)],
+                        placement: document_ir::MathRowPlacement::Normal,
+                        numbering: document_ir::MathRowNumbering::None,
+                    })
+                    .collect(),
+                column_alignment: vec![document_ir::MathColumnAlignment::Center],
+                column_pairs: None,
+                span: None,
+            }),
+        },
+    });
+    let exported = export_docx_bytes(&graph).expect("export gather");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("<m:eqArr><m:e><m:r><m:t>a</m:t></m:r></m:e><m:e>"), "a row-per-equation environment is `m:eqArr`: {xml}");
+    assert!(!xml.contains("<m:m>"), "a gather must not become a cell matrix: {xml}");
+    let reopened = import_docx_bytes("gather-round.docx", &exported).expect("reopen gather");
+    let source = reopened.blocks.iter().find_map(|node| match &node.block {
+        Block::Math { formula } => Some(formula.source.clone()),
+        _ => None,
+    });
+    assert!(source.as_deref().is_some_and(|source| source.contains("aligned")), "{source:?}");
+}
+
+#[test]
+fn docx_export_declares_diagram_and_chart_languages_in_styles() {
+    let mut graph = DocumentGraph::new(DocumentId(68));
+    graph.push_block(Block::Code { language: Some("rust".into()), content: "fn main() {}".into() });
+    graph.push_block(Block::Diagram { language: "mermaid".into(), source: "graph TD".into() });
+    graph.push_block(Block::Chart { language: "vega-lite".into(), source: "{\"mark\": \"bar\"}".into() });
+    let exported = export_docx_bytes(&graph).expect("export diagram and chart");
+    let xml = String::from_utf8_lossy(&exported);
+    // Every paragraph style the body references must exist in the styles part.
+    assert!(xml.contains("w:pStyle w:val=\"Diagram:mermaid\""), "{xml}");
+    assert!(xml.contains("w:pStyle w:val=\"Chart:vega-lite\""), "{xml}");
+    assert!(
+        xml.contains("w:styleId=\"Diagram:mermaid\""),
+        "the diagram language must be declared as a named style: {xml}"
+    );
+    assert!(
+        xml.contains("w:styleId=\"Chart:vega-lite\""),
+        "the chart language must be declared as a named style: {xml}"
+    );
+    // `VerbatimChar` was declared but never referenced by code before.
+    assert!(
+        xml.contains("<w:rStyle w:val=\"VerbatimChar\"/>"),
+        "code runs must reference the declared monospace style: {xml}"
+    );
+    let reopened = import_docx_bytes("diagram-round.docx", &exported).expect("reopen diagram and chart");
+    let rendered = format!("{:?}", reopened.blocks);
+    assert!(rendered.contains("Diagram"), "{rendered}");
+    // The reader maps only `Diagram:` today, so the chart source stays as text.
+    assert!(rendered.contains("mark"), "chart source stays visible: {rendered}");
 }
 
 fn math_atom(text: &str) -> document_ir::MathExpression {

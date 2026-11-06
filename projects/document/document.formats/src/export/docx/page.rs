@@ -117,8 +117,11 @@ pub fn sect_pr_xml(setup: &DocxPageSetup) -> String {
 /// Render `word/styles.xml` for the declared body formatting.
 ///
 /// The body declares the paragraph, heading, quote and inline-code styles the
-/// body already references, so no `w:pStyle` value is left dangling.
-pub fn styles_xml(setup: &DocxPageSetup) -> String {
+/// body already references, so no `w:pStyle` value is left dangling. Diagram
+/// and chart paragraphs carry their language in the style id (`Diagram:<lang>`
+/// / `Chart:<lang>`), so those ids arrive from the graph as `custom_style_ids`
+/// and are declared here instead of falling back to Word's silent default.
+pub fn styles_xml(setup: &DocxPageSetup, custom_style_ids: &[String]) -> String {
     let half_points = (setup.base_font_size * 2.0).round() as i64;
     let line = (setup.line_spacing * 240.0).round() as i64;
     let mut xml = String::from(
@@ -149,8 +152,19 @@ pub fn styles_xml(setup: &DocxPageSetup) -> String {
         "\n  <w:style w:type=\"character\" w:styleId=\"VerbatimChar\"><w:name w:val=\"Verbatim Char\"/><w:rPr><w:rFonts w:ascii=\"Consolas\" w:hAnsi=\"Consolas\"/><w:sz w:val=\"",
     );
     let _ = write!(xml, "{half_points}\"/></w:rPr></w:style>");
+    for style_id in custom_style_ids {
+        let escaped = escape_xml_attr(style_id);
+        let _ = write!(
+            xml,
+            "\n  <w:style w:type=\"paragraph\" w:styleId=\"{escaped}\"><w:name w:val=\"{escaped}\"/><w:basedOn w:val=\"Normal\"/><w:qFormat/><w:rPr><w:rFonts w:ascii=\"Consolas\" w:hAnsi=\"Consolas\"/></w:rPr></w:style>"
+        );
+    }
     xml.push_str("\n</w:styles>");
     xml
+}
+
+fn escape_xml_attr(value: &str) -> String {
+    value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 /// Replace the empty section properties the writer emitted with the declared
@@ -199,7 +213,7 @@ mod tests {
 
     #[test]
     fn styles_declare_body_size_and_line_spacing() {
-        let xml = styles_xml(&DocxPageSetup::a4());
+        let xml = styles_xml(&DocxPageSetup::a4(), &[]);
         assert!(xml.contains("<w:sz w:val=\"22\"/><w:szCs w:val=\"22\"/>"), "{xml}");
         assert!(xml.contains("<w:spacing w:line=\"290\" w:lineRule=\"auto\"/>"), "{xml}");
         for level in 1..=6 {
@@ -211,9 +225,17 @@ mod tests {
     #[test]
     fn a_smaller_body_text_shrinks_the_declared_size() {
         let setup = DocxPageSetup { base_font_size: 9.5, line_spacing: 1.03, ..DocxPageSetup::a4() };
-        let xml = styles_xml(&setup);
+        let xml = styles_xml(&setup, &[]);
         assert!(xml.contains("<w:sz w:val=\"19\"/><w:szCs w:val=\"19\"/>"), "{xml}");
         assert!(xml.contains("<w:spacing w:line=\"247\" w:lineRule=\"auto\"/>"), "{xml}");
+    }
+
+    #[test]
+    fn custom_style_ids_are_declared_verbatim() {
+        let xml = styles_xml(&DocxPageSetup::a4(), &["Diagram:mermaid".to_string(), "Chart:vega-lite".to_string()]);
+        assert!(xml.contains("w:styleId=\"Diagram:mermaid\""), "{xml}");
+        assert!(xml.contains("w:styleId=\"Chart:vega-lite\""), "{xml}");
+        assert!(xml.contains("<w:basedOn w:val=\"Normal\"/>"), "{xml}");
     }
 
     #[test]

@@ -105,8 +105,11 @@ fn write_block(
             }
         }
         Block::Code { content, .. } => {
+            // Code has no paragraph structure beyond its text, but the package
+            // already declares `VerbatimChar`; referencing it is what makes the
+            // monospace face actually apply instead of sitting unused.
             out.push_str("<w:p>");
-            write_run_text(out, content)?;
+            write_run_with_properties(out, content, "<w:rStyle w:val=\"VerbatimChar\"/>")?;
             out.push_str("</w:p>");
         }
         Block::Diagram { language, source } => {
@@ -742,21 +745,83 @@ fn write_math_environment(out: &mut String, environment: &MathEnvironment, face:
     if cases {
         out.push_str("<m:d><m:dPr><m:begChr m:val=\"{\"/><m:endChr m:val=\"\"/></m:dPr><m:e>");
     }
-    out.push_str("<m:m>");
-    for row in &environment.rows {
-        out.push_str("<m:mr>");
-        for cell in &row.cells {
+    if is_equation_array(environment) {
+        // A row-per-equation environment is an equation array, not a matrix:
+        // each row keeps one `m:e` and the rows stack without a cell grid.
+        out.push_str("<m:eqArr>");
+        for row in &environment.rows {
             out.push_str("<m:e>");
-            write_math_expression(out, cell, face)?;
+            for cell in &row.cells {
+                write_math_expression(out, cell, face)?;
+            }
             out.push_str("</m:e>");
         }
-        out.push_str("</m:mr>");
+        out.push_str("</m:eqArr>");
     }
-    out.push_str("</m:m>");
+    else {
+        out.push_str("<m:m>");
+        write_matrix_alignment(out, &environment.column_alignment);
+        for row in &environment.rows {
+            out.push_str("<m:mr>");
+            for cell in &row.cells {
+                out.push_str("<m:e>");
+                write_math_expression(out, cell, face)?;
+                out.push_str("</m:e>");
+            }
+            out.push_str("</m:mr>");
+        }
+        out.push_str("</m:m>");
+    }
     if cases {
         out.push_str("</m:e></m:d>");
     }
     Ok(())
+}
+
+/// Environments whose rows are single expressions stack as `m:eqArr`.
+///
+/// `Matrix` and `Gathered` keep the cell grid, and `Cases` keeps its brace,
+/// so only the row-per-equation families qualify.
+fn is_equation_array(environment: &MathEnvironment) -> bool {
+    if matches!(
+        environment.kind,
+        MathEnvironmentKind::Matrix | MathEnvironmentKind::Cases | MathEnvironmentKind::Gathered
+    ) {
+        return false;
+    }
+    !environment.rows.is_empty() && environment.rows.iter().all(|row| row.cells.len() == 1)
+}
+
+/// Declare the per-column justification an `m:m` carries.
+///
+/// OMML groups consecutive columns with the same justification into one
+/// `m:mc` whose `m:count` repeats that run. `Spread` has no OMML counterpart
+/// (it is a per-row placement, not a column justification), so an environment
+/// that asks for it keeps the default centred columns instead of inventing a
+/// justification.
+fn write_matrix_alignment(out: &mut String, alignments: &[document_ir::MathColumnAlignment]) {
+    use document_ir::MathColumnAlignment;
+    let mut groups: Vec<(&'static str, usize)> = Vec::new();
+    for alignment in alignments {
+        let value = match alignment {
+            MathColumnAlignment::Left => "left",
+            MathColumnAlignment::Center => "center",
+            MathColumnAlignment::Right => "right",
+            MathColumnAlignment::Spread => return,
+        };
+        match groups.last_mut() {
+            Some((last, count)) if *last == value => *count += 1,
+            _ => groups.push((value, 1)),
+        }
+    }
+    if groups.is_empty() {
+        return;
+    }
+    out.push_str("<m:mPr><m:mcs>");
+    for (value, count) in groups {
+        let _ = write!(out, "<m:mc><m:mcPr><m:count m:val=\"{count}\"/><m:mcJc m:val=\"{value}\"/></m:mcPr></m:mc>");
+    }
+    out.push_str("</m:mcs></m:mPr>");
 }
 
 fn delimiter_char(delimiter: Option<&MathDelimiter>, open: bool) -> String {

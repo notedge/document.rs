@@ -7,7 +7,7 @@ mod page;
 mod rels;
 mod writer;
 
-use document_ir::DocumentGraph;
+use document_ir::{Block, DocumentGraph};
 
 use crate::FormatError;
 
@@ -37,8 +37,31 @@ pub fn export_docx_bytes_with_page_setup(graph: &DocumentGraph, setup: &DocxPage
         &rendered.image_extensions,
         rendered.footnotes_xml.as_deref(),
         metadata_xml(graph).as_deref(),
-        &page::styles_xml(setup),
+        &page::styles_xml(setup, &diagram_style_ids(graph)),
     ))
+}
+
+/// Paragraph style ids the body references for diagrams and charts.
+///
+/// The writer carries the diagram/chart language in the paragraph style id, so
+/// the styles part has to declare each id the graph actually uses. Declaring
+/// them here keeps every `w:pStyle` resolvable instead of relying on Word's
+/// silent fallback to `Normal`.
+fn diagram_style_ids(graph: &DocumentGraph) -> Vec<String> {
+    let mut ids = Vec::new();
+    for node in &graph.blocks {
+        let id = match &node.block {
+            Block::Diagram { language, .. } => Some(format!("Diagram:{language}")),
+            Block::Chart { language, .. } => Some(format!("Chart:{language}")),
+            _ => None,
+        };
+        if let Some(id) = id {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    ids
 }
 
 fn metadata_xml(graph: &DocumentGraph) -> Option<String> {
