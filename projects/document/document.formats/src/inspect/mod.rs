@@ -4,7 +4,7 @@
 //! document graph. Callers can request member decoding, but the result never
 //! exposes parser, archive, or budget types from the underlying format crates.
 
-#[cfg(feature = "docx")]
+#[cfg(any(feature = "docx", feature = "epub"))]
 use crate::FormatError;
 
 /// Limits applied to one inspection request.
@@ -248,7 +248,66 @@ fn map_docx_error(error: acorn_docx::OpcError) -> FormatError {
     FormatError::parse("docx", error.to_string())
 }
 
-#[cfg(feature = "docx")]
+/// Inspects an EPUB OCF package without building a document graph.
+///
+/// Only container metadata is read. Member payloads stay compressed, so callers
+/// can enforce entry-count and declared-size budgets without bypassing the
+/// format layer.
+#[cfg(feature = "epub")]
+pub fn inspect_epub_bytes(label: &str, bytes: &[u8], budget: InspectBudget) -> Result<DocumentInspect, FormatError> {
+    use acorn_epub::OcfPackage;
+
+    if !looks_like_zip(bytes) {
+        return Err(FormatError::invalid_input("input is not a ZIP-based EPUB package"));
+    }
+    if bytes.len() as u64 > budget.max_container_bytes {
+        return Err(FormatError::budget(
+            "epub",
+            format!("container byte budget exhausted: {} bytes exceed limit {}", bytes.len(), budget.max_container_bytes),
+        ));
+    }
+
+    let package = OcfPackage::open(label.to_string(), bytes.to_vec()).map_err(map_epub_error)?;
+    let paths = package.member_paths();
+    if paths.len() as u64 > budget.max_container_members {
+        return Err(FormatError::budget("epub", "container member budget exhausted"));
+    }
+    let declared_uncompressed = paths
+        .iter()
+        .filter_map(|path| package.member(path))
+        .fold(0u64, |total, member| total.saturating_add(member.uncompressed_size));
+    if declared_uncompressed > budget.max_declared_uncompressed_bytes {
+        return Err(FormatError::budget(
+            "epub",
+            format!(
+                "declared uncompressed budget exhausted: {declared_uncompressed} bytes exceed limit {}",
+                budget.max_declared_uncompressed_bytes
+            ),
+        ));
+    }
+
+    let parts = paths
+        .into_iter()
+        .filter_map(|path| {
+            package.member(&path).map(|member| InspectedPart {
+                path,
+                compression_method: member.compression_method,
+                compressed_size: member.compressed_size,
+                uncompressed_size: member.uncompressed_size,
+                decoded_size: None,
+            })
+        })
+        .collect();
+
+    Ok(DocumentInspect { format: "epub".into(), outer: "zip".into(), inner: "ocf".into(), parts, layout: None })
+}
+
+#[cfg(feature = "epub")]
+fn map_epub_error(error: acorn_epub::OcfError) -> FormatError {
+    FormatError::parse("epub", error.to_string())
+}
+
+#[cfg(any(feature = "docx", feature = "epub"))]
 fn looks_like_zip(bytes: &[u8]) -> bool {
     bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06")
 }

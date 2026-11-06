@@ -618,7 +618,6 @@ dependencies = [
 name = "document-convert"
 version = "0.1.0"
 dependencies = [
- "acorn-epub",
  "blake3",
  "boost-diagnostic",
  "boost-log",

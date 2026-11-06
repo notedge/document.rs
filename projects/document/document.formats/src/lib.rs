@@ -24,6 +24,8 @@ pub use import::lower_tex_formula_source;
 
 #[cfg(feature = "docx")]
 pub use inspect::inspect_docx_bytes;
+#[cfg(feature = "epub")]
+pub use inspect::inspect_epub_bytes;
 #[cfg(feature = "docx")]
 pub use inspect::verify_docx_bytes;
 

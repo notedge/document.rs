@@ -861,6 +861,41 @@ fn container_xml() -> &'static [u8] {
 </container>"#
 }
 
+#[test]
+fn epub_inspect_reports_members_without_decoding_or_exposing_archive_types() {
+    let zip = stored_zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container_xml()),
+        ("OEBPS/content.opf", b"<package/>"),
+    ]);
+    let inspect = document_formats::inspect_epub_bytes("inspect.epub", &zip, document_formats::InspectBudget::default())
+        .expect("inspect epub");
+    assert_eq!(inspect.format, "epub");
+    assert_eq!(inspect.outer, "zip");
+    assert_eq!(inspect.inner, "ocf");
+    assert!(inspect.layout.is_none());
+    let opf = inspect.parts.iter().find(|part| part.path == "OEBPS/content.opf").expect("opf member");
+    assert_eq!(opf.uncompressed_size, 10);
+    assert_eq!(opf.compressed_size, 10);
+    assert_eq!(opf.decoded_size, None);
+}
+
+#[test]
+fn epub_inspect_enforces_container_member_and_declared_size_budgets() {
+    let zip = stored_zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container_xml()),
+        ("OEBPS/content.opf", b"<package/>"),
+    ]);
+    let members = document_formats::InspectBudget { max_container_members: 2, ..Default::default() };
+    let error = document_formats::inspect_epub_bytes("too-many-members.epub", &zip, members).expect_err("member budget");
+    assert!(matches!(error, document_formats::FormatError::Budget { ref format, .. } if format == "epub"), "{error:?}");
+
+    let declared = document_formats::InspectBudget { max_declared_uncompressed_bytes: 8, ..Default::default() };
+    let error = document_formats::inspect_epub_bytes("too-large-declared.epub", &zip, declared).expect_err("declared budget");
+    assert!(matches!(error, document_formats::FormatError::Budget { ref format, .. } if format == "epub"), "{error:?}");
+}
+
 mod import_ast_lowering;
 mod import_navigation;
 mod import_xhtml;

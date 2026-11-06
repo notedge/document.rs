@@ -33,7 +33,6 @@ plotter-input-dot = { workspace = true }
 plotter-input-mermaid = { workspace = true }
 plotter-chart = { workspace = true, features = ["vega-lite"] }
 plotter-types = { workspace = true }
-acorn-epub = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

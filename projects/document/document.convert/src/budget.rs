@@ -1,4 +1,4 @@
-use document_formats::{FormatError, InspectBudget, inspect_docx_bytes};
+use document_formats::{FormatError, InspectBudget, inspect_docx_bytes, inspect_epub_bytes};
 use document_types::{AdapterError, Result};
 
 use crate::format_error;
@@ -65,23 +65,26 @@ impl ConversionBudgets {
     }
 
     fn enforce_epub(&self, label: &str, bytes: &[u8]) -> Result<()> {
-        let package = acorn_epub::OcfPackage::open(label.to_string(), bytes.to_vec())
-            .map_err(|error| format_error::map_format_error(FormatError::parse("epub", error.to_string())))?;
-        let members = package.member_paths();
+        // The format layer reports container metadata without decoding members.
+        // Budget checks stay here so the CLI keeps its exact error wording.
+        let budget = InspectBudget {
+            max_decoded_bytes: u64::MAX,
+            max_container_members: u64::MAX,
+            max_container_bytes: u64::MAX,
+            max_declared_uncompressed_bytes: u64::MAX,
+        };
+        let inspect = inspect_epub_bytes(label, bytes, budget).map_err(format_error::map_format_error)?;
         if let Some(limit) = self.container_entries {
-            if members.len() as u64 > limit {
+            if inspect.parts.len() as u64 > limit {
                 return format_error::fail(AdapterError::diagnostic(document_formats::from_format_error(
                     &FormatError::budget(
                         "epub",
-                        format!("container_entries budget exhausted: indexed {} exceeds limit {limit}", members.len()),
+                        format!("container_entries budget exhausted: indexed {} exceeds limit {limit}", inspect.parts.len()),
                     ),
                 )));
             }
         }
-        self.check_declared(
-            "epub",
-            members.iter().filter_map(|path| package.member(path)).map(|member| member.uncompressed_size),
-        )
+        self.check_declared("epub", inspect.parts.iter().map(|part| part.uncompressed_size))
     }
 
     fn check_declared(&self, format: &str, sizes: impl Iterator<Item = u64>) -> Result<()> {
