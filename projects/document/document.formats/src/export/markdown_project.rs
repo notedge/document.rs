@@ -238,6 +238,7 @@ fn stable_asset_file_name(asset: &Asset, used: &HashSet<String>) -> String {
         .filter(|name| !name.is_empty())
         .map(sanitize_file_name)
         .unwrap_or_else(|| sanitize_file_name(&fallback));
+    let base = media_extension_name(base, asset.media_type.as_deref());
 
     let mut candidate = base.clone();
     let mut suffix = asset.id.0;
@@ -246,6 +247,24 @@ fn stable_asset_file_name(asset: &Asset, used: &HashSet<String>) -> String {
         suffix += 1;
     }
     candidate
+}
+
+/// Give the asset a file extension derived from its media type when the source
+/// name carries none, such as PDF XObject names like `pdf-object-7`.
+fn media_extension_name(name: String, media_type: Option<&str>) -> String {
+    if name.rsplit_once('.').is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty()) {
+        return name;
+    }
+    let extension = match media_type {
+        Some("image/jpeg") => "jpg",
+        Some("image/png") => "png",
+        Some("image/gif") => "gif",
+        Some("image/webp") => "webp",
+        Some("image/svg+xml") => "svg",
+        Some("text/css") => "css",
+        _ => "bin",
+    };
+    format!("{name}.{extension}")
 }
 
 fn sanitize_file_name(name: &str) -> String {

@@ -37,6 +37,35 @@ fn export_markdown_project_materializes_assets_and_rewrites_image_paths() {
 }
 
 #[test]
+fn export_markdown_project_derives_asset_extension_from_media_type() {
+    let mut graph = DocumentGraph::new(DocumentId(1));
+    graph.push_asset(Asset {
+        id: AssetId(1),
+        kind: AssetKind::Image,
+        content_identity: None,
+        source: Some("pdf-object-7".into()),
+        media_type: Some("image/jpeg".into()),
+        status: SemanticStatus::Resolved,
+        bytes: Some(b"\xFF\xD8\xFF\xD9".to_vec()),
+    });
+    graph.push_block_with_id(
+        NodeId(1),
+        Block::Paragraph {
+            content: vec![Inline::Image {
+                source: "pdf-object-7".into(),
+                alt: Vec::new(),
+                title: None,
+                asset: Some(AssetId(1)),
+            }],
+        },
+    );
+
+    let project = export_markdown_project(&graph).expect("export project");
+    assert_eq!(project.assets[0].relative_path, "assets/pdf-object-7.jpg");
+    assert!(project.index_markdown.contains("![](assets/pdf-object-7.jpg)"));
+}
+
+#[test]
 fn export_markdown_project_deduplicates_assets_by_content_fingerprint() {
     let mut graph = DocumentGraph::new(DocumentId(1));
     for (id, source) in [(1, "media/a.png"), (2, "media/b.png")] {
