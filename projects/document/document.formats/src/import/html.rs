@@ -1,6 +1,6 @@
 use document_ir::{
     AttributePair, Attributes, Block, BreakKind, DocumentGraph, DocumentId, Inline, LossMarker, MathDisplay, NodeId,
-    RelationEndpoint, SemanticStatus, SourceKind, SourceRef,
+    RelationEndpoint, SemanticStatus, SourceKind, SourceRef, SourceSpan,
 };
 use oak_core::{Builder, SourceText, parser::session::ParseSession};
 use oak_html::{
@@ -336,24 +336,39 @@ fn collect_unsupported_losses(document: &HtmlDocument, graph: &mut DocumentGraph
     }
 }
 
+/// Byte span of an element inside the authored HTML.
+///
+/// Loss markers carry the authored location so a report consumer can point at
+/// the construct, matching the Markdown / TeX / Typst importers.
+fn element_source_span(element: &Element) -> Option<SourceSpan> {
+    let range: std::ops::Range<usize> = element.span.clone().into();
+    SourceSpan::new(range.start, range.end)
+}
+
 fn collect_unsupported_element_losses(element: &Element, graph: &mut DocumentGraph) {
     let tag = element.tag_name.to_ascii_lowercase();
     if tag == "template" {
-        graph.push_loss(LossMarker {
-            code: "import.html.template_contents".into(),
-            message: "`<template>` content is inert and never rendered, so only the empty shell is kept".into(),
-            status: SemanticStatus::Unsupported,
-        });
+        graph.push_loss_at(
+            LossMarker {
+                code: "import.html.template_contents".into(),
+                message: "`<template>` content is inert and never rendered, so only the empty shell is kept".into(),
+                status: SemanticStatus::Unsupported,
+            },
+            element_source_span(element),
+        );
     }
     // A `style` attribute keeps its element text but not its presentation.
     // Recording the loss keeps the downgrade explicit instead of dropping the
     // declaration silently.
     if attribute(element, "style").is_some() {
-        graph.push_loss(LossMarker {
-            code: "import.html.unsupported_style".into(),
-            message: format!("`style` attribute on `<{tag}>` keeps the element text but drops the inline CSS declaration"),
-            status: SemanticStatus::Partial,
-        });
+        graph.push_loss_at(
+            LossMarker {
+                code: "import.html.unsupported_style".into(),
+                message: format!("`style` attribute on `<{tag}>` keeps the element text but drops the inline CSS declaration"),
+                status: SemanticStatus::Partial,
+            },
+            element_source_span(element),
+        );
     }
     if is_raw_preserved_element(element) {
         let (code, message) = match tag.as_str() {
@@ -374,18 +389,20 @@ fn collect_unsupported_element_losses(element: &Element, graph: &mut DocumentGra
                 "a form control keeps its authored markup as raw HTML, but its control semantics are not represented in notedown-ir",
             ),
         };
-        graph.push_loss(LossMarker {
-            code: code.into(),
-            message: format!("{message} (`<{tag}>`)"),
-            status: SemanticStatus::Partial,
-        });
+        graph.push_loss_at(
+            LossMarker { code: code.into(), message: format!("{message} (`<{tag}>`)"), status: SemanticStatus::Partial },
+            element_source_span(element),
+        );
     }
     if matches!(tag.as_str(), "canvas" | "video" | "audio" | "iframe") {
-        graph.push_loss(LossMarker {
-            code: format!("import.html.unsupported_{tag}"),
-            message: format!("HTML element `<{tag}>` is not represented in notedown-ir"),
-            status: SemanticStatus::Unsupported,
-        });
+        graph.push_loss_at(
+            LossMarker {
+                code: format!("import.html.unsupported_{tag}"),
+                message: format!("HTML element `<{tag}>` is not represented in notedown-ir"),
+                status: SemanticStatus::Unsupported,
+            },
+            element_source_span(element),
+        );
     }
     for child in element.children.iter().filter_map(as_element) {
         collect_unsupported_element_losses(child, graph);
@@ -422,11 +439,14 @@ fn cell_span(attribute_name: &str, cell: &Element, graph: &mut DocumentGraph) ->
             return span;
         }
     }
-    graph.push_loss(LossMarker {
-        code: "import.html.invalid_cell_span".into(),
-        message: format!("`{attribute_name}` value `{raw}` is not a positive integer, so the cell keeps a span of 1"),
-        status: SemanticStatus::Partial,
-    });
+    graph.push_loss_at(
+        LossMarker {
+            code: "import.html.invalid_cell_span".into(),
+            message: format!("`{attribute_name}` value `{raw}` is not a positive integer, so the cell keeps a span of 1"),
+            status: SemanticStatus::Partial,
+        },
+        element_source_span(cell),
+    );
     1
 }
 
@@ -644,11 +664,14 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                 })
                 .collect();
             if flattened_cell_blocks {
-                graph.push_loss(LossMarker {
-                    code: "import.html.table_cell_blocks".into(),
-                    message: "table cells authored as block layout are flattened into one inline run".into(),
-                    status: SemanticStatus::Partial,
-                });
+                graph.push_loss_at(
+                    LossMarker {
+                        code: "import.html.table_cell_blocks".into(),
+                        message: "table cells authored as block layout are flattened into one inline run".into(),
+                        status: SemanticStatus::Partial,
+                    },
+                    element_source_span(element),
+                );
             }
             // The IR keeps one `is_header` flag per row, so the exporter can only
             // rebuild `<thead>` from a single leading run. A header row after a
@@ -667,11 +690,14 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                 }
             }
             if header_after_body {
-                graph.push_loss(LossMarker {
-                    code: "import.html.table_sections".into(),
-                    message: "header rows outside the leading header run are merged into one body group".into(),
-                    status: SemanticStatus::Partial,
-                });
+                graph.push_loss_at(
+                    LossMarker {
+                        code: "import.html.table_sections".into(),
+                        message: "header rows outside the leading header run are merged into one body group".into(),
+                        status: SemanticStatus::Partial,
+                    },
+                    element_source_span(element),
+                );
             }
             // GFM tables cannot express merged cells, and the Markdown writer
             // falls back to inline HTML for a spanning table. Inline HTML is not
@@ -681,12 +707,16 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
             // `Block::Table` and renders as a pipe table.
             let (rows, flattened_spans) = flatten_table_spans(rows);
             if flattened_spans {
-                graph.push_loss(LossMarker {
-                    code: "import.html.table_spans".into(),
-                    message: "merged table cells are flattened into empty continuation slots so the table stays a pipe table"
-                        .into(),
-                    status: SemanticStatus::Partial,
-                });
+                graph.push_loss_at(
+                    LossMarker {
+                        code: "import.html.table_spans".into(),
+                        message:
+                            "merged table cells are flattened into empty continuation slots so the table stays a pipe table"
+                                .into(),
+                        status: SemanticStatus::Partial,
+                    },
+                    element_source_span(element),
+                );
             }
             let mut blocks = Vec::new();
             // Text placed directly inside `<table>` is foster parented before
@@ -722,13 +752,16 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
         "dl" => {
             // The IR has no definition list node. Terms and definitions become
             // paragraphs of their own and the downgrade is recorded.
-            graph.push_loss(LossMarker {
-                code: "import.html.definition_list".into(),
-                message:
-                    "definition list is lowered to term and definition paragraphs because the IR has no definition list node"
-                        .into(),
-                status: SemanticStatus::Partial,
-            });
+            graph.push_loss_at(
+                LossMarker {
+                    code: "import.html.definition_list".into(),
+                    message:
+                        "definition list is lowered to term and definition paragraphs because the IR has no definition list node"
+                            .into(),
+                    status: SemanticStatus::Partial,
+                },
+                element_source_span(element),
+            );
             element
                 .children
                 .iter()
@@ -904,13 +937,16 @@ fn hosted_diagram_source(element: &Element, graph: &mut DocumentGraph, source: &
     };
     let diagram = diagram_source(element, source);
     if diagram.trim().is_empty() {
-        graph.push_loss(LossMarker {
-            code: "import.html.empty_diagram_container".into(),
-            message: format!(
-                "a `{language}` diagram container carried no text source, so its contents were kept on the default path"
-            ),
-            status: SemanticStatus::Partial,
-        });
+        graph.push_loss_at(
+            LossMarker {
+                code: "import.html.empty_diagram_container".into(),
+                message: format!(
+                    "a `{language}` diagram container carried no text source, so its contents were kept on the default path"
+                ),
+                status: SemanticStatus::Partial,
+            },
+            element_source_span(element),
+        );
         return HostedDiagram::Empty;
     }
     HostedDiagram::Source(language, diagram)
@@ -1284,14 +1320,17 @@ fn inline_attributes(element: &Element, graph: &mut DocumentGraph) -> Attributes
         }
     }
     if !image_size.is_empty() {
-        graph.push_loss(LossMarker {
-            code: "import.html.image_dimensions".into(),
-            message: format!(
-                "image display size `{}` has no IR field, so the bitmap keeps its source without a display size",
-                image_size.join(" ")
-            ),
-            status: SemanticStatus::Partial,
-        });
+        graph.push_loss_at(
+            LossMarker {
+                code: "import.html.image_dimensions".into(),
+                message: format!(
+                    "image display size `{}` has no IR field, so the bitmap keeps its source without a display size",
+                    image_size.join(" ")
+                ),
+                status: SemanticStatus::Partial,
+            },
+            element_source_span(element),
+        );
     }
     attributes
 }

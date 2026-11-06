@@ -40,6 +40,17 @@ fn html_round_trips_style_script_and_form_markup() {
         assert!(codes.contains(&code), "missing {code}: {codes:?}");
     }
     assert!(!codes.contains(&"import.html.unsupported_style"), "{codes:?}");
+    for (index, loss) in imported.coverage.loss.iter().enumerate() {
+        if loss.code.starts_with("import.html.raw_") {
+            let span = imported.loss_span(index).unwrap_or_else(|| panic!("{} must carry an authored span", loss.code));
+            assert!(span.end > span.start, "{} spans an empty range: {span:?}", loss.code);
+            assert!(
+                source.get(span.start as usize..span.end as usize).is_some(),
+                "{} span points outside the source: {span:?}",
+                loss.code
+            );
+        }
+    }
 }
 
 #[test]
