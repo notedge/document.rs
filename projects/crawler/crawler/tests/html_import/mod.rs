@@ -41,7 +41,7 @@ fn gate_single_quote_href_and_script_exclusion() {
     let extractors: [&dyn Extractor; 1] = [&extractor];
     let result = run_extract(&artifact, &extractors, ExtractBudget::default(), &ExtractContext::default());
     let document = result.document.expect("document");
-    let body = document.blocks.first().and_then(|node| match &node.block {
+    let body = document.blocks.iter().find_map(|node| match &node.block {
         document_ir::Block::Paragraph { content } => content.first(),
         _ => None,
     });
