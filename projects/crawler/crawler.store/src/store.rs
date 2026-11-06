@@ -1,10 +1,11 @@
-use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem};
+use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem, PageChallengeState};
 
 use crate::{
     error::Result,
     types::{
-        CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome,
-        RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport,
+        BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord, CheckpointView, ClaimToken,
+        ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
+        StoreDiagnosticReport,
     },
 };
 
@@ -113,4 +114,32 @@ pub trait Store {
 
     /// Store robots document bytes with a time-to-live.
     fn put_robots_cache(&mut self, site_key: &str, body: &[u8], ttl: std::time::Duration) -> Result<()>;
+
+    /// Store a redacted browser snapshot archive and its cache record.
+    ///
+    /// The archive goes into the ObjectStore as [`ObjectKind::BrowserArchive`].
+    /// Archives carrying credential plaintext are rejected before any write.
+    fn put_browser_snapshot(&mut self, input: BrowserSnapshotInput) -> Result<BrowserSnapshotRecord>;
+
+    /// Read a browser snapshot cache record by key.
+    fn get_browser_snapshot(&self, snapshot_key: &str) -> Result<Option<BrowserSnapshotRecord>>;
+
+    /// Record a challenge pause in the active run state and append its report event.
+    fn record_challenge_pause(
+        &mut self,
+        item_id: &str,
+        page_url: &str,
+        state: PageChallengeState,
+    ) -> Result<ChallengePauseRecord>;
+
+    /// Read the challenge pause recorded for one frontier item.
+    fn challenge_pause(&self, item_id: &str) -> Result<Option<ChallengePauseRecord>>;
+
+    /// Persist the active run's browser session reference.
+    ///
+    /// Only an external vault handle may be stored, never a cookie or token.
+    fn put_browser_session(&mut self, record: &BrowserSessionRecord) -> Result<()>;
+
+    /// Read the active run's browser session reference.
+    fn browser_session(&self) -> Result<Option<BrowserSessionRecord>>;
 }

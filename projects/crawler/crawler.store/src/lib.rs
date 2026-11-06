@@ -5,6 +5,7 @@
 mod error;
 pub mod keyspace;
 mod memory;
+mod privacy;
 #[cfg(feature = "yydb")]
 mod response_cache;
 mod session;
@@ -18,6 +19,7 @@ pub use error::{Result, StoreError};
 pub use memory::{MemoryStore, frontier_item_from_contract};
 pub use store::Store;
 pub use types::{
+    BrowserSessionPersistence, BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord,
     CheckpointClaim, CheckpointView, ClaimToken, DEFAULT_CLAIM_LEASE, ObjectKind, ObjectRef, PageAssetBinding, PagePhase,
     PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue,
     StoreDoctorSeverity, StoreNamespaceStats,

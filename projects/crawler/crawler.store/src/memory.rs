@@ -1,4 +1,4 @@
-use crawler_types::{CrawlEvent, FrontierItem, site_key};
+use crawler_types::{CrawlEvent, FrontierItem, PageChallengeState, site_key};
 use url::Url;
 
 use crate::{
@@ -6,8 +6,9 @@ use crate::{
     error::{Result, StoreError},
     session::StoreSession,
     types::{
-        CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome,
-        RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport,
+        BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord, CheckpointView, ClaimToken,
+        ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
+        StoreDiagnosticReport,
     },
 };
 
@@ -164,6 +165,35 @@ impl Store for MemoryStore {
 
     fn put_robots_cache(&mut self, site_key: &str, body: &[u8], ttl: std::time::Duration) -> Result<()> {
         self.session.put_robots_cache(site_key, body, ttl)
+    }
+
+    fn put_browser_snapshot(&mut self, input: BrowserSnapshotInput) -> Result<BrowserSnapshotRecord> {
+        self.session.put_browser_snapshot(input)
+    }
+
+    fn get_browser_snapshot(&self, snapshot_key: &str) -> Result<Option<BrowserSnapshotRecord>> {
+        self.session.get_browser_snapshot(snapshot_key)
+    }
+
+    fn record_challenge_pause(
+        &mut self,
+        item_id: &str,
+        page_url: &str,
+        state: PageChallengeState,
+    ) -> Result<ChallengePauseRecord> {
+        self.session.record_challenge_pause(item_id, page_url, state)
+    }
+
+    fn challenge_pause(&self, item_id: &str) -> Result<Option<ChallengePauseRecord>> {
+        self.session.challenge_pause(item_id)
+    }
+
+    fn put_browser_session(&mut self, record: &BrowserSessionRecord) -> Result<()> {
+        self.session.put_browser_session(record)
+    }
+
+    fn browser_session(&self) -> Result<Option<BrowserSessionRecord>> {
+        self.session.browser_session()
     }
 }
 

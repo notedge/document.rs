@@ -11,8 +11,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem};
+use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem, PageChallengeState};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use url::Url;
 use yydb::{
     Batch, Connection, Error as YydbError, EvictionPolicy, LeaseExpectation, LeaseToken, NamespaceQuota,
     ObjectKind as YydbObjectKind, ObjectRef as YydbObjectRef, ReleaseOutcome as YydbReleaseOutcome,
@@ -24,9 +25,9 @@ use crate::{
     keyspace,
     session::StoreSession,
     types::{
-        CheckpointClaim, CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle,
-        ReleaseOutcome, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue, StoreDoctorSeverity,
-        StoreNamespaceStats,
+        BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord, CheckpointClaim,
+        CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome,
+        RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue, StoreDoctorSeverity, StoreNamespaceStats,
     },
 };
 
@@ -817,6 +818,92 @@ impl Store for YydbStore {
         let key = keyspace::robots_cache(site_key);
         self.connection()?.put_with_ttl(key, body, ttl).map_err(map_yydb_error)?;
         Ok(())
+    }
+
+    fn put_browser_snapshot(&mut self, input: BrowserSnapshotInput) -> Result<BrowserSnapshotRecord> {
+        crate::privacy::ensure_archive_is_redacted(&input.archive)?;
+        if let Some(reference) = &input.vault_session_ref {
+            crate::privacy::ensure_vault_ref_is_opaque(reference)?;
+        }
+        let conn = self.connection()?;
+        let mut batch = Batch::new();
+        let (snapshot_ref, object) =
+            stage_object(conn, &mut batch, ObjectKind::BrowserArchive, input.media_type.as_deref(), &input.archive)?;
+        let record = BrowserSnapshotRecord {
+            snapshot_key: input.snapshot_key.clone(),
+            page_url: input.page_url,
+            snapshot_ref,
+            transport_provenance: input.transport_provenance,
+            captured_at_epoch: input.captured_at_epoch,
+            ttl_until_ms: input.ttl.map(|ttl| now_millis().saturating_add(ttl.as_millis() as u64)),
+            vault_session_ref: input.vault_session_ref,
+        };
+        batch.put(keyspace::browser_cache(&record.snapshot_key), encode(&record)?);
+        batch.attach_object(&object, keyspace::browser_cache_blob(&record.snapshot_key));
+        batch.commit(conn).map_err(map_yydb_error)?;
+        Ok(record)
+    }
+
+    fn get_browser_snapshot(&self, snapshot_key: &str) -> Result<Option<BrowserSnapshotRecord>> {
+        let Some(bytes) = self.connection()?.get(&keyspace::browser_cache(snapshot_key)).map_err(map_yydb_error)?
+        else {
+            return Ok(None);
+        };
+        let record: BrowserSnapshotRecord = decode(&bytes, "browser snapshot")?;
+        if record.ttl_until_ms.is_some_and(|deadline| deadline <= now_millis()) {
+            return Ok(None);
+        }
+        Ok(Some(record))
+    }
+
+    fn record_challenge_pause(
+        &mut self,
+        item_id: &str,
+        page_url: &str,
+        state: PageChallengeState,
+    ) -> Result<ChallengePauseRecord> {
+        let run_id = self.active_run_id.clone().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        let url = Url::parse(page_url)
+            .map_err(|error| StoreError::StoreInvalidState(format!("challenge pause url is invalid: {error}")))?;
+        let meta = self.read_run_meta(&run_id)?;
+        let record = ChallengePauseRecord {
+            item_id: item_id.to_owned(),
+            page_url: page_url.to_owned(),
+            state,
+            paused_at_ms: now_millis(),
+        };
+        let sequence = meta.event_count + 1;
+        let mut batch = Batch::new();
+        batch.put(keyspace::challenge_pause(&run_id, item_id), encode(&record)?);
+        batch.put(
+            keyspace::report_event(&run_id, sequence),
+            encode(&EventRecord { sequence, event: Some(CrawlEvent::PausedForOperator { url, challenge_state: state }) })?,
+        );
+        batch.put(keyspace::run_meta(&run_id), encode(&RunMeta { seed_url: meta.seed_url, event_count: sequence })?);
+        batch.commit(self.connection()?).map_err(map_yydb_error)?;
+        Ok(record)
+    }
+
+    fn challenge_pause(&self, item_id: &str) -> Result<Option<ChallengePauseRecord>> {
+        let run_id = self.active_run_id.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        match self.connection()?.get(&keyspace::challenge_pause(run_id, item_id)).map_err(map_yydb_error)? {
+            Some(bytes) => Ok(Some(decode(&bytes, "challenge pause")?)),
+            None => Ok(None),
+        }
+    }
+
+    fn put_browser_session(&mut self, record: &BrowserSessionRecord) -> Result<()> {
+        crate::privacy::ensure_session_record(record)?;
+        let run_id = self.active_run_id.clone().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        self.connection()?.put(keyspace::browser_session(&run_id), encode(record)?).map_err(map_yydb_error)
+    }
+
+    fn browser_session(&self) -> Result<Option<BrowserSessionRecord>> {
+        let run_id = self.active_run_id.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        match self.connection()?.get(&keyspace::browser_session(run_id)).map_err(map_yydb_error)? {
+            Some(bytes) => Ok(Some(decode(&bytes, "browser session")?)),
+            None => Ok(None),
+        }
     }
 }
 

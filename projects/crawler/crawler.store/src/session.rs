@@ -3,15 +3,17 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem, TransportProvenance};
+use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem, PageChallengeState, TransportProvenance};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::{
     error::{Result, StoreError},
     keyspace::{item_id_from_url, run_id_from_seed},
     types::{
-        CheckpointClaim, CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle,
-        ReleaseOutcome, RunHandle, RunSpec,
+        BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord, CheckpointClaim,
+        CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome,
+        RunHandle, RunSpec,
     },
 };
 
@@ -60,6 +62,12 @@ pub(crate) struct RunState {
     checkpoint_sequence: u64,
     #[serde(default)]
     last_checkpoint_view: Option<CheckpointView>,
+    #[serde(default)]
+    events: Vec<CrawlEvent>,
+    #[serde(default)]
+    challenge_pauses: BTreeMap<String, ChallengePauseRecord>,
+    #[serde(default)]
+    browser_session: Option<BrowserSessionRecord>,
     next_fencing: u64,
 }
 
@@ -79,6 +87,8 @@ struct SessionSnapshot {
     robots_cache: BTreeMap<String, RobotsCacheEntry>,
     #[serde(default)]
     objects: BTreeMap<String, StoredObject>,
+    #[serde(default)]
+    browser_cache: BTreeMap<String, BrowserSnapshotRecord>,
 }
 
 /// One committed page exposed by the legacy session migration path.
@@ -115,6 +125,8 @@ pub(crate) struct StoreSession {
     #[serde(default)]
     objects: BTreeMap<String, StoredObject>,
     #[serde(default)]
+    browser_cache: BTreeMap<String, BrowserSnapshotRecord>,
+    #[serde(default)]
     claim_lease: Duration,
     snapshot: SessionSnapshot,
     last_claim: Option<ClaimToken>,
@@ -129,6 +141,7 @@ impl StoreSession {
             response_cache: BTreeMap::new(),
             robots_cache: BTreeMap::new(),
             objects: BTreeMap::new(),
+            browser_cache: BTreeMap::new(),
             claim_lease,
             snapshot: SessionSnapshot {
                 runs: BTreeMap::new(),
@@ -136,6 +149,7 @@ impl StoreSession {
                 response_cache: BTreeMap::new(),
                 robots_cache: BTreeMap::new(),
                 objects: BTreeMap::new(),
+                browser_cache: BTreeMap::new(),
             },
             last_claim: None,
             active_page_tx: None,
@@ -157,6 +171,7 @@ impl StoreSession {
             response_cache: self.response_cache.clone(),
             robots_cache: self.robots_cache.clone(),
             objects: self.objects.clone(),
+            browser_cache: self.browser_cache.clone(),
         };
     }
 
@@ -166,6 +181,7 @@ impl StoreSession {
         self.response_cache = self.snapshot.response_cache.clone();
         self.robots_cache = self.snapshot.robots_cache.clone();
         self.objects = self.snapshot.objects.clone();
+        self.browser_cache = self.snapshot.browser_cache.clone();
         self.last_claim = None;
         self.active_page_tx = None;
         if let Some(run_id) = &self.active_run_id {
@@ -192,6 +208,9 @@ impl StoreSession {
             event_count: 0,
             checkpoint_sequence: 0,
             last_checkpoint_view: None,
+            events: Vec::new(),
+            challenge_pauses: BTreeMap::new(),
+            browser_session: None,
             next_fencing: 0,
         };
         self.runs.insert(run_id.clone(), run);
@@ -607,6 +626,75 @@ impl StoreSession {
             .insert(site_key.to_string(), RobotsCacheEntry { body: body.to_vec(), expires_at_ms: Some(expires_at_ms) });
         self.persist_snapshot();
         Ok(())
+    }
+
+    pub(crate) fn put_browser_snapshot(&mut self, input: BrowserSnapshotInput) -> Result<BrowserSnapshotRecord> {
+        crate::privacy::ensure_archive_is_redacted(&input.archive)?;
+        if let Some(reference) = &input.vault_session_ref {
+            crate::privacy::ensure_vault_ref_is_opaque(reference)?;
+        }
+        let snapshot_key = input.snapshot_key.clone();
+        let snapshot_ref = self.insert_object(ObjectKind::BrowserArchive, input.media_type.as_deref(), &input.archive)?;
+        let record = BrowserSnapshotRecord {
+            snapshot_key: snapshot_key.clone(),
+            page_url: input.page_url,
+            snapshot_ref,
+            transport_provenance: input.transport_provenance,
+            captured_at_epoch: input.captured_at_epoch,
+            ttl_until_ms: input.ttl.map(|ttl| Self::now_millis().saturating_add(ttl.as_millis() as u64)),
+            vault_session_ref: input.vault_session_ref,
+        };
+        self.browser_cache.insert(snapshot_key, record.clone());
+        self.persist_snapshot();
+        Ok(record)
+    }
+
+    pub(crate) fn get_browser_snapshot(&self, snapshot_key: &str) -> Result<Option<BrowserSnapshotRecord>> {
+        let Some(record) = self.browser_cache.get(snapshot_key)
+        else {
+            return Ok(None);
+        };
+        if record.ttl_until_ms.is_some_and(|deadline| deadline <= Self::now_millis()) {
+            return Ok(None);
+        }
+        Ok(Some(record.clone()))
+    }
+
+    pub(crate) fn record_challenge_pause(
+        &mut self,
+        item_id: &str,
+        page_url: &str,
+        state: PageChallengeState,
+    ) -> Result<ChallengePauseRecord> {
+        let url = Url::parse(page_url)
+            .map_err(|error| StoreError::StoreInvalidState(format!("challenge pause url is invalid: {error}")))?;
+        let record = ChallengePauseRecord {
+            item_id: item_id.to_owned(),
+            page_url: page_url.to_owned(),
+            state,
+            paused_at_ms: Self::now_millis(),
+        };
+        let run = self.active_run_mut()?;
+        run.challenge_pauses.insert(item_id.to_owned(), record.clone());
+        run.events.push(CrawlEvent::PausedForOperator { url, challenge_state: state });
+        run.event_count += 1;
+        self.persist_snapshot();
+        Ok(record)
+    }
+
+    pub(crate) fn challenge_pause(&self, item_id: &str) -> Result<Option<ChallengePauseRecord>> {
+        Ok(self.active_run()?.challenge_pauses.get(item_id).cloned())
+    }
+
+    pub(crate) fn put_browser_session(&mut self, record: &BrowserSessionRecord) -> Result<()> {
+        crate::privacy::ensure_session_record(record)?;
+        self.active_run_mut()?.browser_session = Some(record.clone());
+        self.persist_snapshot();
+        Ok(())
+    }
+
+    pub(crate) fn browser_session(&self) -> Result<Option<BrowserSessionRecord>> {
+        Ok(self.active_run()?.browser_session.clone())
     }
 
     /// Read-only view used by the one-way legacy session blob migration.

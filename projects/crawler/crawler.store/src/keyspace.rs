@@ -90,6 +90,26 @@ pub fn robots_cache(site_key: &str) -> String {
     format!("cache/robots/{site_key}")
 }
 
+/// Browser snapshot cache record key.
+pub fn browser_cache(snapshot_key: &str) -> String {
+    format!("cache/browser/{snapshot_key}")
+}
+
+/// CAS attachment key that keeps a browser snapshot archive alive.
+pub fn browser_cache_blob(snapshot_key: &str) -> String {
+    format!("cache/browser/{snapshot_key}/blob")
+}
+
+/// Challenge pause record key scoped to a run.
+pub fn challenge_pause(run_id: &str, item_id: &str) -> String {
+    format!("run/{run_id}/challenge/{item_id}")
+}
+
+/// Browser session record key scoped to a run.
+pub fn browser_session(run_id: &str) -> String {
+    format!("run/{run_id}/browser_session")
+}
+
 /// Deterministic item id from a canonical request URL.
 pub fn item_id_from_url(canonical_request_url: &str) -> String {
     let digest = blake3::hash(canonical_request_url.as_bytes());

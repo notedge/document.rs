@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use crawler_types::PageChallengeState;
 use serde::{Deserialize, Serialize};
 
 /// Default lease granted to a frontier claim.
@@ -181,6 +182,92 @@ pub struct ObjectRef {
     pub media_type: Option<String>,
     /// Semantic kind of the payload.
     pub kind: ObjectKind,
+}
+
+/// How an authenticated browser session may persist across runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserSessionPersistence {
+    /// Destroy the browser context after the run.
+    None,
+    /// Keep encrypted ephemeral session material only for the current host.
+    EncryptedEphemeral,
+    /// Persist only an external vault handle and expiry metadata.
+    ExternalVault,
+}
+
+/// Persisted browser session reference.
+///
+/// Only an external vault handle may be stored. Cookie jars, tokens and
+/// passwords never enter this record or any object payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserSessionRecord {
+    /// Session persistence strategy.
+    pub persistence: BrowserSessionPersistence,
+    /// Opaque handle in the host vault, never secret material itself.
+    #[serde(default)]
+    pub vault_session_ref: Option<String>,
+    /// Epoch milliseconds when the referenced session stops being reusable.
+    #[serde(default)]
+    pub expires_at_ms: Option<u64>,
+    /// Origins the session may be reused for.
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+}
+
+/// One browser snapshot archive waiting to be stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserSnapshotInput {
+    /// Stable cache key for the snapshot.
+    pub snapshot_key: String,
+    /// Page URL the snapshot was captured for.
+    pub page_url: String,
+    /// MHTML, HAR or screenshot archive bytes already redacted by the browser layer.
+    pub archive: Vec<u8>,
+    /// Archive media type when the provider recorded one.
+    pub media_type: Option<String>,
+    /// Provenance label such as `browser` or `cache_hit`.
+    pub transport_provenance: String,
+    /// Unix epoch seconds when the snapshot was captured.
+    pub captured_at_epoch: u64,
+    /// Optional cache lifetime.
+    pub ttl: Option<Duration>,
+    /// External vault handle referenced by the snapshot, never a cookie or token.
+    pub vault_session_ref: Option<String>,
+}
+
+/// Browser snapshot cache record. The archive itself lives in the ObjectStore.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserSnapshotRecord {
+    /// Stable cache key for the snapshot.
+    pub snapshot_key: String,
+    /// Page URL the snapshot was captured for.
+    pub page_url: String,
+    /// Content-addressed archive object.
+    pub snapshot_ref: ObjectRef,
+    /// Provenance label such as `browser` or `cache_hit`.
+    pub transport_provenance: String,
+    /// Unix epoch seconds when the snapshot was captured.
+    pub captured_at_epoch: u64,
+    /// Epoch milliseconds when the cache entry stops being served.
+    #[serde(default)]
+    pub ttl_until_ms: Option<u64>,
+    /// External vault handle referenced by the snapshot, never secret material.
+    #[serde(default)]
+    pub vault_session_ref: Option<String>,
+}
+
+/// Challenge pause recorded in run state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChallengePauseRecord {
+    /// Frontier item that is waiting for operator input.
+    pub item_id: String,
+    /// Page URL that raised the challenge.
+    pub page_url: String,
+    /// Detected challenge state.
+    pub state: PageChallengeState,
+    /// Epoch milliseconds when the pause was recorded.
+    pub paused_at_ms: u64,
 }
 
 /// One document asset staged inside a page transaction.
