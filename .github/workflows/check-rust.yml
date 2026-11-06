@@ -25,7 +25,7 @@ jobs:
       # and reuse it across runs. Bump the key when the pack changes.
       - name: Cache VuTeX font pack
         id: vutex-fonts
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: vutex-fonts/projects/vutex.rs/fonts
           key: vutex-fonts-${{ runner.os }}-v1
