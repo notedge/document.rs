@@ -2,7 +2,7 @@
 
 #[cfg(all(feature = "markdown", feature = "html"))]
 mod chart_block;
-#[cfg(all(feature = "markdown", feature = "html"))]
+#[cfg(all(feature = "markdown", feature = "html", feature = "docx", feature = "pdf"))]
 mod diagram_fidelity;
 #[cfg(all(feature = "markdown", feature = "html"))]
 mod diagram_scene;
