@@ -1,7 +1,9 @@
 //! Acceptance gate 1 fixtures for HTML import and link discovery.
 
-use crawler::{Extractor, HtmlExtractor, run_extract};
-use crawler_types::{BodyStorage, ExtractBudget, ExtractContext, ExtractStatus, FetchArtifact, TransportProvenance};
+use crawler::{Extractor, FrontierQueue, HtmlExtractor, frontier_from_links, run_extract};
+use crawler_types::{
+    BodyStorage, ExtractBudget, ExtractContext, ExtractStatus, FetchArtifact, FrontierItem, TransportProvenance, site_key,
+};
 use url::Url;
 
 fn fixture_artifact(html: &str, page: &str) -> FetchArtifact {
@@ -94,6 +96,32 @@ fn gate_form_action_and_srcset() {
             content.iter().any(|inline| matches!(inline, document_ir::Inline::Image { asset: Some(_), .. })),
         _ => false,
     }));
+}
+
+/// Probe: `src`/`srcset` stay asset candidates even when the target is on the
+/// same host, so neither may be admitted into the navigation frontier.
+#[test]
+fn srcset_targets_never_enter_navigation_frontier() {
+    let html = r#"<html><body>
+<a href="/next">next</a>
+<img src="/a.png" srcset="/b.png 1x, https://cdn.example/x.webp 2x">
+</body></html>"#;
+    let artifact = fixture_artifact(html, "https://example.com/");
+    let extractor = HtmlExtractor;
+    let extractors: [&dyn Extractor; 1] = [&extractor];
+    let result = run_extract(&artifact, &extractors, ExtractBudget::default(), &ExtractContext::default());
+
+    let seed_url = Url::parse("https://example.com/").expect("url");
+    let source = FrontierItem::seed(seed_url.clone(), site_key(&seed_url));
+    let mut queue = FrontierQueue::new();
+    let admitted = frontier_from_links(&mut queue, &source, &result.discovered_links, 2);
+    let queued = queue.pending_items().iter().map(|item| item.request_url.to_string()).collect::<Vec<_>>();
+
+    assert_eq!(admitted.len(), 1, "only the anchor may enter the frontier");
+    assert!(queued.contains(&"https://example.com/next".to_string()));
+    for asset in ["https://example.com/a.png", "https://example.com/b.png", "https://cdn.example/x.webp"] {
+        assert!(!queued.contains(&asset.to_string()), "`src`/`srcset` target entered the frontier: {asset}");
+    }
 }
 
 #[test]

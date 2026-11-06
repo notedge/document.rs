@@ -360,6 +360,7 @@ dependencies = [
  "crawler-frontier",
  "crawler-store",
  "crawler-types",
+ "document-diagnostic",
  "document-formats",
  "document-ir",
  "oak-xml",

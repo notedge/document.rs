@@ -18,6 +18,7 @@ blake3 = { workspace = true }
 acorn-codec = { workspace = true }
 boost-diagnostic = { workspace = true }
 document-ir = { workspace = true }
+document-diagnostic = { workspace = true }
 document-formats = { workspace = true, features = ["markdown"] }
 crawler-types = { workspace = true }
 crawler-extract = { workspace = true }

@@ -40,7 +40,7 @@ fn html_page_publishes_markdown_project_with_reopen() {
 
     let report = fs::read_to_string(published.report_path).expect("read report");
     assert!(report.contains("extract_page"));
-    assert!(report.contains("https://example.com/article"));
+    assert!(report.contains("\"format\":\"html\""));
 
     let reopened = import_markdown_bytes("index.md", &index).expect("reopen markdown");
     assert!(reopened.blocks.iter().any(|node| matches!(
@@ -48,6 +48,54 @@ fn html_page_publishes_markdown_project_with_reopen() {
         Block::Paragraph { content }
             if content.iter().any(|inline| matches!(inline, Inline::Text { text } if text.contains("Hello Crawler page")))
     )));
+
+    let _ = fs::remove_dir_all(output_dir);
+}
+
+/// Probe: the page report must speak the same `panduck.report` envelope as a
+/// Panduck project export, so one consumer can read both.
+#[test]
+fn page_report_envelope_matches_panduck_contract() {
+    let html = r#"<html><head><title>Parity</title></head><body><script>alert(1)</script><p>Body</p><img src="https://cdn.example/pic.png" alt="Pic"></body></html>"#;
+    let artifact = fixture_artifact(html, "https://example.com/parity");
+    let extractor = HtmlExtractor;
+    let extractors: [&dyn crawler::Extractor; 1] = [&extractor];
+    let result = run_extract(&artifact, &extractors, ExtractBudget::default(), &ExtractContext::default());
+
+    let output_dir = unique_temp_dir("crawler-report-parity");
+    let published = publish_extracted_page(&output_dir, "parity.html", &result).expect("publish page project");
+    let report: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(published.report_path).expect("read report")).expect("parse report");
+
+    assert_eq!(report["schema_version"], "panduck.report/v0");
+    assert_eq!(report["operation"], "extract_page");
+    assert!(report["status"].as_str().is_some());
+    assert_eq!(report["inputs"][0]["path"], "parity.html");
+    assert_eq!(report["inputs"][0]["format"], "html");
+    assert!(report["pipeline"]["reader"].is_string());
+    assert_eq!(report["pipeline"]["writer"], "markdown-project");
+    assert!(report["pipeline"]["stages"].is_array());
+    assert!(report["coverage"].is_object());
+    assert!(report["unresolved_assets"].is_array());
+
+    let losses = report["losses"].as_array().expect("losses must be an array");
+    assert!(!losses.is_empty(), "the excluded script must report a loss");
+    for loss in losses {
+        for key in ["code", "message", "status", "severity", "span"] {
+            assert!(loss.get(key).is_some(), "loss entry must carry `{key}`: {loss}");
+        }
+    }
+
+    let diagnostics = report["diagnostics"].as_object().expect("diagnostics envelope");
+    for key in ["diagnostics", "dropped", "schemaVersion", "truncated"] {
+        assert!(diagnostics.contains_key(key), "diagnostics envelope must carry `{key}`");
+    }
+    assert!(diagnostics["diagnostics"].is_array());
+
+    let outputs = report["outputs"].as_array().expect("outputs must be an array");
+    assert!(outputs.iter().any(|entry| entry["path"] == "index.md" && entry["published"] == true));
+    assert!(outputs.iter().any(|entry| entry["path"] == "assets/"));
+    assert!(outputs.iter().any(|entry| entry["path"] == "panduck.report.json" && entry["published"] == true));
 
     let _ = fs::remove_dir_all(output_dir);
 }

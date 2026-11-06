@@ -12,6 +12,7 @@ use std::{
 
 use boost_diagnostic::{DiagnosticCause, DiagnosticSeverity, Message, MessageArg};
 use crawler_types::{CrawlError, ExtractResult, Result, diagnostics as pd};
+use document_diagnostic::{DiagnosticEnvelope, diagnostics_from_graph, loss_severity};
 use document_formats::export::markdown_project::{MarkdownProject, export_markdown_project};
 use document_ir::DocumentGraph;
 
@@ -71,6 +72,7 @@ pub fn publish_extracted_page(
 fn build_page_report_json(label: &str, extract: &ExtractResult, graph: &DocumentGraph, project: &MarkdownProject) -> String {
     let published_assets: Vec<String> = project.assets.iter().map(|asset| asset.relative_path.clone()).collect();
     let published_chapters: Vec<String> = project.chapters.iter().map(|chapter| chapter.relative_path.clone()).collect();
+    let diagnostics = DiagnosticEnvelope::from_set(&diagnostics_from_graph(graph));
     let mut outputs = vec![
         serde_json::json!({ "path": "index.md", "format": "markdown", "published": true }),
         serde_json::json!({
@@ -84,21 +86,47 @@ fn build_page_report_json(label: &str, extract: &ExtractResult, graph: &Document
     }
     outputs.push(serde_json::json!({ "path": "panduck.report.json", "format": "report", "published": true }));
     serde_json::json!({
-        "schema_version": "panduck.report/v1",
+        "schema_version": document_diagnostic::SCHEMA_REPORT,
         "operation": "extract_page",
         "status": if graph.coverage.complete { "success" } else { "success_with_loss" },
-        "inputs": [{ "path": label, "format": "html", "source_url": extract.source_url.to_string() }],
+        "inputs": [{ "path": label, "format": "html" }],
         "pipeline": {
             "reader": extract.extractor,
             "writer": "markdown-project",
             "stages": ["fetch", "extract", "ir", "write", "materialize"]
         },
         "coverage": graph.coverage,
-        "losses": graph.coverage.loss,
+        "losses": losses_with_spans(graph),
+        "diagnostics": diagnostics,
         "outputs": outputs,
         "unresolved_assets": project.unresolved_asset_sources,
     })
     .to_string()
+}
+
+/// Serialize IR loss markers with the authored span each one points at, matching
+/// the Panduck report envelope field-for-field.
+fn losses_with_spans(graph: &DocumentGraph) -> serde_json::Value {
+    let losses: Vec<serde_json::Value> = graph
+        .coverage
+        .loss
+        .iter()
+        .enumerate()
+        .map(|(index, loss)| {
+            let span = graph.loss_span(index);
+            serde_json::json!({
+                "code": loss.code,
+                "message": loss.message,
+                "status": loss.status,
+                "severity": loss_severity(loss.status).to_string(),
+                "span": match span {
+                    Some(span) => serde_json::json!({ "start": span.start, "end": span.end }),
+                    None => serde_json::Value::Null,
+                },
+            })
+        })
+        .collect();
+    serde_json::Value::Array(losses)
 }
 
 fn publish_markdown_project(output_dir: &Path, project: &MarkdownProject, report_json: &str) -> Result<PublishedPageProject> {
