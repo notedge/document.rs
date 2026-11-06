@@ -12,16 +12,12 @@ fn sample_graph() -> (DocumentGraph, NodeId, AssetId, LinkId) {
     let doc_id = ids.document_id();
     let mut graph = DocumentGraph::new(doc_id);
 
+    let cell_text = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "cell".to_string() }] });
     let table_id = graph.push_block(Block::Table {
         caption: None,
-        rows: vec![TableRow {
-            is_header: false,
-            cells: vec![document_ir::TableCell {
-                content: vec![Inline::Text { text: "cell".to_string() }],
-                colspan: 1,
-                rowspan: 1,
-            }],
-        }],
+        head: Vec::new(),
+        body: vec![TableRow { cells: vec![document_ir::TableCell { children: vec![cell_text], colspan: 1, rowspan: 1 }] }],
+        foot: vec![TableRow { cells: vec![document_ir::TableCell { children: Vec::new(), colspan: 1, rowspan: 1 }] }],
     });
 
     let asset_id = ids.asset_id();
@@ -72,6 +68,36 @@ fn same_paragraph_text() -> Vec<Inline> {
 }
 
 #[test]
+fn table_wire_uses_bands_and_child_ids() {
+    let (graph, table_id, _, _) = sample_graph();
+    assert!(graph.validate().is_valid());
+    let value = serde_json::to_value(DocumentEnvelope::new(graph)).expect("json");
+    let table = value["document"]["blocks"]
+        .as_array()
+        .expect("blocks")
+        .iter()
+        .find(|node| node["id"] == serde_json::json!(table_id))
+        .map(|node| &node["block"]["Table"])
+        .expect("table block");
+    assert!(table.get("rows").is_none(), "rows must not appear on the current wire");
+    assert!(table["head"].is_array());
+    assert!(table["body"].is_array());
+    assert!(table["foot"].is_array());
+    let cell = &table["body"][0]["cells"][0];
+    assert!(cell["children"].is_array(), "cells must store child block ids");
+    assert!(cell.get("content").is_none(), "cells must not store inline content");
+    assert!(table["body"][0].get("is_header").is_none());
+
+    let restored = serde_json::from_value::<DocumentEnvelope>(value).expect("round trip");
+    restored.ensure_supported().expect("schema");
+    let Block::Table { body, .. } = &restored.document.block(table_id).expect("table node").block
+    else {
+        panic!("expected table");
+    };
+    assert_eq!(body[0].cells[0].children.len(), 1);
+}
+
+#[test]
 fn round_trip_preserves_identity_relations_and_assets() {
     let (graph, table_id, asset_id, link_id) = sample_graph();
     assert!(graph.validate().is_valid());
@@ -83,7 +109,8 @@ fn round_trip_preserves_identity_relations_and_assets() {
     let restored = restored.document;
 
     assert_eq!(restored.id, envelope.document.id);
-    assert_eq!(restored.blocks.len(), 1);
+    // The table plus the paragraph block its only cell references.
+    assert_eq!(restored.blocks.len(), 2);
     assert_eq!(restored.assets.len(), 1);
     assert_eq!(restored.relations.len(), 2);
     assert_eq!(restored.sources.len(), 2);

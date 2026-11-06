@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     asset::Asset,
-    block::{Block, BlockNode},
+    block::{Block, BlockNode, TableCell, TableRow},
     id::{AssetId, DocumentId, LinkId, NodeId},
     inline::Inline,
     metadata::MetadataEntry,
@@ -100,6 +100,11 @@ enum WireBlock {
         #[serde(rename = "Quote")]
         quote: WireLegacyQuote,
     },
+    /// Legacy table payload with header flags and inline cell content.
+    LegacyTable {
+        #[serde(rename = "Table")]
+        table: WireLegacyTable,
+    },
     /// Current block payload.
     Current(Block),
 }
@@ -109,6 +114,27 @@ struct WireLegacyQuote {
     content: Vec<Inline>,
     #[serde(default)]
     children: Vec<NodeId>,
+}
+
+#[derive(Deserialize)]
+struct WireLegacyTable {
+    #[serde(default)]
+    caption: Option<String>,
+    rows: Vec<WireLegacyTableRow>,
+}
+
+#[derive(Deserialize)]
+struct WireLegacyTableRow {
+    #[serde(default)]
+    is_header: bool,
+    cells: Vec<WireLegacyTableCell>,
+}
+
+#[derive(Deserialize)]
+struct WireLegacyTableCell {
+    content: Vec<Inline>,
+    colspan: u32,
+    rowspan: u32,
 }
 
 impl From<WireDocumentGraph> for DocumentGraph {
@@ -143,6 +169,7 @@ impl From<WireDocumentGraph> for DocumentGraph {
             next_node: next_node.max(max_id),
         };
         let mut legacy_quotes = Vec::new();
+        let mut legacy_tables = Vec::new();
         for (index, node) in blocks.into_iter().enumerate() {
             let span = block_spans.get(index).copied().flatten();
             match node.block {
@@ -151,6 +178,13 @@ impl From<WireDocumentGraph> for DocumentGraph {
                         legacy_quotes.push((graph.blocks.len(), quote.content));
                     }
                     graph.blocks.push(BlockNode { id: node.id, block: Block::Quote { children: quote.children } });
+                }
+                WireBlock::LegacyTable { table } => {
+                    legacy_tables.push((graph.blocks.len(), table));
+                    graph.blocks.push(BlockNode {
+                        id: node.id,
+                        block: Block::Table { caption: None, head: Vec::new(), body: Vec::new(), foot: Vec::new() },
+                    });
                 }
                 WireBlock::Current(block) => {
                     graph.blocks.push(BlockNode { id: node.id, block });
@@ -163,6 +197,32 @@ impl From<WireDocumentGraph> for DocumentGraph {
             if let Block::Quote { children } = &mut graph.blocks[quote_index].block {
                 children.insert(0, child);
             }
+        }
+        for (table_index, table) in legacy_tables {
+            let caption = table.caption;
+            let mut head = Vec::new();
+            let mut body = Vec::new();
+            let mut in_head_band = true;
+            for row in table.rows {
+                let is_header = row.is_header;
+                let mut cells = Vec::with_capacity(row.cells.len());
+                for cell in row.cells {
+                    let mut children = Vec::new();
+                    if !cell.content.is_empty() {
+                        children.push(graph.push_block_at(Block::Paragraph { content: cell.content }, None));
+                    }
+                    cells.push(TableCell { children, colspan: cell.colspan, rowspan: cell.rowspan });
+                }
+                let row = TableRow { cells };
+                if is_header && in_head_band {
+                    head.push(row);
+                }
+                else {
+                    in_head_band = false;
+                    body.push(row);
+                }
+            }
+            graph.blocks[table_index].block = Block::Table { caption, head, body, foot: Vec::new() };
         }
         graph
     }
@@ -340,6 +400,16 @@ impl DocumentGraph {
                 Block::List { items, .. } => {
                     for item in items {
                         item.children.retain(|c| *c != id);
+                    }
+                }
+                Block::Quote { children } => {
+                    children.retain(|c| *c != id);
+                }
+                Block::Table { head, body, foot, .. } => {
+                    for row in head.iter_mut().chain(body.iter_mut()).chain(foot.iter_mut()) {
+                        for cell in &mut row.cells {
+                            cell.children.retain(|c| *c != id);
+                        }
                     }
                 }
                 _ => {}

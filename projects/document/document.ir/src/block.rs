@@ -26,12 +26,17 @@ pub enum Block {
         /// Top-level list items.
         items: Vec<ListItem>,
     },
-    /// Table rows of inline cell content.
+    /// Table with separated header, body, and footer bands.
     Table {
         /// Optional human-readable caption, such as "表 1：总体准确率".
         caption: Option<String>,
-        /// Table header and body rows.
-        rows: Vec<TableRow>,
+        /// Header rows (`<thead>` or an equivalent header band).
+        head: Vec<TableRow>,
+        /// Body rows.
+        body: Vec<TableRow>,
+        /// Footer rows such as totals, when the source separates them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        foot: Vec<TableRow>,
     },
     /// Block quotation.
     Quote {
@@ -131,17 +136,15 @@ impl Default for ListItem {
 /// One table row of cells.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TableRow {
-    /// Whether this row is a header row (`<thead>` / `<th>` 行).
-    pub is_header: bool,
-    /// Row cells, each containing inline content and optional span semantics.
+    /// Row cells, each containing nested block node ids and optional span semantics.
     pub cells: Vec<TableCell>,
 }
 
-/// One table cell with optional column/row span.
+/// One table cell whose body is a sequence of child blocks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TableCell {
-    /// Inline body.
-    pub content: Vec<Inline>,
+    /// Child block node ids rendered inside the cell.
+    pub children: Vec<NodeId>,
     /// Number of columns this cell occupies. Must be at least 1.
     pub colspan: u32,
     /// Number of rows this cell occupies. Must be at least 1.

@@ -52,7 +52,7 @@ impl DocumentGraph {
                 continue;
             };
             let kids = Self::immediate_children(&node.block);
-            let result = visit(&node.block, kids);
+            let result = visit(&node.block, &kids);
             visited.push(*id);
 
             match result {
@@ -106,7 +106,7 @@ impl DocumentGraph {
             let block = self.blocks[node_pos].block.clone();
             let kids = Self::immediate_children(&block);
 
-            match visit(id, &block, kids) {
+            match visit(id, &block, &kids) {
                 RewriteResult::Keep => {}
                 RewriteResult::SkipChildren => {
                     if matches!(order, Traversal::TopDown) {
@@ -149,11 +149,10 @@ impl DocumentGraph {
     /// - Section → children
     /// - List → 所有 items 的 children 合并
     /// - 其它块类型 → 空切片
-    pub(crate) fn immediate_children(block: &Block) -> &[NodeId] {
-        match block {
-            Block::Section { children, .. } => children.as_slice(),
-            _ => &[],
-        }
+    pub(crate) fn immediate_children(block: &Block) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        Self::collect_children_rec(block, &mut out);
+        out
     }
 
     /// DFS 生成 post-order（children 先于 parent）的 NodeId 列表。
@@ -230,6 +229,15 @@ impl DocumentGraph {
                         contained.insert(*c);
                     }
                 }
+                Block::Table { head, body, foot, .. } => {
+                    for row in head.iter().chain(body.iter()).chain(foot.iter()) {
+                        for cell in &row.cells {
+                            for c in &cell.children {
+                                contained.insert(*c);
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -250,6 +258,13 @@ impl DocumentGraph {
             Block::List { items, .. } => {
                 for item in items {
                     out.extend(item.children.iter().copied());
+                }
+            }
+            Block::Table { head, body, foot, .. } => {
+                for row in head.iter().chain(body.iter()).chain(foot.iter()) {
+                    for cell in &row.cells {
+                        out.extend(cell.children.iter().copied());
+                    }
                 }
             }
             _ => {}
@@ -293,6 +308,17 @@ impl DocumentGraph {
                 }
                 Block::Quote { children, .. } => {
                     if children.iter().any(|c| *c == child_id) {
+                        return Some(node.id);
+                    }
+                }
+                Block::Table { head, body, foot, .. } => {
+                    let contains = head
+                        .iter()
+                        .chain(body.iter())
+                        .chain(foot.iter())
+                        .flat_map(|row| row.cells.iter())
+                        .any(|cell| cell.children.iter().any(|c| *c == child_id));
+                    if contains {
                         return Some(node.id);
                     }
                 }
@@ -357,6 +383,15 @@ impl DocumentGraph {
             Block::Quote { children, .. } => {
                 if let Some(pos) = children.iter().position(|c| *c == old_child) {
                     children.splice(pos..=pos, new_children.iter().copied());
+                }
+            }
+            Block::Table { head, body, foot, .. } => {
+                for row in head.iter_mut().chain(body.iter_mut()).chain(foot.iter_mut()) {
+                    for cell in &mut row.cells {
+                        if let Some(pos) = cell.children.iter().position(|c| *c == old_child) {
+                            cell.children.splice(pos..=pos, new_children.iter().copied());
+                        }
+                    }
                 }
             }
             _ => return Err(TransformError::InvalidParent(parent_id)),

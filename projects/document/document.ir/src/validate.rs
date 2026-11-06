@@ -54,6 +54,17 @@ pub enum ValidationIssue {
         /// Missing child id.
         child: NodeId,
     },
+    /// Table cell child id not present in the block list.
+    UnknownTableCellChild {
+        /// Table node id.
+        table: NodeId,
+        /// Zero-based row index across header, body, and footer bands.
+        row_index: usize,
+        /// Zero-based cell index inside that row.
+        cell_index: usize,
+        /// Missing child id.
+        child: NodeId,
+    },
     /// Inline reference targets a missing node.
     UnknownInlineReference {
         /// Source node id.
@@ -301,11 +312,21 @@ impl DocumentGraph {
                         }
                     }
                 }
-                Block::Table { rows, .. } => {
+                Block::Table { head, body, foot, .. } => {
                     let table_id = node.id;
+                    let rows: Vec<&crate::block::TableRow> = head.iter().chain(body.iter()).chain(foot.iter()).collect();
                     for (row_index, row) in rows.iter().enumerate() {
                         for (cell_index, cell) in row.cells.iter().enumerate() {
-                            check_inline_refs(table_id, &cell.content, &context, report);
+                            for child in &cell.children {
+                                if !node_ids.contains(child) {
+                                    report.issues.push(ValidationIssue::UnknownTableCellChild {
+                                        table: table_id,
+                                        row_index,
+                                        cell_index,
+                                        child: *child,
+                                    });
+                                }
+                            }
                             if cell.colspan == 0 {
                                 report.issues.push(ValidationIssue::ZeroColspan { table: table_id, row_index, cell_index });
                             }
@@ -323,7 +344,7 @@ impl DocumentGraph {
                             }
                         }
                     }
-                    check_table_colspans(table_id, rows, report);
+                    check_table_colspans(table_id, &rows, report);
                 }
                 Block::Code { .. }
                 | Block::Math { .. }
@@ -343,6 +364,16 @@ impl DocumentGraph {
                 Block::Section { children: nested, .. } => children.extend(nested.iter().copied()),
                 Block::List { items, .. } => {
                     children.extend(items.iter().flat_map(|item| item.children.iter().copied()));
+                }
+                Block::Quote { children: nested } => children.extend(nested.iter().copied()),
+                Block::Table { head, body, foot, .. } => {
+                    children.extend(
+                        head.iter()
+                            .chain(body.iter())
+                            .chain(foot.iter())
+                            .flat_map(|row| row.cells.iter())
+                            .flat_map(|cell| cell.children.iter().copied()),
+                    );
                 }
                 _ => {}
             }
@@ -504,7 +535,7 @@ fn check_list_numbering(list_id: NodeId, ordered: bool, items: &[crate::block::L
 /// (raw `cells.len()`, not expanded via colspan). Individual cells must not
 /// declare a `colspan` larger than that count. Zero colspans are caught in
 /// the caller before we get here.
-fn check_table_colspans(table_id: NodeId, rows: &[crate::block::TableRow], report: &mut ValidationReport) {
+fn check_table_colspans(table_id: NodeId, rows: &[&crate::block::TableRow], report: &mut ValidationReport) {
     if rows.is_empty() {
         return;
     }

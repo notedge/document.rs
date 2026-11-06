@@ -338,24 +338,31 @@ fn nested_ordered_lists_have_independent_numbering() {
     assert!(graph.validate().is_valid());
 }
 
-fn simple_table(is_header: bool) -> Block {
-    Block::Table {
-        caption: None,
-        rows: vec![document_ir::TableRow {
-            is_header,
-            cells: vec![
-                document_ir::TableCell { content: vec![Inline::Text { text: "A".into() }], colspan: 1, rowspan: 1 },
-                document_ir::TableCell { content: vec![Inline::Text { text: "B".into() }], colspan: 1, rowspan: 1 },
-            ],
-        }],
-    }
+fn text_cell(graph: &mut DocumentGraph, text: &str, colspan: u32, rowspan: u32) -> document_ir::TableCell {
+    let child = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: text.into() }] });
+    document_ir::TableCell { children: vec![child], colspan, rowspan }
+}
+
+fn empty_cell(colspan: u32, rowspan: u32) -> document_ir::TableCell {
+    document_ir::TableCell { children: Vec::new(), colspan, rowspan }
+}
+
+fn table(head: Vec<document_ir::TableRow>, body: Vec<document_ir::TableRow>, foot: Vec<document_ir::TableRow>) -> Block {
+    Block::Table { caption: None, head, body, foot }
+}
+
+fn simple_table(graph: &mut DocumentGraph, is_header: bool) -> Block {
+    let row = document_ir::TableRow { cells: vec![text_cell(graph, "A", 1, 1), text_cell(graph, "B", 1, 1)] };
+    if is_header { table(vec![row], Vec::new(), Vec::new()) } else { table(Vec::new(), vec![row], Vec::new()) }
 }
 
 #[test]
 fn simple_table_passes_validation() {
     let mut graph = DocumentGraph::new(document_ir::DocumentId(1));
-    graph.push_block(simple_table(true));
-    graph.push_block(simple_table(false));
+    let head_table = simple_table(&mut graph, true);
+    graph.push_block(head_table);
+    let body_table = simple_table(&mut graph, false);
+    graph.push_block(body_table);
     assert!(graph.validate().is_valid());
 }
 
@@ -364,10 +371,9 @@ fn zero_colspan_is_rejected() {
     let mut graph = DocumentGraph::new(document_ir::DocumentId(1));
     graph.push_block(Block::Table {
         caption: None,
-        rows: vec![document_ir::TableRow {
-            is_header: false,
-            cells: vec![document_ir::TableCell { content: Vec::new(), colspan: 0, rowspan: 1 }],
-        }],
+        head: Vec::new(),
+        body: vec![document_ir::TableRow { cells: vec![empty_cell(0, 1)] }],
+        foot: Vec::new(),
     });
     let report = graph.validate();
     assert!(
@@ -380,10 +386,9 @@ fn zero_rowspan_is_rejected() {
     let mut graph = DocumentGraph::new(document_ir::DocumentId(1));
     graph.push_block(Block::Table {
         caption: None,
-        rows: vec![document_ir::TableRow {
-            is_header: false,
-            cells: vec![document_ir::TableCell { content: Vec::new(), colspan: 1, rowspan: 0 }],
-        }],
+        head: Vec::new(),
+        body: vec![document_ir::TableRow { cells: vec![empty_cell(1, 0)] }],
+        foot: Vec::new(),
     });
     let report = graph.validate();
     assert!(
@@ -397,19 +402,12 @@ fn colspan_out_of_bounds_is_rejected() {
     // table has 2 columns (first row), one cell declares colspan=10
     graph.push_block(Block::Table {
         caption: None,
-        rows: vec![
-            document_ir::TableRow {
-                is_header: false,
-                cells: vec![
-                    document_ir::TableCell { content: Vec::new(), colspan: 1, rowspan: 1 },
-                    document_ir::TableCell { content: Vec::new(), colspan: 1, rowspan: 1 },
-                ],
-            },
-            document_ir::TableRow {
-                is_header: false,
-                cells: vec![document_ir::TableCell { content: Vec::new(), colspan: 10, rowspan: 1 }],
-            },
+        head: Vec::new(),
+        body: vec![
+            document_ir::TableRow { cells: vec![empty_cell(1, 1), empty_cell(1, 1)] },
+            document_ir::TableRow { cells: vec![empty_cell(10, 1)] },
         ],
+        foot: Vec::new(),
     });
     let report = graph.validate();
     assert!(report.issues.iter().any(|issue| matches!(
@@ -423,20 +421,12 @@ fn colspan_equal_to_max_columns_is_ok() {
     let mut graph = DocumentGraph::new(document_ir::DocumentId(1));
     graph.push_block(Block::Table {
         caption: None,
-        rows: vec![
-            document_ir::TableRow {
-                is_header: false,
-                cells: vec![
-                    document_ir::TableCell { content: Vec::new(), colspan: 1, rowspan: 1 },
-                    document_ir::TableCell { content: Vec::new(), colspan: 1, rowspan: 1 },
-                ],
-            },
-            // this row is a single cell spanning exactly 2 columns = OK
-            document_ir::TableRow {
-                is_header: false,
-                cells: vec![document_ir::TableCell { content: Vec::new(), colspan: 2, rowspan: 1 }],
-            },
+        head: Vec::new(),
+        body: vec![
+            document_ir::TableRow { cells: vec![empty_cell(1, 1), empty_cell(1, 1)] },
+            document_ir::TableRow { cells: vec![empty_cell(2, 1)] },
         ],
+        foot: Vec::new(),
     });
     assert!(graph.validate().is_valid());
 }
@@ -447,16 +437,12 @@ fn rowspan_out_of_bounds_is_rejected() {
     // 2 rows total, row 0 cell declares rowspan=5
     graph.push_block(Block::Table {
         caption: None,
-        rows: vec![
-            document_ir::TableRow {
-                is_header: false,
-                cells: vec![document_ir::TableCell { content: Vec::new(), colspan: 1, rowspan: 5 }],
-            },
-            document_ir::TableRow {
-                is_header: false,
-                cells: vec![document_ir::TableCell { content: Vec::new(), colspan: 1, rowspan: 1 }],
-            },
+        head: Vec::new(),
+        body: vec![
+            document_ir::TableRow { cells: vec![empty_cell(1, 5)] },
+            document_ir::TableRow { cells: vec![empty_cell(1, 1)] },
         ],
+        foot: Vec::new(),
     });
     let report = graph.validate();
     assert!(report.issues.iter().any(|issue| matches!(
@@ -473,33 +459,19 @@ fn table_with_caption_and_spans_roundtrips_via_serde() {
     let doc_id = ids.document_id();
     let mut graph = DocumentGraph::new(doc_id);
 
-    graph.push_block(Block::Table {
-        caption: Some("表 1：总体准确率".into()),
-        rows: vec![
-            document_ir::TableRow {
-                is_header: true,
-                cells: vec![
-                    document_ir::TableCell { content: vec![Inline::Text { text: "模型".into() }], colspan: 1, rowspan: 2 },
-                    document_ir::TableCell { content: vec![Inline::Text { text: "准确率".into() }], colspan: 2, rowspan: 1 },
-                ],
-            },
-            document_ir::TableRow {
-                is_header: true,
-                cells: vec![
-                    document_ir::TableCell { content: vec![Inline::Text { text: "Top-1".into() }], colspan: 1, rowspan: 1 },
-                    document_ir::TableCell { content: vec![Inline::Text { text: "Top-5".into() }], colspan: 1, rowspan: 1 },
-                ],
-            },
-            document_ir::TableRow {
-                is_header: false,
-                cells: vec![
-                    document_ir::TableCell { content: vec![Inline::Text { text: "ResNet".into() }], colspan: 1, rowspan: 1 },
-                    document_ir::TableCell { content: vec![Inline::Text { text: "77%".into() }], colspan: 1, rowspan: 1 },
-                    document_ir::TableCell { content: vec![Inline::Text { text: "93%".into() }], colspan: 1, rowspan: 1 },
-                ],
-            },
+    let head = vec![
+        document_ir::TableRow { cells: vec![text_cell(&mut graph, "模型", 1, 2), text_cell(&mut graph, "准确率", 2, 1)] },
+        document_ir::TableRow { cells: vec![text_cell(&mut graph, "Top-1", 1, 1), text_cell(&mut graph, "Top-5", 1, 1)] },
+    ];
+    let body = vec![document_ir::TableRow {
+        cells: vec![
+            text_cell(&mut graph, "ResNet", 1, 1),
+            text_cell(&mut graph, "77%", 1, 1),
+            text_cell(&mut graph, "93%", 1, 1),
         ],
-    });
+    }];
+    let table_id =
+        graph.push_block(Block::Table { caption: Some("表 1：总体准确率".into()), head, body, foot: Vec::new() });
 
     assert!(graph.validate().is_valid());
 
@@ -509,18 +481,70 @@ fn table_with_caption_and_spans_roundtrips_via_serde() {
     restored.ensure_supported().expect("schema");
     let restored = restored.document;
 
-    let Block::Table { caption, rows } = &restored.blocks[0].block
+    let Block::Table { caption, head, body, foot } = &restored.block(table_id).expect("table node").block
     else {
         panic!("expected table");
     };
     assert_eq!(caption.as_deref(), Some("表 1：总体准确率"));
-    assert_eq!(rows.len(), 3);
-    assert!(rows[0].is_header);
-    assert!(rows[1].is_header);
-    assert!(!rows[2].is_header);
-    assert_eq!(rows[0].cells[0].colspan, 1);
-    assert_eq!(rows[0].cells[0].rowspan, 2);
-    assert_eq!(rows[0].cells[1].colspan, 2);
-    assert_eq!(rows[0].cells[1].rowspan, 1);
+    assert_eq!(head.len(), 2);
+    assert_eq!(body.len(), 1);
+    assert!(foot.is_empty());
+    assert_eq!(head[0].cells[0].colspan, 1);
+    assert_eq!(head[0].cells[0].rowspan, 2);
+    assert_eq!(head[0].cells[1].colspan, 2);
+    assert_eq!(head[0].cells[1].rowspan, 1);
+    assert_eq!(body[0].cells.len(), 3);
+
+    let Block::Paragraph { content } = &restored.block(head[0].cells[0].children[0]).expect("header child block").block
+    else {
+        panic!("expected paragraph child");
+    };
+    assert!(matches!(&content[0], Inline::Text { text } if text == "模型"));
     assert_eq!(restored, graph); // full equality including ids
+}
+
+#[test]
+fn legacy_table_payload_loads_as_bands_and_paragraph_children() {
+    use document_ir::{DocumentEnvelope, DocumentGraph};
+
+    let envelope = DocumentEnvelope::new(DocumentGraph::new(document_ir::DocumentId(1)));
+    let mut value = serde_json::to_value(&envelope).expect("serialize");
+    value["document"]["blocks"] = serde_json::json!([{
+        "id": 1,
+        "block": {"Table": {
+            "caption": "Legacy caption",
+            "rows": [
+                {"is_header": true, "cells": [{"content": [{"Text": {"text": "H"}}], "colspan": 1, "rowspan": 1}]},
+                {"is_header": false, "cells": [{"content": [{"Text": {"text": "B"}}], "colspan": 1, "rowspan": 1}]}
+            ]
+        }}
+    }]);
+
+    let restored: DocumentEnvelope = serde_json::from_value(value).expect("legacy table load");
+    restored.ensure_supported().expect("schema");
+    let restored = restored.document;
+
+    let (caption, head, body, foot) = restored
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { caption, head, body, foot } => Some((caption, head, body, foot)),
+            _ => None,
+        })
+        .expect("table");
+    assert_eq!(caption.as_deref(), Some("Legacy caption"));
+    assert_eq!(head.len(), 1);
+    assert_eq!(body.len(), 1);
+    assert!(foot.is_empty());
+    let Block::Paragraph { content } = &restored.block(head[0].cells[0].children[0]).expect("header child block").block
+    else {
+        panic!("expected paragraph child");
+    };
+    assert!(matches!(&content[0], Inline::Text { text } if text == "H"));
+    let Block::Paragraph { content } = &restored.block(body[0].cells[0].children[0]).expect("body child block").block
+    else {
+        panic!("expected paragraph child");
+    };
+    assert!(matches!(&content[0], Inline::Text { text } if text == "B"));
+    assert!(restored.validate().is_valid());
 }

@@ -26,12 +26,12 @@ pub use block::{Block, BlockNode, ListItem, TableCell, TableRow};
 pub use graph::{DocumentGraph, DocumentMetadata, IdAllocator};
 pub use id::{AssetId, DocumentId, LinkId, NodeId};
 pub use inline::{AttributePair, Attributes, BreakKind, Inline};
-pub use metadata::{MetadataEntry, MetadataValue};
 pub use math::{
     MathAtom, MathClass, MathColumnAlignment, MathDelimiter, MathDelimiterKind, MathDisplay, MathEnvironment,
     MathEnvironmentKind, MathExpression, MathFormula, MathFractionLine, MathRow, MathRowNumbering, MathRowPlacement, MathSpace,
     MathSpan, MathStyle, MathStyleKind,
 };
+pub use metadata::{MetadataEntry, MetadataValue};
 pub use page::PageSetup;
 pub use relation::{Relation, RelationEndpoint, RelationKind};
 pub use source::{CoverageReport, SourceKind, SourceRef, SourceSpan};
