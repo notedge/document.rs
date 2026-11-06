@@ -1,11 +1,16 @@
 use std::path::Path;
 
-use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, RelationEndpoint, SemanticStatus, TableRow};
+use document_ir::{
+    Block, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, RelationEndpoint, SemanticStatus, SourceSpan, TableRow,
+};
 use oak_core::{Parser, RedNode, RedTree, SourceText, parser::session::ParseSession};
 use oak_notedown::{NoteLanguage, NoteParser, lexer::token_type::NoteTokenType, parser::element_type::NoteElementType};
 
 use super::common::{decode_escaped_text, register_image_assets};
 use crate::FormatError;
+
+/// Losses collected while lowering, each carrying the authored span that produced it.
+type LossQueue = Vec<(LossMarker, Option<SourceSpan>)>;
 
 /// Import Notedown text from disk into `notedown-ir` via `oak-notedown`.
 pub fn import_notedown(path: impl AsRef<Path>) -> Result<DocumentGraph, FormatError> {
@@ -33,9 +38,13 @@ fn lower_notedown_tree(
 ) -> Result<DocumentGraph, FormatError> {
     let root = RedNode::new(green_tree, 0);
     let mut graph = DocumentGraph::new(document_id_for(label));
-    let blocks = lower_root_blocks(root, source);
+    let mut losses: LossQueue = Vec::new();
+    let blocks = lower_root_blocks(root, source, &mut losses);
     for block in blocks {
         graph.push_block(block);
+    }
+    for (loss, span) in losses {
+        graph.push_loss_at(loss, span);
     }
     register_image_assets(&mut graph);
 
@@ -58,7 +67,7 @@ fn lower_notedown_tree(
     Ok(graph)
 }
 
-fn lower_root_blocks(node: RedNode<NoteLanguage>, source: &SourceText) -> Vec<Block> {
+fn lower_root_blocks(node: RedNode<NoteLanguage>, source: &SourceText, losses: &mut LossQueue) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut pending_list: Option<(bool, Vec<ListItem>)> = None;
 
@@ -67,7 +76,7 @@ fn lower_root_blocks(node: RedNode<NoteLanguage>, source: &SourceText) -> Vec<Bl
             match child_node.element_type() {
                 NoteElementType::Heading => {
                     flush_list(&mut blocks, &mut pending_list);
-                    if let Some(block) = lower_block_node(child_node, source, NoteElementType::Heading) {
+                    if let Some(block) = lower_block_node(child_node, source, NoteElementType::Heading, losses) {
                         blocks.push(block);
                     }
                 }
@@ -80,7 +89,7 @@ fn lower_root_blocks(node: RedNode<NoteLanguage>, source: &SourceText) -> Vec<Bl
                     else {
                         None
                     };
-                    let mut content = collect_inlines(child_node, source);
+                    let mut content = collect_inlines(child_node, source, losses);
                     strip_list_marker(&mut content);
                     let item = ListItem { content, children: Vec::new(), number, is_task: false, is_checked: None };
                     match &mut pending_list {
@@ -94,7 +103,7 @@ fn lower_root_blocks(node: RedNode<NoteLanguage>, source: &SourceText) -> Vec<Bl
                     }
                 }
                 NoteElementType::Paragraph => {
-                    if let Some((ordered, item)) = promote_list_item(child_node, source) {
+                    if let Some((ordered, item)) = promote_list_item(child_node, source, losses) {
                         match &mut pending_list {
                             Some((list_ordered, items)) if *list_ordered == ordered => {
                                 items.push(item);
@@ -107,16 +116,16 @@ fn lower_root_blocks(node: RedNode<NoteLanguage>, source: &SourceText) -> Vec<Bl
                         continue;
                     }
                     flush_list(&mut blocks, &mut pending_list);
-                    if let Some(block) = promote_heading(child_node, source) {
+                    if let Some(block) = promote_heading(child_node, source, losses) {
                         blocks.push(block);
                     }
-                    else if let Some(block) = lower_paragraph(child_node, source) {
+                    else if let Some(block) = lower_paragraph(child_node, source, losses) {
                         blocks.push(block);
                     }
                 }
                 other => {
                     flush_list(&mut blocks, &mut pending_list);
-                    if let Some(block) = lower_block_node(child_node, source, other) {
+                    if let Some(block) = lower_block_node(child_node, source, other, losses) {
                         blocks.push(block);
                     }
                 }
@@ -135,22 +144,32 @@ fn flush_list(blocks: &mut Vec<Block>, pending: &mut Option<(bool, Vec<ListItem>
     }
 }
 
-fn lower_block_node(node: RedNode<NoteLanguage>, source: &SourceText, kind: NoteElementType) -> Option<Block> {
+fn lower_block_node(
+    node: RedNode<NoteLanguage>,
+    source: &SourceText,
+    kind: NoteElementType,
+    losses: &mut LossQueue,
+) -> Option<Block> {
     match kind {
         NoteElementType::Heading => {
             let (level, title) = heading_parts(node, source);
             Some(Block::Section {
                 level,
-                title: if title.is_empty() { collect_inlines(node, source) } else { vec![Inline::Text { text: title }] },
+                title: if title.is_empty() {
+                    collect_inlines(node, source, losses)
+                }
+                else {
+                    vec![Inline::Text { text: title }]
+                },
                 children: Vec::new(),
             })
         }
-        NoteElementType::Paragraph => lower_paragraph(node, source),
+        NoteElementType::Paragraph => lower_paragraph(node, source, losses),
         NoteElementType::CodeBlock => {
             let (language, content) = extract_code_block(node, source);
             if content.is_empty() { None } else { Some(Block::Code { language, content }) }
         }
-        NoteElementType::Table => Some(Block::Table { caption: None, rows: extract_table_rows(node, source) }),
+        NoteElementType::Table => Some(Block::Table { caption: None, rows: extract_table_rows(node, source, losses) }),
         NoteElementType::Blockquote => Some(Block::Quote {
             content: vec![Inline::Text { text: extract_notedown_blockquote_text(node, source) }],
             children: Vec::new(),
@@ -163,7 +182,7 @@ fn lower_block_node(node: RedNode<NoteLanguage>, source: &SourceText, kind: Note
     }
 }
 
-fn promote_heading(node: RedNode<NoteLanguage>, source: &SourceText) -> Option<Block> {
+fn promote_heading(node: RedNode<NoteLanguage>, source: &SourceText, _losses: &mut LossQueue) -> Option<Block> {
     let text = node.text(source).into_owned();
     let raw = text.trim();
     if !raw.starts_with('#') {
@@ -180,7 +199,7 @@ fn promote_heading(node: RedNode<NoteLanguage>, source: &SourceText) -> Option<B
     Some(Block::Section { level: hashes as u8, title: vec![Inline::Text { text: title.to_string() }], children: Vec::new() })
 }
 
-fn promote_list_item(node: RedNode<NoteLanguage>, source: &SourceText) -> Option<(bool, ListItem)> {
+fn promote_list_item(node: RedNode<NoteLanguage>, source: &SourceText, losses: &mut LossQueue) -> Option<(bool, ListItem)> {
     let text = node.text(source).into_owned();
     let raw = text.trim();
     if let Some(content) = raw.strip_prefix("- ").or_else(|| raw.strip_prefix("* ")).or_else(|| raw.strip_prefix("+ ")) {
@@ -210,7 +229,7 @@ fn promote_list_item(node: RedNode<NoteLanguage>, source: &SourceText) -> Option
             ));
         }
     }
-    let inlines = collect_inlines(node, source);
+    let inlines = collect_inlines(node, source, losses);
     if inlines.is_empty() {
         return None;
     }
@@ -231,8 +250,8 @@ fn promote_list_item(node: RedNode<NoteLanguage>, source: &SourceText) -> Option
     None
 }
 
-fn lower_paragraph(node: RedNode<NoteLanguage>, source: &SourceText) -> Option<Block> {
-    let content = collect_inlines(node, source);
+fn lower_paragraph(node: RedNode<NoteLanguage>, source: &SourceText, losses: &mut LossQueue) -> Option<Block> {
+    let content = collect_inlines(node, source, losses);
     if content.is_empty() {
         return None;
     }
@@ -294,7 +313,7 @@ fn extract_code_block(node: RedNode<NoteLanguage>, source: &SourceText) -> (Opti
     (language, content.trim().to_string())
 }
 
-fn extract_table_rows(node: RedNode<NoteLanguage>, source: &SourceText) -> Vec<TableRow> {
+fn extract_table_rows(node: RedNode<NoteLanguage>, source: &SourceText, losses: &mut LossQueue) -> Vec<TableRow> {
     let mut rows = Vec::new();
     for child in node.children() {
         if let RedTree::Node(row_node) = child {
@@ -304,7 +323,7 @@ fn extract_table_rows(node: RedNode<NoteLanguage>, source: &SourceText) -> Vec<T
             let mut cells = Vec::new();
             for cell_child in row_node.children() {
                 if let RedTree::Node(cell_node) = cell_child {
-                    let cell = trim_cell_inlines(collect_inlines(cell_node, source));
+                    let cell = trim_cell_inlines(collect_inlines(cell_node, source, losses));
                     if !cell.is_empty() {
                         cells.push(cell);
                     }
@@ -349,14 +368,14 @@ fn table_cell_plain_text(cell: &[Inline]) -> String {
     cell.iter().map(Inline::plain_text).collect()
 }
 
-fn collect_inlines(node: RedNode<NoteLanguage>, source: &SourceText) -> Vec<Inline> {
+fn collect_inlines(node: RedNode<NoteLanguage>, source: &SourceText, losses: &mut LossQueue) -> Vec<Inline> {
     let mut inlines = Vec::new();
     for child in node.children() {
         match child {
             RedTree::Node(child_node) => {
                 let link_like = matches!(child_node.element_type(), NoteElementType::Link | NoteElementType::Image);
                 let trailing = if link_like { trailing_link_whitespace(&child_node.text(source)) } else { String::new() };
-                if let Some(inline) = lower_inline_node(child_node, source) {
+                if let Some(inline) = lower_inline_node(child_node, source, losses) {
                     push_inline(&mut inlines, inline);
                 }
                 if !trailing.is_empty() {
@@ -397,12 +416,12 @@ fn collect_inlines(node: RedNode<NoteLanguage>, source: &SourceText) -> Vec<Inli
     inlines
 }
 
-fn lower_inline_node(node: RedNode<NoteLanguage>, source: &SourceText) -> Option<Inline> {
+fn lower_inline_node(node: RedNode<NoteLanguage>, source: &SourceText, losses: &mut LossQueue) -> Option<Inline> {
     match node.element_type() {
-        NoteElementType::Link => parse_inline_link(node, source),
+        NoteElementType::Link => parse_inline_link(node, source, losses),
         NoteElementType::Image => parse_inline_image(node, source),
         NoteElementType::Root => {
-            let children = collect_inlines(node, source);
+            let children = collect_inlines(node, source, losses);
             if children.is_empty() {
                 None
             }
@@ -420,7 +439,7 @@ fn lower_inline_node(node: RedNode<NoteLanguage>, source: &SourceText) -> Option
             NoteTokenType::InlineCode => Some(Inline::InlineCode { text: inline_code_text(node.text(source).as_ref()) }),
             NoteTokenType::Strikethrough => Some(Inline::Styled {
                 style: "strike".into(),
-                children: strip_inline_marker(collect_inlines(node, source), "~~"),
+                children: strip_inline_marker(collect_inlines(node, source, losses), "~~"),
             }),
             NoteTokenType::Strong | NoteTokenType::Emphasis => {
                 let raw = node.text(source);
@@ -433,7 +452,7 @@ fn lower_inline_node(node: RedNode<NoteLanguage>, source: &SourceText) -> Option
                 let style = if token == NoteTokenType::Strong { "bold" } else { "italic" };
                 Some(Inline::Styled {
                     style: style.into(),
-                    children: strip_inline_marker(collect_inlines(node, source), marker),
+                    children: strip_inline_marker(collect_inlines(node, source, losses), marker),
                 })
             }
             NoteTokenType::Whitespace => Some(Inline::Text { text: node.text(source).into_owned() }),
@@ -515,7 +534,7 @@ fn collect_plain_text(node: RedNode<NoteLanguage>, source: &SourceText) -> Strin
     text
 }
 
-fn parse_inline_link(node: RedNode<NoteLanguage>, source: &SourceText) -> Option<Inline> {
+fn parse_inline_link(node: RedNode<NoteLanguage>, source: &SourceText, losses: &mut LossQueue) -> Option<Inline> {
     let raw = node.text(source);
     if let Some((text, url)) = split_markdown_link(raw.as_ref()) {
         return Some(Inline::Link {
@@ -523,6 +542,32 @@ fn parse_inline_link(node: RedNode<NoteLanguage>, source: &SourceText) -> Option
             display: vec![Inline::Text { text }],
             title: None,
         });
+    }
+    // `oak-notedown` emits a `Link` element for a bare `[label]` with no target.
+    // The authored label is still a relation, so keep it as `Unresolved` and
+    // record its provenance instead of flattening it to plain text.
+    if let Some(label) = raw.trim().strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+        let label = label.trim();
+        // A GFM task marker (`[ ]` / `[x]`) also parses as a target-less `Link`.
+        // Its brackets belong to list syntax, so keep the authored text instead
+        // of reporting a missing relation.
+        let is_task_marker = label.is_empty() || label == "x" || label == "X";
+        if !label.is_empty() && !is_task_marker {
+            let span = node.span();
+            losses.push((
+                LossMarker {
+                    code: "import.notedown.unresolved_target".into(),
+                    message: format!("unresolved target: {label}"),
+                    status: SemanticStatus::Unresolved,
+                },
+                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+            ));
+            return Some(Inline::Link {
+                target: RelationEndpoint::Unresolved { label: label.to_string() },
+                display: vec![Inline::Text { text: label.to_string() }],
+                title: None,
+            });
+        }
     }
     let text = collect_plain_text(node, source);
     if text.is_empty() { None } else { Some(Inline::Text { text }) }
