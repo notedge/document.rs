@@ -12,6 +12,7 @@ mod html_import;
 mod input;
 mod logger_transport;
 mod markdown;
+mod page_transaction;
 mod seed_input;
 mod sitemap;
 mod snapshot;

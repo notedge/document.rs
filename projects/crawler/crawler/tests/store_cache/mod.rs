@@ -40,7 +40,32 @@ fn transport(fetches: &Rc<Cell<usize>>) -> CountingTransport {
             body: b"<html><head><title>A</title></head><body>Hello from the page body.</body></html>".to_vec(),
         },
     );
+    inner.insert(
+        "https://example.com/b",
+        MemoryEntry {
+            status: 200,
+            headers: BTreeMap::from([("content-type".into(), "text/html".into())]),
+            body: b"<html><head><title>B</title></head><body>Second page body survives the restart.</body></html>".to_vec(),
+        },
+    );
     CountingTransport { inner, fetches: fetches.clone() }
+}
+
+/// Pre-populate the store response cache for a second seed so a restarted run
+/// can be served without touching the transport.
+fn cache_second_seed(store: &mut dyn Store) {
+    let mut inner = MemoryTransport::new();
+    inner.insert(
+        "https://example.com/b",
+        MemoryEntry {
+            status: 200,
+            headers: BTreeMap::from([("content-type".into(), "text/html".into())]),
+            body: b"<html><head><title>B</title></head><body>Second page body survives the restart.</body></html>".to_vec(),
+        },
+    );
+    let request = FetchRequest { url: "https://example.com/b".parse().expect("url"), headers: BTreeMap::new() };
+    let artifact = inner.fetch(&request).expect("fixture artifact");
+    store.put_response_cache(&artifact).expect("cache second seed");
 }
 
 #[cfg(feature = "yydb")]
@@ -68,14 +93,16 @@ fn yydb_store_backed_caches_survive_a_restart_without_refetching() {
     let extractors: [&dyn Extractor; 1] = [&html];
     let request = CrawlRequest::from_seed("https://example.com/a").expect("seed");
 
-    let first = run_crawl_with_store(request.clone(), transport(&fetches), &extractors, Default::default(), &mut store)
-        .expect("first crawl");
+    let first =
+        run_crawl_with_store(request, transport(&fetches), &extractors, Default::default(), &mut store).expect("first crawl");
     assert_eq!(first.report.committed, 1);
     assert_eq!(fetches.get(), 2, "robots and page must be fetched once");
 
     store.reopen().expect("restart");
-    let second =
-        run_crawl_with_store(request, transport(&fetches), &extractors, Default::default(), &mut store).expect("second crawl");
+    cache_second_seed(&mut store);
+    let second_request = CrawlRequest::from_seed("https://example.com/b").expect("second seed");
+    let second = run_crawl_with_store(second_request, transport(&fetches), &extractors, Default::default(), &mut store)
+        .expect("second crawl");
     assert_eq!(second.report.committed, 1);
     assert_eq!(fetches.get(), 2, "restart must reuse stored robots and response");
 
@@ -91,14 +118,16 @@ fn store_backed_caches_survive_a_restart_without_refetching() {
     let extractors: [&dyn Extractor; 1] = [&html];
     let request = CrawlRequest::from_seed("https://example.com/a").expect("seed");
 
-    let first = run_crawl_with_store(request.clone(), transport(&fetches), &extractors, Default::default(), &mut store)
-        .expect("first crawl");
+    let first =
+        run_crawl_with_store(request, transport(&fetches), &extractors, Default::default(), &mut store).expect("first crawl");
     assert_eq!(first.report.committed, 1);
     assert_eq!(fetches.get(), 2, "robots and page must be fetched once");
 
     store.reopen().expect("restart");
-    let second =
-        run_crawl_with_store(request, transport(&fetches), &extractors, Default::default(), &mut store).expect("second crawl");
+    cache_second_seed(&mut store);
+    let second_request = CrawlRequest::from_seed("https://example.com/b").expect("second seed");
+    let second = run_crawl_with_store(second_request, transport(&fetches), &extractors, Default::default(), &mut store)
+        .expect("second crawl");
     assert_eq!(second.report.committed, 1);
     assert_eq!(fetches.get(), 2, "restart must reuse stored robots and response");
     assert!(

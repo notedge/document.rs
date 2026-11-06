@@ -150,19 +150,20 @@ impl HostScheduler {
 }
 
 /// Frontier facade that claims through the store and schedules by host.
-pub struct StoreFrontier<'a> {
-    store: &'a mut dyn Store,
+///
+/// The store is borrowed per call so the same crawl loop can still use it for
+/// robots, response cache and page transactions between frontier operations.
+pub struct StoreFrontier {
     worker_id: String,
     scheduler: HostScheduler,
     host_by_item: BTreeMap<String, String>,
     seen: BTreeSet<String>,
 }
 
-impl<'a> StoreFrontier<'a> {
+impl StoreFrontier {
     /// Build a frontier for one worker.
-    pub fn new(store: &'a mut dyn Store, worker_id: impl Into<String>, profile: PolitenessProfile) -> Self {
+    pub fn new(worker_id: impl Into<String>, profile: PolitenessProfile) -> Self {
         Self {
-            store,
             worker_id: worker_id.into(),
             scheduler: HostScheduler::new(profile),
             host_by_item: BTreeMap::new(),
@@ -181,26 +182,46 @@ impl<'a> StoreFrontier<'a> {
         &self.scheduler
     }
 
+    /// Whether this worker already admitted an item id.
+    pub fn contains(&self, item_id: &str) -> bool {
+        self.seen.contains(item_id)
+    }
+
     /// Enqueue an item into the store run and register its host partition.
     ///
     /// Duplicate URLs are dropped locally so a link re-discovered on several
     /// pages does not produce extra claims.
-    pub fn enqueue(&mut self, item: FrontierItem) -> crawler_store::Result<bool> {
+    pub fn enqueue(&mut self, store: &mut dyn Store, item: FrontierItem) -> crawler_store::Result<bool> {
         let item_id = item_id_from_url(item.request_url.as_str());
         if !self.seen.insert(item_id.clone()) {
             return Ok(false);
         }
         self.host_by_item.insert(item_id, item.site_key.clone());
         self.scheduler.note_queued(&item.site_key, now_millis());
-        self.store.enqueue(item)?;
+        store.enqueue(item)?;
         Ok(true)
     }
 
+    /// Register links that were admitted atomically by a page commit.
+    ///
+    /// The store already holds the frontier records, so only the in-process
+    /// schedule state is updated.
+    pub fn note_admitted(&mut self, items: &[FrontierItem]) {
+        for item in items {
+            let item_id = item_id_from_url(item.request_url.as_str());
+            if !self.seen.insert(item_id.clone()) {
+                continue;
+            }
+            self.host_by_item.insert(item_id, item.site_key.clone());
+            self.scheduler.note_queued(&item.site_key, now_millis());
+        }
+    }
+
     /// Claim the next item allowed by the host schedule.
-    pub fn next(&mut self) -> crawler_store::Result<Option<ClaimToken>> {
+    pub fn next(&mut self, store: &mut dyn Store) -> crawler_store::Result<Option<ClaimToken>> {
         let now = now_millis();
         while let Some(host) = self.scheduler.select(now) {
-            match self.store.claim_next(&host, &self.worker_id)? {
+            match store.claim_next(&host, &self.worker_id)? {
                 Some(token) => {
                     self.scheduler.on_claim(&host, now);
                     self.host_by_item.insert(token.item_id.clone(), host);
@@ -213,13 +234,22 @@ impl<'a> StoreFrontier<'a> {
     }
 
     /// Renew one active claim.
-    pub fn renew(&mut self, token: &ClaimToken) -> crawler_store::Result<u64> {
-        self.store.renew_claim(token)
+    pub fn renew(&mut self, store: &mut dyn Store, token: &ClaimToken) -> crawler_store::Result<u64> {
+        store.renew_claim(token)
     }
 
     /// Finish an item and drop it from the frontier.
-    pub fn release_done(&mut self, token: &ClaimToken) -> crawler_store::Result<()> {
-        self.store.release_claim(token, ReleaseOutcome::Done)?;
+    pub fn release_done(&mut self, store: &mut dyn Store, token: &ClaimToken) -> crawler_store::Result<()> {
+        store.release_claim(token, ReleaseOutcome::Done)?;
+        if let Some(host) = self.host_by_item.get(&token.item_id) {
+            self.scheduler.on_release(host, now_millis());
+        }
+        Ok(())
+    }
+
+    /// Return an unprocessed item to pending without advancing its attempts.
+    pub fn release_pending(&mut self, store: &mut dyn Store, token: &ClaimToken) -> crawler_store::Result<()> {
+        store.release_claim(token, ReleaseOutcome::Pending)?;
         if let Some(host) = self.host_by_item.get(&token.item_id) {
             self.scheduler.on_release(host, now_millis());
         }
@@ -230,8 +260,8 @@ impl<'a> StoreFrontier<'a> {
     ///
     /// `attempts` is the count the item had on this attempt, before the store
     /// advances it.
-    pub fn release_failed(&mut self, token: &ClaimToken, attempts: u32) -> crawler_store::Result<()> {
-        self.store.release_claim(token, ReleaseOutcome::Requeue)?;
+    pub fn release_failed(&mut self, store: &mut dyn Store, token: &ClaimToken, attempts: u32) -> crawler_store::Result<()> {
+        store.release_claim(token, ReleaseOutcome::Requeue)?;
         if let Some(host) = self.host_by_item.get(&token.item_id) {
             self.scheduler.on_failure(host, now_millis(), attempts);
         }

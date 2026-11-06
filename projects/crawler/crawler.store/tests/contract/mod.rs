@@ -2,6 +2,7 @@
 
 #[cfg(feature = "yydb")]
 mod g4_doctor_quota_lag;
+mod g5_page_tx;
 mod support;
 mod y1_batch_transaction;
 mod y2_single_winner;

@@ -3,13 +3,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crawler_types::{FetchArtifact, FrontierItem, TransportProvenance};
+use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem, TransportProvenance};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{Result, StoreError},
     keyspace::{item_id_from_url, run_id_from_seed},
-    types::{ClaimToken, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec},
+    types::{ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +27,12 @@ pub(crate) struct PageRecord {
     phase: PagePhase,
     fetch_fixture: Option<String>,
     ir_fixture: Option<String>,
+    #[serde(default)]
+    asset_fingerprints: Vec<String>,
+    #[serde(default)]
+    admitted_links: Vec<FrontierItem>,
+    #[serde(default)]
+    events: Vec<CrawlEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -263,6 +269,7 @@ impl StoreSession {
             ReleaseOutcome::Done => {
                 run.frontier.remove(&token.item_id);
             }
+            ReleaseOutcome::Pending => {}
             ReleaseOutcome::Requeue => {
                 if let Some(item) = run.frontier.get_mut(&token.item_id) {
                     item.attempts = item.attempts.saturating_add(1);
@@ -299,6 +306,9 @@ impl StoreSession {
                 phase: PagePhase::Claimed,
                 fetch_fixture: None,
                 ir_fixture: None,
+                asset_fingerprints: Vec::new(),
+                admitted_links: Vec::new(),
+                events: Vec::new(),
             },
         );
         let handle = PageTxHandle { page_id };
@@ -331,6 +341,35 @@ impl StoreSession {
         Ok(())
     }
 
+    pub(crate) fn page_tx_bind_asset(&mut self, binding: &PageAssetBinding) -> Result<()> {
+        let page_id =
+            self.active_page_tx.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?.page_id.clone();
+        let run = self.active_run_mut()?;
+        let page = run.pages.get_mut(&page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.clone()))?;
+        page.asset_fingerprints.push(binding.fingerprint.clone());
+        page.phase = PagePhase::AssetsBound;
+        self.persist_snapshot();
+        Ok(())
+    }
+
+    pub(crate) fn page_tx_admit_links(&mut self, items: Vec<FrontierItem>) -> Result<()> {
+        let page_id =
+            self.active_page_tx.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?.page_id.clone();
+        let run = self.active_run_mut()?;
+        let page = run.pages.get_mut(&page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.clone()))?;
+        page.admitted_links.extend(items);
+        Ok(())
+    }
+
+    pub(crate) fn page_tx_put_event(&mut self, event: &CrawlEvent) -> Result<()> {
+        let page_id =
+            self.active_page_tx.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?.page_id.clone();
+        let run = self.active_run_mut()?;
+        let page = run.pages.get_mut(&page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.clone()))?;
+        page.events.push(event.clone());
+        Ok(())
+    }
+
     pub(crate) fn commit_page_tx(&mut self) -> Result<()> {
         let page_id =
             self.active_page_tx.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?.page_id.clone();
@@ -339,9 +378,19 @@ impl StoreSession {
         if claim.lease_until_ms <= Self::now_millis() {
             return Err(StoreError::StoreLeaseExpired);
         }
+        let admitted =
+            run.pages.get(&page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.clone()))?.admitted_links.clone();
+        let event_count =
+            run.pages.get(&page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.clone()))?.events.len().max(1);
+        // Links and events land with the page phase in one in-memory step so a
+        // failed commit never exposes a page without its frontier admissions.
+        for item in admitted {
+            let item_id = item_id_from_url(item.request_url.as_str());
+            run.frontier.entry(item_id).or_insert(item);
+        }
         let page = run.pages.get_mut(&page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.clone()))?;
         page.phase = PagePhase::Committed;
-        run.event_count += 1;
+        run.event_count += event_count as u64;
         self.active_page_tx = None;
         self.persist_snapshot();
         Ok(())
@@ -371,6 +420,22 @@ impl StoreSession {
 
     pub(crate) fn checkpoint_lag(&self) -> u64 {
         self.active_run().map(|run| run.event_count.saturating_sub(run.checkpoint_sequence)).unwrap_or(0)
+    }
+
+    pub(crate) fn frontier_item(&self, item_id: &str) -> Result<Option<FrontierItem>> {
+        Ok(self.active_run()?.frontier.get(item_id).cloned())
+    }
+
+    pub(crate) fn pending_frontier_count(&self) -> Result<u64> {
+        Ok(self.active_run()?.frontier.len() as u64)
+    }
+
+    pub(crate) fn page_asset_refs(&self, page_id: &str) -> Result<Vec<String>> {
+        let run = self.active_run()?;
+        run.pages
+            .get(page_id)
+            .map(|page| page.asset_fingerprints.clone())
+            .ok_or_else(|| StoreError::StoreNotFound(page_id.to_owned()))
     }
 
     pub(crate) fn page_phase(&self, page_id: &str) -> Result<PagePhase> {

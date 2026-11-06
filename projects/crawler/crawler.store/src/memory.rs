@@ -1,11 +1,14 @@
-use crawler_types::{FrontierItem, site_key};
+use crawler_types::{CrawlEvent, FrontierItem, site_key};
 use url::Url;
 
 use crate::{
     Store,
     error::{Result, StoreError},
     session::StoreSession,
-    types::{ClaimToken, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport},
+    types::{
+        ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
+        StoreDiagnosticReport,
+    },
 };
 
 /// In-memory `Store` backend for deterministic contract tests.
@@ -29,6 +32,14 @@ impl Store for MemoryStore {
 
     fn enqueue(&mut self, item: FrontierItem) -> Result<()> {
         self.session.enqueue(item)
+    }
+
+    fn frontier_item(&self, item_id: &str) -> Result<Option<FrontierItem>> {
+        self.session.frontier_item(item_id)
+    }
+
+    fn pending_frontier_count(&self) -> Result<u64> {
+        self.session.pending_frontier_count()
     }
 
     fn claim_next(&mut self, host_key: &str, worker_id: &str) -> Result<Option<ClaimToken>> {
@@ -59,6 +70,18 @@ impl Store for MemoryStore {
         self.session.page_tx_put_ir(fixture, bytes)
     }
 
+    fn page_tx_bind_asset(&mut self, binding: &PageAssetBinding) -> Result<()> {
+        self.session.page_tx_bind_asset(binding)
+    }
+
+    fn page_tx_admit_links(&mut self, items: Vec<FrontierItem>) -> Result<()> {
+        self.session.page_tx_admit_links(items)
+    }
+
+    fn page_tx_put_event(&mut self, event: &CrawlEvent) -> Result<()> {
+        self.session.page_tx_put_event(event)
+    }
+
     fn commit_page_tx(&mut self) -> Result<()> {
         self.session.commit_page_tx()
     }
@@ -77,6 +100,10 @@ impl Store for MemoryStore {
 
     fn page_phase(&self, page_id: &str) -> Result<PagePhase> {
         self.session.page_phase(page_id)
+    }
+
+    fn page_asset_refs(&self, page_id: &str) -> Result<Vec<String>> {
+        self.session.page_asset_refs(page_id)
     }
 
     fn put_orphan_object(&mut self, _bytes: &[u8]) -> Result<()> {

@@ -1,8 +1,11 @@
-use crawler_types::{FetchArtifact, FrontierItem};
+use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem};
 
 use crate::{
     error::Result,
-    types::{ClaimToken, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport},
+    types::{
+        ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
+        StoreDiagnosticReport,
+    },
 };
 
 /// Store contract implemented by `MemoryStore` and `YydbStore`.
@@ -21,6 +24,12 @@ pub trait Store {
     /// Enqueue a frontier item.
     fn enqueue(&mut self, item: FrontierItem) -> Result<()>;
 
+    /// Read one frontier item by identifier.
+    fn frontier_item(&self, item_id: &str) -> Result<Option<FrontierItem>>;
+
+    /// Count frontier items still queued or claimed in the active run.
+    fn pending_frontier_count(&self) -> Result<u64>;
+
     /// Claim the next queued item for a host partition.
     fn claim_next(&mut self, host_key: &str, worker_id: &str) -> Result<Option<ClaimToken>>;
 
@@ -30,7 +39,7 @@ pub trait Store {
     /// Extend the active claim lease and return the new expiry in epoch milliseconds.
     fn renew_claim(&mut self, token: &ClaimToken) -> Result<u64>;
 
-    /// Release the active claim as done or requeued, rejecting stale fencing.
+    /// Release the active claim as done, requeued, or pending, rejecting stale fencing.
     fn release_claim(&mut self, token: &ClaimToken, outcome: ReleaseOutcome) -> Result<()>;
 
     /// Begin a page transaction bound to the active claim.
@@ -41,6 +50,15 @@ pub trait Store {
 
     /// Attach an IR package fixture to the active page transaction.
     fn page_tx_put_ir(&mut self, fixture: &str, bytes: &[u8]) -> Result<()>;
+
+    /// Bind one document asset to the active page transaction.
+    fn page_tx_bind_asset(&mut self, binding: &PageAssetBinding) -> Result<()>;
+
+    /// Admit discovered navigation links with the active page commit.
+    fn page_tx_admit_links(&mut self, items: Vec<FrontierItem>) -> Result<()>;
+
+    /// Stage one report event for the active page commit.
+    fn page_tx_put_event(&mut self, event: &CrawlEvent) -> Result<()>;
 
     /// Commit the active page transaction.
     fn commit_page_tx(&mut self) -> Result<()>;
@@ -56,6 +74,9 @@ pub trait Store {
 
     /// Read a page phase, or `auto` for the most recent page.
     fn page_phase(&self, page_id: &str) -> Result<PagePhase>;
+
+    /// Read the asset fingerprints bound to a committed page.
+    fn page_asset_refs(&self, page_id: &str) -> Result<Vec<String>>;
 
     /// Store an unreferenced CAS object for orphan reclamation tests.
     fn put_orphan_object(&mut self, bytes: &[u8]) -> Result<()>;

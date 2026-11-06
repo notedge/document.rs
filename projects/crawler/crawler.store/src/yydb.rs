@@ -11,7 +11,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crawler_types::{FetchArtifact, FrontierItem};
+use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use yydb::{
     Batch, Connection, Error as YydbError, EvictionPolicy, LeaseExpectation, LeaseToken, NamespaceQuota, ObjectKind, ObjectRef,
@@ -24,8 +24,8 @@ use crate::{
     keyspace,
     session::StoreSession,
     types::{
-        ClaimToken, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport,
-        StoreDoctorIssue, StoreDoctorSeverity, StoreNamespaceStats,
+        ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
+        StoreDiagnosticReport, StoreDoctorIssue, StoreDoctorSeverity, StoreNamespaceStats,
     },
 };
 
@@ -68,11 +68,17 @@ struct PageRecord {
     phase: PagePhase,
     fetch_fixture: Option<String>,
     ir_fixture: Option<String>,
+    #[serde(default)]
+    asset_fingerprints: Vec<String>,
+    #[serde(default)]
+    admitted_links: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct EventRecord {
     sequence: u64,
+    #[serde(default)]
+    event: Option<CrawlEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +97,9 @@ struct PageTxStaging {
     lease: LeaseToken,
     fetch: Option<(String, Vec<u8>)>,
     ir: Option<(String, Vec<u8>)>,
+    assets: Vec<PageAssetBinding>,
+    links: Vec<FrontierItem>,
+    events: Vec<CrawlEvent>,
     phase: PagePhase,
 }
 
@@ -382,6 +391,31 @@ impl Store for YydbStore {
         self.connection()?.put(key, encode(&item)?).map_err(map_yydb_error)
     }
 
+    fn frontier_item(&self, item_id: &str) -> Result<Option<FrontierItem>> {
+        let run_id = self.active_run_id.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        let key = keyspace::frontier_item(run_id, item_id);
+        match self.connection()?.get(&key).map_err(map_yydb_error)? {
+            Some(bytes) => Ok(Some(decode(&bytes, "frontier item")?)),
+            None => Ok(None),
+        }
+    }
+
+    fn pending_frontier_count(&self) -> Result<u64> {
+        let run_id = self.active_run_id.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        let prefix = keyspace::frontier_prefix(run_id);
+        let mut total = 0u64;
+        let mut after: Option<String> = None;
+        loop {
+            let page = self.connection()?.scan_prefix(&prefix, after.as_deref(), SCAN_PAGE).map_err(map_yydb_error)?;
+            let fetched = page.len();
+            total += fetched as u64;
+            if fetched < SCAN_PAGE {
+                return Ok(total);
+            }
+            after = page.last().map(|(key, _)| key.clone());
+        }
+    }
+
     fn claim_next(&mut self, host_key: &str, worker_id: &str) -> Result<Option<ClaimToken>> {
         let run_id = self.active_run_id.clone().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
         let token = self.native_claim_next(&run_id, host_key, worker_id)?;
@@ -420,6 +454,7 @@ impl Store for YydbStore {
         let release = match outcome {
             ReleaseOutcome::Done => YydbReleaseOutcome::Failed { reason: "done".into() },
             ReleaseOutcome::Requeue => YydbReleaseOutcome::Requeue,
+            ReleaseOutcome::Pending => YydbReleaseOutcome::Requeue,
         };
         self.connection()?.release_lease(&lease, release).map_err(map_yydb_error)?;
         let item_key = keyspace::frontier_item(&run_id, &token.item_id);
@@ -427,6 +462,7 @@ impl Store for YydbStore {
         batch.delete(claim_key);
         match outcome {
             ReleaseOutcome::Done => batch.delete(item_key),
+            ReleaseOutcome::Pending => {}
             ReleaseOutcome::Requeue => {
                 let bytes = self
                     .connection()?
@@ -472,6 +508,9 @@ impl Store for YydbStore {
                     lease,
                     fetch: None,
                     ir: None,
+                    assets: Vec::new(),
+                    links: Vec::new(),
+                    events: Vec::new(),
                     phase: PagePhase::Claimed,
                 });
                 Ok(handle)
@@ -494,6 +533,25 @@ impl Store for YydbStore {
         Ok(())
     }
 
+    fn page_tx_bind_asset(&mut self, binding: &PageAssetBinding) -> Result<()> {
+        let staging = self.page_tx.as_mut().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?;
+        staging.assets.push(binding.clone());
+        staging.phase = PagePhase::AssetsBound;
+        Ok(())
+    }
+
+    fn page_tx_admit_links(&mut self, items: Vec<FrontierItem>) -> Result<()> {
+        let staging = self.page_tx.as_mut().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?;
+        staging.links.extend(items);
+        Ok(())
+    }
+
+    fn page_tx_put_event(&mut self, event: &CrawlEvent) -> Result<()> {
+        let staging = self.page_tx.as_mut().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?;
+        staging.events.push(event.clone());
+        Ok(())
+    }
+
     fn commit_page_tx(&mut self) -> Result<()> {
         let staging = self.page_tx.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?;
         let run_id = self.active_run_id.clone().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
@@ -508,8 +566,14 @@ impl Store for YydbStore {
             .as_ref()
             .map(|(_, bytes)| conn.put_chunk(ObjectKind::Blob, bytes).map_err(map_yydb_error))
             .transpose()?;
+        let mut asset_refs = Vec::with_capacity(staging.assets.len());
+        for binding in &staging.assets {
+            let object = conn.put_chunk(ObjectKind::Blob, &binding.bytes).map_err(map_yydb_error)?;
+            asset_refs.push((binding, object));
+        }
         let meta = self.read_run_meta(&run_id)?;
-        let sequence = meta.event_count + 1;
+        let base = meta.event_count;
+        let commit_sequence = base + staging.events.len().max(1) as u64;
         let record = PageRecord {
             item_id: staging.claim.item_id.clone(),
             worker_id: staging.claim.worker_id.clone(),
@@ -517,13 +581,40 @@ impl Store for YydbStore {
             phase: PagePhase::Committed,
             fetch_fixture: staging.fetch.as_ref().map(|(fixture, _)| fixture.clone()),
             ir_fixture: staging.ir.as_ref().map(|(fixture, _)| fixture.clone()),
+            asset_fingerprints: staging.assets.iter().map(|binding| binding.fingerprint.clone()).collect(),
+            admitted_links: staging.links.iter().map(|item| keyspace::item_id_from_url(item.request_url.as_str())).collect(),
         };
         let mut batch = Batch::new();
         batch.put(keyspace::page_state(&run_id, &staging.handle.page_id), encode(&record)?);
         attach_object(&mut batch, keyspace::page_object(&run_id, &staging.handle.page_id, "fetch"), fetch_ref.as_ref());
         attach_object(&mut batch, keyspace::page_object(&run_id, &staging.handle.page_id, "ir"), ir_ref.as_ref());
-        batch.put(keyspace::run_meta(&run_id), encode(&RunMeta { seed_url: meta.seed_url, event_count: sequence })?);
-        batch.put(keyspace::report_event(&run_id, sequence), encode(&EventRecord { sequence })?);
+        for (binding, object) in &asset_refs {
+            let slot = format!("asset-{}", binding.asset_id);
+            attach_object(&mut batch, keyspace::page_object(&run_id, &staging.handle.page_id, &slot), Some(object));
+        }
+        // Link admission lands in the same fenced batch as the page record, so a
+        // page can never be visible while its discovered links are missing.
+        for item in &staging.links {
+            let item_id = keyspace::item_id_from_url(item.request_url.as_str());
+            batch.put(keyspace::frontier_item(&run_id, &item_id), encode(item)?);
+        }
+        // Report events staged by the page commit share the same batch.
+        if staging.events.is_empty() {
+            batch.put(
+                keyspace::report_event(&run_id, commit_sequence),
+                encode(&EventRecord { sequence: commit_sequence, event: None })?,
+            );
+        }
+        else {
+            for (offset, event) in staging.events.iter().enumerate() {
+                let sequence = base + offset as u64 + 1;
+                batch.put(
+                    keyspace::report_event(&run_id, sequence),
+                    encode(&EventRecord { sequence, event: Some(event.clone()) })?,
+                );
+            }
+        }
+        batch.put(keyspace::run_meta(&run_id), encode(&RunMeta { seed_url: meta.seed_url, event_count: commit_sequence })?);
         conn.commit_with_lease(&staging.lease, batch).map_err(map_yydb_error)?;
         self.page_tx = None;
         Ok(())
@@ -560,6 +651,13 @@ impl Store for YydbStore {
             }
         }
         self.read_page(run_id, page_id)?.map(|page| page.phase).ok_or_else(|| StoreError::StoreNotFound(page_id.to_owned()))
+    }
+
+    fn page_asset_refs(&self, page_id: &str) -> Result<Vec<String>> {
+        let run_id = self.active_run_id.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        self.read_page(run_id, page_id)?
+            .map(|page| page.asset_fingerprints)
+            .ok_or_else(|| StoreError::StoreNotFound(page_id.to_owned()))
     }
 
     fn put_orphan_object(&mut self, bytes: &[u8]) -> Result<()> {
@@ -766,6 +864,8 @@ fn migrate_legacy_session(conn: &Connection) -> Result<()> {
                     phase: page.phase,
                     fetch_fixture: page.fetch_fixture,
                     ir_fixture: page.ir_fixture,
+                    asset_fingerprints: Vec::new(),
+                    admitted_links: Vec::new(),
                 };
                 changes.push((keyspace::page_state(&run.run_id, &page.page_id), Some(encode(&record)?)));
             }

@@ -65,6 +65,8 @@ pub enum ReleaseOutcome {
     Done,
     /// The attempt failed and the item returns to pending with a higher attempt count.
     Requeue,
+    /// The attempt did not run, so the item returns to pending unchanged.
+    Pending,
 }
 
 /// In-flight page transaction handle.
@@ -84,6 +86,8 @@ pub enum PagePhase {
     Fetched,
     /// IR package stored.
     IrValidated,
+    /// Document assets bound to the page transaction.
+    AssetsBound,
     /// Page transaction committed.
     Committed,
 }
@@ -95,9 +99,23 @@ impl PagePhase {
             Self::Claimed => "claimed",
             Self::Fetched => "fetched",
             Self::IrValidated => "ir_validated",
+            Self::AssetsBound => "assets_bound",
             Self::Committed => "committed",
         }
     }
+}
+
+/// One document asset staged inside a page transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageAssetBinding {
+    /// Asset identity inside the document graph.
+    pub asset_id: String,
+    /// Content fingerprint used for ObjectStore deduplication.
+    pub fingerprint: String,
+    /// Media type when the extractor recorded one.
+    pub media_type: Option<String>,
+    /// Asset payload staged with the page commit.
+    pub bytes: Vec<u8>,
 }
 
 /// Doctor finding severity exposed to Crawler core.

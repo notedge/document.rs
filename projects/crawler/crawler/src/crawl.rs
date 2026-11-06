@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, HashSet};
 use boost_diagnostic::{DiagnosticSeverity, Message, MessageArg};
 use crawler_browser::{BrowserProvider, snapshot_to_fetch_artifact};
 use crawler_fetch::{FetchClient, FetchRequest, RobotsPolicy, Transport, site_key_for_url};
-use crawler_frontier::{FrontierQueue, frontier_from_links};
-use crawler_store::Store;
+use crawler_frontier::{FrontierQueue, FrontierSink, frontier_from_links};
+use crawler_store::{ClaimToken, PageAssetBinding, RunSpec, Store, keyspace::item_id_from_url};
 use crawler_types::{
     AdmissionDecision, BrowserFallbackPolicy, BrowserFallbackTrigger, ChallengeOutcome, ChallengePolicy, CrawlBudgetStatus,
     CrawlCheckpoint, CrawlError, CrawlEvent, CrawlReport, CrawlRequest, ExtractBudget, ExtractContext, ExtractResult,
@@ -15,6 +15,7 @@ use document_ir::{Block, DocumentGraph, Inline};
 use crate::{
     admission::{admit_frontier_item, seed_frontier},
     extract::{Extractor, run_extract},
+    frontier_scheduler::StoreFrontier,
     initial_report, sitemap,
     transaction::commit_page,
 };
@@ -142,10 +143,11 @@ pub fn run_crawl_with_options<T: Transport>(
     options: CrawlOptions<'_>,
 ) -> Result<CrawlOutput> {
     let state = seeded_state(&request)?;
-    run_crawl_loop(state, transport, extractors, options, None)
+    run_crawl_loop(state, transport, extractors, options, None, None)
 }
 
-/// Run a bounded crawl whose response and robots caches live in the given store.
+/// Run a bounded crawl whose frontier, page transactions and caches live in the
+/// given store.
 pub fn run_crawl_with_store<T: Transport>(
     request: CrawlRequest,
     transport: T,
@@ -153,8 +155,10 @@ pub fn run_crawl_with_store<T: Transport>(
     options: CrawlOptions<'_>,
     store: &mut dyn Store,
 ) -> Result<CrawlOutput> {
-    let state = seeded_state(&request)?;
-    run_crawl_loop(state, transport, extractors, options, Some(store))
+    let mut state = seeded_state(&request)?;
+    let mut frontier = begin_store_run(store, &request)?;
+    enqueue_state_queue(store, &mut frontier, &mut state.queue)?;
+    run_crawl_loop(state, transport, extractors, options, Some(store), Some(frontier))
 }
 
 fn seeded_state(request: &CrawlRequest) -> Result<CrawlState> {
@@ -201,6 +205,7 @@ fn resume_crawl_with_store<T: Transport>(
     store: Option<&mut dyn Store>,
 ) -> Result<CrawlOutput> {
     validate_resume_strategy(&checkpoint, options)?;
+    let politeness = checkpoint.request.politeness;
     let mut state = CrawlState {
         request: checkpoint.request,
         queue: FrontierQueue::new(),
@@ -212,8 +217,72 @@ fn resume_crawl_with_store<T: Transport>(
     if let Some(item) = checkpoint.paused_item {
         state.queue.requeue(item);
     }
+    let mut store = store;
+    let mut frontier = None;
+    if let Some(store) = store.as_deref_mut() {
+        let mut seeded = StoreFrontier::new(STORE_WORKER_ID, politeness);
+        enqueue_state_queue(store, &mut seeded, &mut state.queue)?;
+        frontier = Some(seeded);
+    }
     let resume_options = CrawlOptions { attempt_identity: checkpoint.attempt_identity.saturating_add(1), ..options };
-    run_crawl_loop(state, transport, extractors, resume_options, store)
+    run_crawl_loop(state, transport, extractors, resume_options, store, frontier)
+}
+
+/// Worker identity recorded on store claims for a local crawl run.
+const STORE_WORKER_ID: &str = "crawl-local";
+
+fn begin_store_run(store: &mut dyn Store, request: &CrawlRequest) -> Result<StoreFrontier> {
+    let seed_url = request.seeds.first().map(|seed| seed.url.to_string()).unwrap_or_default();
+    store.begin_run(RunSpec { seed_url }).map_err(store_error)?;
+    Ok(StoreFrontier::new(STORE_WORKER_ID, request.politeness))
+}
+
+fn enqueue_state_queue(store: &mut dyn Store, frontier: &mut StoreFrontier, queue: &mut FrontierQueue) -> Result<()> {
+    while let Some(item) = queue.pop() {
+        frontier.enqueue(store, item).map_err(store_error)?;
+    }
+    Ok(())
+}
+
+fn store_error(error: impl std::fmt::Display) -> CrawlError {
+    let diag = boost_diagnostic::Diagnostic::new(
+        pd::code(pd::STORE_UNAVAILABLE),
+        DiagnosticSeverity::Error,
+        pd::origin_crawl(),
+        Message::new("crawler.diagnostic.storeUnavailable").with_fallback(error.to_string()),
+    );
+    CrawlError::from(diag)
+}
+
+fn next_work(
+    state: &mut CrawlState,
+    store: &mut Option<&mut dyn Store>,
+    frontier: &mut Option<StoreFrontier>,
+) -> Result<Option<(FrontierItem, Option<ClaimToken>)>> {
+    if let (Some(store), Some(frontier)) = (store.as_deref_mut(), frontier.as_mut()) {
+        let Some(token) = frontier.next(store).map_err(store_error)?
+        else {
+            return Ok(None);
+        };
+        let item = store
+            .frontier_item(&token.item_id)
+            .map_err(store_error)?
+            .ok_or_else(|| store_error(format!("claimed frontier item `{}` disappeared", token.item_id)))?;
+        return Ok(Some((item, Some(token))));
+    }
+    Ok(state.queue.pop().map(|item| (item, None)))
+}
+
+fn finish_work(
+    store: &mut Option<&mut dyn Store>,
+    frontier: &mut Option<StoreFrontier>,
+    token: Option<&ClaimToken>,
+    paused: bool,
+) {
+    if let (Some(store), Some(frontier), Some(token)) = (store.as_deref_mut(), frontier.as_mut(), token) {
+        let result = if paused { frontier.release_pending(store, token) } else { frontier.release_done(store, token) };
+        let _ = result;
+    }
 }
 
 fn run_crawl_loop<T: Transport>(
@@ -222,6 +291,7 @@ fn run_crawl_loop<T: Transport>(
     extractors: &[&dyn Extractor],
     options: CrawlOptions<'_>,
     mut store: Option<&mut dyn Store>,
+    mut frontier: Option<StoreFrontier>,
 ) -> Result<CrawlOutput> {
     let request = state.request.clone();
     state.report.budget_status = CrawlBudgetStatus::Completed;
@@ -237,143 +307,212 @@ fn run_crawl_loop<T: Transport>(
     let extract_budget = ExtractBudget::default();
     let mut sitemap_discovered = HashSet::new();
 
-    while let Some(item) = state.queue.pop() {
+    loop {
+        let Some((item, claim)) = next_work(&mut state, &mut store, &mut frontier)?
+        else {
+            break;
+        };
         if state.requests_used >= request.budget.max_requests {
-            state.queue.requeue(item);
-            record_budget_exhausted(&mut state);
+            if claim.is_none() {
+                state.queue.requeue(item);
+            }
+            let remaining = remaining_frontier(&state, &store);
+            record_budget_exhausted(&mut state, remaining);
+            finish_work(&mut store, &mut frontier, claim.as_ref(), true);
             break;
         }
 
-        let decision = admit_frontier_item(&item, &request);
-        state.report.events.push(CrawlEvent::Admitted { url: item.request_url.clone(), decision: decision.clone() });
-        if !matches!(decision, AdmissionDecision::Admitted) {
-            state.report.skipped += 1;
-            continue;
-        }
-
-        state.requests_used += 1;
-        let fetch_request = FetchRequest { url: item.request_url.clone(), headers: BTreeMap::new() };
-        if let Some(store) = store.as_deref() {
-            if matches!(item.request_url.scheme(), "http" | "https") {
-                let site = site_key_for_url(&item.request_url);
-                if !client.robots().has_site_rules(&item.request_url) {
-                    if let Ok(Some(body)) = store.get_robots_cache(&site) {
-                        client.load_site_robots(&site, &String::from_utf8_lossy(&body));
-                    }
-                }
-            }
-            if let Ok(Some(cached)) = store.get_response_cache(&item.request_url.to_string()) {
-                client.cache_mut().put(cached);
-            }
-        }
-        let fetched = client.fetch(&fetch_request);
-        if let Some(store) = store.as_deref_mut() {
-            for (site, body) in client.take_robots_updates() {
-                let _ = store.put_robots_cache(&site, body.as_bytes(), ROBOTS_STORE_TTL);
-            }
-        }
-        let artifact = match fetched {
-            Ok(artifact) => {
-                // Classify HTTP status before feeding into extract pipeline.
-                let status_class = crawler_fetch::classify_http_status(artifact.status);
-                match status_class {
-                    crawler_fetch::HttpStatusClass::PermanentFailure => {
-                        record_skipped(&mut state, &item, &format!("permanent-http-failure:{}", artifact.status));
-                        continue;
-                    }
-                    crawler_fetch::HttpStatusClass::ClientError => {
-                        // 401/403 — don't extract, don't retry.
-                        record_skipped(&mut state, &item, &format!("client-http-error:{}", artifact.status));
-                        continue;
-                    }
-                    crawler_fetch::HttpStatusClass::Proceed | crawler_fetch::HttpStatusClass::Retryable => artifact,
-                }
-            }
-            Err(error) => {
-                record_crawl_diagnostic(&mut state, &error);
-                let fetch_error = error.to_string();
-                match try_browser_fallback(&item, options) {
-                    BrowserFallbackAttempt::Captured { snapshot, browser_engine } => {
-                        state.report.events.push(CrawlEvent::BrowserFallback {
-                            url: item.request_url.clone(),
-                            trigger: BrowserFallbackTrigger::FetchFailure,
-                            fetch_error: Some(fetch_error),
-                            browser_engine,
-                            observed_text_chars: None,
-                            observed_content_blocks: None,
-                        });
-                        match accept_browser_snapshot(&mut state, &item, snapshot, options) {
-                            Some(artifact) => {
-                                let host_key = site_key_for_url(&item.request_url);
-                                if sitemap_discovered.insert(host_key)
-                                    && !client.robots().sitemaps_for_url(&item.request_url).is_empty()
-                                {
-                                    sitemap::discover(&mut state, &item, &mut client, &mut sitemap_discovered);
-                                }
-                                process_fetched_item(
-                                    &mut state,
-                                    &item,
-                                    artifact,
-                                    extractors,
-                                    extract_budget,
-                                    &mut committed_pages,
-                                    &mut artifacts,
-                                    request.budget.max_depth,
-                                    options,
-                                    false,
-                                    false,
-                                );
-                            }
-                            None => {}
-                        }
-                        continue;
-                    }
-                    BrowserFallbackAttempt::Failed(error) => {
-                        record_browser_fallback_failure(&mut state, &item, BrowserFallbackTrigger::FetchFailure, error);
-                        continue;
-                    }
-                    BrowserFallbackAttempt::Disabled => {
-                        state.report.failed += 1;
-                        state.report.events.push(CrawlEvent::Failed { url: item.request_url.clone(), reason: fetch_error });
-                        continue;
-                    }
-                }
-            }
-        };
-
-        if let Some(store) = store.as_deref_mut() {
-            let _ = store.put_response_cache(&artifact);
-        }
-
-        let host_key = site_key_for_url(&item.request_url);
-        if sitemap_discovered.insert(host_key) {
-            if !client.robots().sitemaps_for_url(&item.request_url).is_empty() {
-                sitemap::discover(&mut state, &item, &mut client, &mut sitemap_discovered);
-            }
-        }
-
-        process_fetched_item(
+        let paused = process_one_item(
             &mut state,
-            &item,
-            artifact,
+            item,
+            &mut client,
             extractors,
             extract_budget,
             &mut committed_pages,
             &mut artifacts,
-            request.budget.max_depth,
             options,
-            true,
-            true,
-        );
+            &mut sitemap_discovered,
+            &mut store,
+            &mut frontier,
+            claim.as_ref(),
+            &request,
+        )?;
+        finish_work(&mut store, &mut frontier, claim.as_ref(), paused);
+        if paused {
+            break;
+        }
     }
 
     if state.last_paused_item.is_some() {
         state.report.budget_status = CrawlBudgetStatus::Cancelled;
-        state.report.remaining_frontier = state.queue.len() as u32;
+        state.report.remaining_frontier = remaining_frontier(&state, &store);
     }
     let checkpoint = if state.last_paused_item.is_some() { Some(build_checkpoint(&state, options)) } else { None };
 
     Ok(CrawlOutput { report: state.report, committed_pages, artifacts, checkpoint })
+}
+
+fn remaining_frontier(state: &CrawlState, store: &Option<&mut dyn Store>) -> u32 {
+    match store.as_deref() {
+        Some(store) => store.pending_frontier_count().unwrap_or(0) as u32,
+        None => state.queue.len() as u32,
+    }
+}
+
+/// Process one claimed or queued item and report whether it paused the run.
+#[allow(clippy::too_many_arguments)]
+fn process_one_item<T: Transport>(
+    state: &mut CrawlState,
+    item: FrontierItem,
+    client: &mut FetchClient<T>,
+    extractors: &[&dyn Extractor],
+    extract_budget: ExtractBudget,
+    committed_pages: &mut Vec<String>,
+    artifacts: &mut Vec<FetchArtifact>,
+    options: CrawlOptions<'_>,
+    sitemap_discovered: &mut HashSet<String>,
+    store: &mut Option<&mut dyn Store>,
+    frontier: &mut Option<StoreFrontier>,
+    claim: Option<&ClaimToken>,
+    request: &CrawlRequest,
+) -> Result<bool> {
+    let decision = admit_frontier_item(&item, request);
+    state.report.events.push(CrawlEvent::Admitted { url: item.request_url.clone(), decision: decision.clone() });
+    if !matches!(decision, AdmissionDecision::Admitted) {
+        state.report.skipped += 1;
+        return Ok(false);
+    }
+
+    state.requests_used += 1;
+    let fetch_request = FetchRequest { url: item.request_url.clone(), headers: BTreeMap::new() };
+    if let Some(store) = store.as_deref() {
+        if matches!(item.request_url.scheme(), "http" | "https") {
+            let site = site_key_for_url(&item.request_url);
+            if !client.robots().has_site_rules(&item.request_url) {
+                if let Ok(Some(body)) = store.get_robots_cache(&site) {
+                    client.load_site_robots(&site, &String::from_utf8_lossy(&body));
+                }
+            }
+        }
+        if let Ok(Some(cached)) = store.get_response_cache(&item.request_url.to_string()) {
+            client.cache_mut().put(cached);
+        }
+    }
+    let fetched = client.fetch(&fetch_request);
+    if let Some(store) = store.as_deref_mut() {
+        for (site, body) in client.take_robots_updates() {
+            let _ = store.put_robots_cache(&site, body.as_bytes(), ROBOTS_STORE_TTL);
+        }
+    }
+    let artifact = match fetched {
+        Ok(artifact) => {
+            // Classify HTTP status before feeding into extract pipeline.
+            let status_class = crawler_fetch::classify_http_status(artifact.status);
+            match status_class {
+                crawler_fetch::HttpStatusClass::PermanentFailure => {
+                    record_skipped(state, &item, &format!("permanent-http-failure:{}", artifact.status));
+                    return Ok(false);
+                }
+                crawler_fetch::HttpStatusClass::ClientError => {
+                    // 401/403 — don't extract, don't retry.
+                    record_skipped(state, &item, &format!("client-http-error:{}", artifact.status));
+                    return Ok(false);
+                }
+                crawler_fetch::HttpStatusClass::Proceed | crawler_fetch::HttpStatusClass::Retryable => artifact,
+            }
+        }
+        Err(error) => {
+            record_crawl_diagnostic(state, &error);
+            let fetch_error = error.to_string();
+            match try_browser_fallback(&item, options) {
+                BrowserFallbackAttempt::Captured { snapshot, browser_engine } => {
+                    state.report.events.push(CrawlEvent::BrowserFallback {
+                        url: item.request_url.clone(),
+                        trigger: BrowserFallbackTrigger::FetchFailure,
+                        fetch_error: Some(fetch_error),
+                        browser_engine,
+                        observed_text_chars: None,
+                        observed_content_blocks: None,
+                    });
+                    if let Some(artifact) = accept_browser_snapshot(state, &item, snapshot, options) {
+                        discover_sitemap(state, &item, client, sitemap_discovered, store, frontier)?;
+                        process_fetched_item(
+                            state,
+                            &item,
+                            artifact,
+                            extractors,
+                            extract_budget,
+                            committed_pages,
+                            artifacts,
+                            request.budget.max_depth,
+                            options,
+                            false,
+                            false,
+                            store,
+                            frontier,
+                            claim,
+                        );
+                    }
+                    return Ok(item_paused(state, &item));
+                }
+                BrowserFallbackAttempt::Failed(error) => {
+                    record_browser_fallback_failure(state, &item, BrowserFallbackTrigger::FetchFailure, error);
+                    return Ok(false);
+                }
+                BrowserFallbackAttempt::Disabled => {
+                    state.report.failed += 1;
+                    state.report.events.push(CrawlEvent::Failed { url: item.request_url.clone(), reason: fetch_error });
+                    return Ok(false);
+                }
+            }
+        }
+    };
+
+    if let Some(store) = store.as_deref_mut() {
+        let _ = store.put_response_cache(&artifact);
+    }
+
+    discover_sitemap(state, &item, client, sitemap_discovered, store, frontier)?;
+    process_fetched_item(
+        state,
+        &item,
+        artifact,
+        extractors,
+        extract_budget,
+        committed_pages,
+        artifacts,
+        request.budget.max_depth,
+        options,
+        true,
+        true,
+        store,
+        frontier,
+        claim,
+    );
+    Ok(item_paused(state, &item))
+}
+
+fn item_paused(state: &CrawlState, item: &FrontierItem) -> bool {
+    state.last_paused_item.as_ref().is_some_and(|paused| paused.request_url == item.request_url)
+}
+
+fn discover_sitemap<T: Transport>(
+    state: &mut CrawlState,
+    item: &FrontierItem,
+    client: &mut FetchClient<T>,
+    sitemap_discovered: &mut HashSet<String>,
+    store: &mut Option<&mut dyn Store>,
+    frontier: &mut Option<StoreFrontier>,
+) -> Result<()> {
+    let host_key = site_key_for_url(&item.request_url);
+    if !sitemap_discovered.insert(host_key) || client.robots().sitemaps_for_url(&item.request_url).is_empty() {
+        return Ok(());
+    }
+    sitemap::discover(state, item, client, sitemap_discovered);
+    if let (Some(store), Some(frontier)) = (store.as_deref_mut(), frontier.as_mut()) {
+        enqueue_state_queue(store, frontier, &mut state.queue)?;
+    }
+    Ok(())
 }
 
 enum BrowserFallbackAttempt {
@@ -484,7 +623,11 @@ fn process_fetched_item(
     options: CrawlOptions<'_>,
     record_fetched: bool,
     allow_low_yield_fallback: bool,
+    store: &mut Option<&mut dyn Store>,
+    frontier: &mut Option<StoreFrontier>,
+    claim: Option<&ClaimToken>,
 ) {
+    let event_start = state.report.events.events().len();
     let cache_hit = artifact.transport_provenance == crawler_types::TransportProvenance::CacheHit;
     if record_fetched {
         state.report.events.push(CrawlEvent::Fetched { url: artifact.final_url.clone(), status: artifact.status, cache_hit });
@@ -546,15 +689,57 @@ fn process_fetched_item(
 
     state.report.extracted += 1;
     let discovered = extract.discovered_links.clone();
+    let document = extract.document.clone();
     let page_identity = item.request_url.to_string();
     let transaction = PageTransaction { page_identity: page_identity.clone(), extract, discovered_links: discovered.clone() };
     match commit_page(transaction) {
         Ok(committed_identity) => {
+            let committed_event = CrawlEvent::Committed { page_identity: committed_identity.clone() };
+            let page_events: Vec<CrawlEvent> = state.report.events.events()[event_start..].to_vec();
+            // Admitted links are staged in the page transaction when a store is
+            // present, so the page record and its frontier links cannot diverge.
+            let links = if store.is_some() {
+                let mut sink = StagedLinks::new(frontier.as_ref());
+                frontier_from_links(&mut sink, item, &discovered, max_depth)
+            }
+            else {
+                frontier_from_links(&mut state.queue, item, &discovered, max_depth)
+            };
+            let discovered_events: Vec<CrawlEvent> =
+                links.iter().map(|next| CrawlEvent::Discovered { url: next.request_url.clone(), depth: next.depth }).collect();
+            if let Some(store) = store.as_deref_mut() {
+                let worker_id = claim.map(|claim| claim.worker_id.as_str()).unwrap_or(STORE_WORKER_ID);
+                let written = write_page_transaction(
+                    store,
+                    worker_id,
+                    &page_identity,
+                    &artifact,
+                    document.as_ref(),
+                    &page_events,
+                    &committed_event,
+                    &discovered_events,
+                    &links,
+                );
+                if let Err(error) = written {
+                    let _ = store.abort_page_tx();
+                    let CrawlError::Diagnostic(d) = &error;
+                    state.report.push_diagnostic(d.clone());
+                    state.report.failed += 1;
+                    state.report.events.push(CrawlEvent::Failed { url: item.request_url.clone(), reason: error.to_string() });
+                    return;
+                }
+                if let Some(frontier) = frontier.as_mut() {
+                    frontier.note_admitted(&links);
+                }
+            }
             state.report.committed += 1;
-            state.report.events.push(CrawlEvent::Committed { page_identity: committed_identity.clone() });
+            state.report.events.push(committed_event);
             committed_pages.push(committed_identity);
             if state.last_paused_item.as_ref().is_some_and(|paused| paused.request_url == item.request_url) {
                 state.last_paused_item = None;
+            }
+            for next in discovered_events {
+                state.report.events.push(next);
             }
         }
         Err(error) => {
@@ -565,10 +750,75 @@ fn process_fetched_item(
             return;
         }
     }
+}
 
-    for next in frontier_from_links(&mut state.queue, item, &discovered, max_depth) {
-        state.report.events.push(CrawlEvent::Discovered { url: next.request_url.clone(), depth: next.depth });
+/// Deduplicate discovered links against the store frontier before the page
+/// commit stages them.
+struct StagedLinks<'a> {
+    frontier: Option<&'a StoreFrontier>,
+    seen: HashSet<String>,
+}
+
+impl<'a> StagedLinks<'a> {
+    fn new(frontier: Option<&'a StoreFrontier>) -> Self {
+        Self { frontier, seen: HashSet::new() }
     }
+}
+
+impl FrontierSink for StagedLinks<'_> {
+    fn push(&mut self, item: FrontierItem) -> bool {
+        let key = item.request_url.to_string();
+        if self.frontier.is_some_and(|frontier| frontier.contains(&item_id_from_url(&key))) {
+            return false;
+        }
+        self.seen.insert(key)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_page_transaction(
+    store: &mut dyn Store,
+    worker_id: &str,
+    page_identity: &str,
+    artifact: &FetchArtifact,
+    document: Option<&DocumentGraph>,
+    page_events: &[CrawlEvent],
+    committed_event: &CrawlEvent,
+    discovered_events: &[CrawlEvent],
+    links: &[FrontierItem],
+) -> Result<()> {
+    store.begin_page_tx(worker_id).map_err(store_error)?;
+    store.page_tx_put_fetch(page_identity, artifact.body_bytes().unwrap_or_default()).map_err(store_error)?;
+    if let Some(document) = document {
+        let bytes = serde_json::to_vec(document).map_err(|error| store_error(format!("IR serialization failed: {error}")))?;
+        store.page_tx_put_ir(page_identity, &bytes).map_err(store_error)?;
+        for asset in &document.assets {
+            let Some(bytes) = asset.bytes.as_deref()
+            else {
+                continue;
+            };
+            if bytes.is_empty() {
+                continue;
+            }
+            let fingerprint = asset.content_identity.clone().unwrap_or_else(|| crate::assets::fingerprint(bytes));
+            let binding = PageAssetBinding {
+                asset_id: asset.id.0.to_string(),
+                fingerprint,
+                media_type: asset.media_type.clone(),
+                bytes: bytes.to_vec(),
+            };
+            store.page_tx_bind_asset(&binding).map_err(store_error)?;
+        }
+    }
+    for event in page_events {
+        store.page_tx_put_event(event).map_err(store_error)?;
+    }
+    store.page_tx_put_event(committed_event).map_err(store_error)?;
+    for event in discovered_events {
+        store.page_tx_put_event(event).map_err(store_error)?;
+    }
+    store.page_tx_admit_links(links.to_vec()).map_err(store_error)?;
+    store.commit_page_tx().map_err(store_error)
 }
 
 fn extract_artifact(
@@ -671,8 +921,7 @@ fn record_skipped(state: &mut CrawlState, item: &FrontierItem, reason: &str) {
 }
 
 /// Mark the run budget-exhausted and keep the pending frontier visible.
-fn record_budget_exhausted(state: &mut CrawlState) {
-    let remaining = state.queue.len() as u32;
+fn record_budget_exhausted(state: &mut CrawlState, remaining: u32) {
     state.report.budget_status = CrawlBudgetStatus::Exhausted;
     state.report.remaining_frontier = remaining;
     let diagnostic = boost_diagnostic::Diagnostic::new(
