@@ -10,8 +10,12 @@ use crawler_store::frontier_item_from_contract;
 /// Host partition used by every contract case.
 pub const HOST: &str = "example.com";
 
-/// Lease used by contract cases that do not exercise expiry.
-pub const TEST_LEASE: Duration = Duration::from_millis(400);
+/// Lease used by contract cases that exercise expiry.
+///
+/// Short enough to expire inside a crash fixture and long enough that a
+/// parallel test run cannot expire it between `claim_next` and
+/// `begin_page_tx`.
+pub const TEST_LEASE: Duration = Duration::from_secs(2);
 
 /// Lease used by long claim loops so a loaded machine cannot expire mid-case.
 pub const LONG_LEASE: Duration = Duration::from_secs(30);

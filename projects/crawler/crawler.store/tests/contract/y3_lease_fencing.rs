@@ -6,9 +6,6 @@ use crawler_store::{RunSpec, StoreError};
 
 use crate::contract::support::{HOST, TEST_LEASE, assert_both, item};
 
-/// Longer than `TEST_LEASE` so the claim has certainly expired.
-const EXPIRY_WAIT: Duration = Duration::from_millis(600);
-
 #[test]
 fn y3_stale_fencing_is_rejected_and_expired_claims_are_reclaimed() {
     assert_both!("y3", TEST_LEASE, |store, backend| {
@@ -22,7 +19,7 @@ fn y3_stale_fencing_is_rejected_and_expired_claims_are_reclaimed() {
             "stale fencing token must be rejected"
         );
 
-        thread::sleep(EXPIRY_WAIT);
+        thread::sleep(TEST_LEASE + Duration::from_millis(250));
         let fresh = store.claim_next(HOST, "w2").expect("claim").expect("expired claim reclaimed");
         assert_eq!(fresh.item_id, stale.item_id);
         assert!(
