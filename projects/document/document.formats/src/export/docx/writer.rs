@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use document_ir::{
     AssetId, AssetKind, Block, BreakKind, DocumentGraph, Inline, ListItem, MathDelimiter, MathDelimiterKind, MathEnvironment,
-    MathEnvironmentKind, MathExpression, MathFractionLine, MathSpace, NodeId, RelationEndpoint, TableRow,
+    MathEnvironmentKind, MathExpression, MathFractionLine, MathSpace, MathStyle, NodeId, RelationEndpoint, TableRow,
 };
 
 use crate::FormatError;
@@ -145,7 +145,7 @@ fn write_block(
         }
         Block::Math { formula } => {
             out.push_str("<w:p><m:oMathPara><m:oMath>");
-            write_math_expression(out, &formula.expression)?;
+            write_math_expression(out, &formula.expression, None)?;
             out.push_str("</m:oMath></m:oMathPara></w:p>");
         }
         Block::Opaque { payload_hint, .. } => {
@@ -480,7 +480,7 @@ fn write_inline_with_properties(
         }
         Inline::InlineMath { formula } => {
             out.push_str("<m:oMath>");
-            write_math_expression(out, &formula.expression)?;
+            write_math_expression(out, &formula.expression, None)?;
             out.push_str("</m:oMath>");
         }
         Inline::Reference { display, .. } => {
@@ -562,45 +562,46 @@ fn write_inline_with_properties(
 /// Lower one semantic math expression to OMML.
 ///
 /// The exporter renders the IR expression instead of re-parsing the authored
-/// source. Fragments the lowering marked as unsupported keep their authored
-/// text inside a math run, so the formula stays visible without inventing
-/// structure.
-fn write_math_expression(out: &mut String, expression: &MathExpression) -> Result<(), FormatError> {
+/// source. `face` carries the enclosing [`MathStyle`] down to the runs, so a
+/// styled body such as `\mathbf{x}` becomes `m:sty` or `m:scr` run properties.
+/// Fragments the lowering marked as unsupported keep their authored text inside
+/// a math run, so the formula stays visible without inventing structure.
+fn write_math_expression(out: &mut String, expression: &MathExpression, face: Option<MathStyle>) -> Result<(), FormatError> {
     match expression {
         MathExpression::Sequence(items) => {
             for item in items {
-                write_math_expression(out, item)?;
+                write_math_expression(out, item, face)?;
             }
         }
-        MathExpression::Atom(atom) => write_math_run(out, &atom.text)?,
-        MathExpression::Number { text, .. } => write_math_run(out, text)?,
-        MathExpression::Text { text, .. } => write_math_run(out, text)?,
-        MathExpression::Group { body } => write_math_expression(out, body)?,
+        MathExpression::Atom(atom) => write_math_run(out, &atom.text, face)?,
+        MathExpression::Number { text, .. } => write_math_run(out, text, face)?,
+        MathExpression::Text { text, .. } => write_math_run_normal(out, text)?,
+        MathExpression::Group { body } => write_math_expression(out, body, face)?,
         MathExpression::Script { base, superscript, subscript } => match (superscript, subscript) {
             (Some(superscript), Some(subscript)) => {
                 out.push_str("<m:sSubSup><m:e>");
-                write_math_expression(out, base)?;
+                write_math_expression(out, base, face)?;
                 out.push_str("</m:e><m:sub>");
-                write_math_expression(out, subscript)?;
+                write_math_expression(out, subscript, face)?;
                 out.push_str("</m:sub><m:sup>");
-                write_math_expression(out, superscript)?;
+                write_math_expression(out, superscript, face)?;
                 out.push_str("</m:sup></m:sSubSup>");
             }
             (Some(superscript), None) => {
                 out.push_str("<m:sSup><m:e>");
-                write_math_expression(out, base)?;
+                write_math_expression(out, base, face)?;
                 out.push_str("</m:e><m:sup>");
-                write_math_expression(out, superscript)?;
+                write_math_expression(out, superscript, face)?;
                 out.push_str("</m:sup></m:sSup>");
             }
             (None, Some(subscript)) => {
                 out.push_str("<m:sSub><m:e>");
-                write_math_expression(out, base)?;
+                write_math_expression(out, base, face)?;
                 out.push_str("</m:e><m:sub>");
-                write_math_expression(out, subscript)?;
+                write_math_expression(out, subscript, face)?;
                 out.push_str("</m:sub></m:sSub>");
             }
-            (None, None) => write_math_expression(out, base)?,
+            (None, None) => write_math_expression(out, base, face)?,
         },
         MathExpression::Fraction { numerator, denominator, line } => {
             out.push_str("<m:f>");
@@ -608,9 +609,9 @@ fn write_math_expression(out: &mut String, expression: &MathExpression) -> Resul
                 out.push_str("<m:fPr><m:fType m:val=\"noBar\"/></m:fPr>");
             }
             out.push_str("<m:num>");
-            write_math_expression(out, numerator)?;
+            write_math_expression(out, numerator, face)?;
             out.push_str("</m:num><m:den>");
-            write_math_expression(out, denominator)?;
+            write_math_expression(out, denominator, face)?;
             out.push_str("</m:den></m:f>");
         }
         MathExpression::Radical { index, radicand, .. } => {
@@ -618,13 +619,13 @@ fn write_math_expression(out: &mut String, expression: &MathExpression) -> Resul
             match index {
                 Some(index) => {
                     out.push_str("<m:deg>");
-                    write_math_expression(out, index)?;
+                    write_math_expression(out, index, face)?;
                     out.push_str("</m:deg>");
                 }
                 None => out.push_str("<m:radPr><m:degHide m:val=\"1\"/></m:radPr><m:deg/>"),
             }
             out.push_str("<m:e>");
-            write_math_expression(out, radicand)?;
+            write_math_expression(out, radicand, face)?;
             out.push_str("</m:e></m:rad>");
         }
         MathExpression::Delimited { open, close, body, middles } => {
@@ -633,51 +634,74 @@ fn write_math_expression(out: &mut String, expression: &MathExpression) -> Resul
             out.push_str("\"/><m:endChr m:val=\"");
             write_xml_text(out, &delimiter_char(close.as_ref(), false))?;
             out.push_str("\"/></m:dPr><m:e>");
-            write_math_expression(out, body)?;
+            write_math_expression(out, body, face)?;
             out.push_str("</m:e>");
             for middle in middles {
                 out.push_str("<m:e>");
-                write_math_expression(out, middle)?;
+                write_math_expression(out, middle, face)?;
                 out.push_str("</m:e>");
             }
             out.push_str("</m:d>");
         }
-        MathExpression::Styled { body, .. } => write_math_expression(out, body)?,
+        MathExpression::Styled { style, body } => write_math_expression(out, body, Some(*style))?,
         MathExpression::Accent { mark, base, .. } => {
             out.push_str("<m:acc><m:accPr><m:chr m:val=\"");
             write_xml_text(out, &mark.to_string())?;
             out.push_str("\"/></m:accPr><m:e>");
-            write_math_expression(out, base)?;
+            write_math_expression(out, base, face)?;
             out.push_str("</m:e></m:acc>");
         }
         MathExpression::StackAbove { over, base } => {
             out.push_str("<m:limUpp><m:e>");
-            write_math_expression(out, base)?;
+            write_math_expression(out, base, face)?;
             out.push_str("</m:e><m:lim>");
-            write_math_expression(out, over)?;
+            write_math_expression(out, over, face)?;
             out.push_str("</m:lim></m:limUpp>");
         }
         MathExpression::StackBelow { under, base } => {
             out.push_str("<m:limLow><m:e>");
-            write_math_expression(out, base)?;
+            write_math_expression(out, base, face)?;
             out.push_str("</m:e><m:lim>");
-            write_math_expression(out, under)?;
+            write_math_expression(out, under, face)?;
             out.push_str("</m:lim></m:limLow>");
         }
-        MathExpression::Relation(body) => write_math_expression(out, body)?,
-        MathExpression::Space { kind } => write_math_run(out, math_space_text(*kind))?,
+        MathExpression::Relation(body) => write_math_expression(out, body, face)?,
+        MathExpression::Space { kind } => write_math_run(out, math_space_text(*kind), None)?,
         MathExpression::StyleSwitch { .. } | MathExpression::LimitsPolicy { .. } => {}
-        MathExpression::Environment(environment) => write_math_environment(out, environment)?,
-        MathExpression::Unsupported { source, .. } => write_math_run(out, source)?,
+        MathExpression::Environment(environment) => write_math_environment(out, environment, face)?,
+        MathExpression::Unsupported { source, .. } => write_math_run(out, source, None)?,
     }
     Ok(())
 }
 
-fn write_math_run(out: &mut String, text: &str) -> Result<(), FormatError> {
+fn write_math_run(out: &mut String, text: &str, face: Option<MathStyle>) -> Result<(), FormatError> {
     if text.is_empty() {
         return Ok(());
     }
-    out.push_str("<m:r><m:t");
+    out.push_str("<m:r>");
+    if let Some(style) = face {
+        let (element, value) = math_face(style);
+        out.push_str("<m:rPr><");
+        out.push_str(element);
+        out.push_str(" m:val=\"");
+        out.push_str(value);
+        out.push_str("\"/></m:rPr>");
+    }
+    write_math_text(out, text)
+}
+
+/// Text authored inside `\text{...}` is upright prose, so OMML marks it as
+/// normal text instead of math italics.
+fn write_math_run_normal(out: &mut String, text: &str) -> Result<(), FormatError> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    out.push_str("<m:r><m:rPr><m:nor/></m:rPr>");
+    write_math_text(out, text)
+}
+
+fn write_math_text(out: &mut String, text: &str) -> Result<(), FormatError> {
+    out.push_str("<m:t");
     if text.chars().any(char::is_whitespace) {
         out.push_str(" xml:space=\"preserve\"");
     }
@@ -685,6 +709,20 @@ fn write_math_run(out: &mut String, text: &str) -> Result<(), FormatError> {
     write_xml_text(out, text)?;
     out.push_str("</m:t></m:r>");
     Ok(())
+}
+
+/// OMML run properties for a semantic math face.
+fn math_face(style: MathStyle) -> (&'static str, &'static str) {
+    match style {
+        MathStyle::Upright => ("m:sty", "p"),
+        MathStyle::Italic => ("m:sty", "i"),
+        MathStyle::Bold => ("m:sty", "b"),
+        MathStyle::DoubleStruck => ("m:scr", "double-struck"),
+        MathStyle::Script => ("m:scr", "script"),
+        MathStyle::Fraktur => ("m:scr", "fraktur"),
+        MathStyle::SansSerif => ("m:scr", "sans-serif"),
+        MathStyle::Monospace => ("m:scr", "monospace"),
+    }
 }
 
 fn math_space_text(kind: MathSpace) -> &'static str {
@@ -699,7 +737,7 @@ fn math_space_text(kind: MathSpace) -> &'static str {
     }
 }
 
-fn write_math_environment(out: &mut String, environment: &MathEnvironment) -> Result<(), FormatError> {
+fn write_math_environment(out: &mut String, environment: &MathEnvironment, face: Option<MathStyle>) -> Result<(), FormatError> {
     let cases = environment.kind == MathEnvironmentKind::Cases;
     if cases {
         out.push_str("<m:d><m:dPr><m:begChr m:val=\"{\"/><m:endChr m:val=\"\"/></m:dPr><m:e>");
@@ -709,7 +747,7 @@ fn write_math_environment(out: &mut String, environment: &MathEnvironment) -> Re
         out.push_str("<m:mr>");
         for cell in &row.cells {
             out.push_str("<m:e>");
-            write_math_expression(out, cell)?;
+            write_math_expression(out, cell, face)?;
             out.push_str("</m:e>");
         }
         out.push_str("</m:mr>");

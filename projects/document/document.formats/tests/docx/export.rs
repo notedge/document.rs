@@ -780,6 +780,105 @@ fn docx_export_keeps_cases_environment_rows_as_a_matrix() {
     assert!(xml.contains("<m:m><m:mr>"), "cases rows become an OMML matrix");
 }
 
+fn math_atom(text: &str) -> document_ir::MathExpression {
+    document_ir::MathExpression::Atom(document_ir::MathAtom {
+        text: text.into(),
+        class: document_ir::MathClass::Identifier,
+        span: None,
+    })
+}
+
+#[test]
+fn docx_export_maps_semantic_math_faces_to_run_properties() {
+    let mut graph = DocumentGraph::new(DocumentId(64));
+    graph.push_block(Block::Math {
+        formula: document_ir::MathFormula {
+            source: "\\mathbf{x}+\\mathbb{R}+\\text{kg}".into(),
+            language: Some("latex".into()),
+            display: document_ir::MathDisplay::Display,
+            expression: document_ir::MathExpression::Sequence(vec![
+                document_ir::MathExpression::Styled { style: document_ir::MathStyle::Bold, body: Box::new(math_atom("x")) },
+                document_ir::MathExpression::Styled {
+                    style: document_ir::MathStyle::DoubleStruck,
+                    body: Box::new(math_atom("R")),
+                },
+                document_ir::MathExpression::Text { text: "kg".into(), span: None },
+            ]),
+        },
+    });
+    let exported = export_docx_bytes(&graph).expect("export styled math");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains(r#"<m:r><m:rPr><m:sty m:val="b"/></m:rPr><m:t>x</m:t></m:r>"#), "a bold face becomes `m:sty`: {xml}");
+    assert!(
+        xml.contains(r#"<m:r><m:rPr><m:scr m:val="double-struck"/></m:rPr><m:t>R</m:t></m:r>"#),
+        "a double-struck face becomes `m:scr`: {xml}"
+    );
+    assert!(xml.contains(r#"<m:r><m:rPr><m:nor/></m:rPr><m:t>kg</m:t></m:r>"#), r"`\text{{...}}` stays upright prose: {xml}");
+}
+
+#[test]
+fn docx_export_covers_math_expression_variants_with_omml() {
+    let mut graph = DocumentGraph::new(DocumentId(65));
+    graph.push_block(Block::Math {
+        formula: document_ir::MathFormula {
+            source: "variants".into(),
+            language: Some("latex".into()),
+            display: document_ir::MathDisplay::Display,
+            expression: document_ir::MathExpression::Sequence(vec![
+                document_ir::MathExpression::Radical { index: None, radicand: Box::new(math_atom("x")), span: None },
+                document_ir::MathExpression::Radical {
+                    index: Some(Box::new(document_ir::MathExpression::Number { text: "3".into(), span: None })),
+                    radicand: Box::new(math_atom("y")),
+                    span: None,
+                },
+                document_ir::MathExpression::Delimited {
+                    open: Some(document_ir::MathDelimiter {
+                        kind: document_ir::MathDelimiterKind::Bracket,
+                        character: Some('['),
+                        span: None,
+                    }),
+                    close: Some(document_ir::MathDelimiter {
+                        kind: document_ir::MathDelimiterKind::Bracket,
+                        character: Some(']'),
+                        span: None,
+                    }),
+                    body: Box::new(math_atom("a")),
+                    middles: vec![math_atom("b")],
+                },
+                document_ir::MathExpression::Accent { mark: '^', wide: false, base: Box::new(math_atom("c")), span: None },
+                document_ir::MathExpression::StackAbove { over: Box::new(math_atom("1")), base: Box::new(math_atom("d")) },
+                document_ir::MathExpression::StackBelow { under: Box::new(math_atom("2")), base: Box::new(math_atom("e")) },
+                document_ir::MathExpression::Script {
+                    base: Box::new(math_atom("f")),
+                    superscript: None,
+                    subscript: Some(Box::new(math_atom("g"))),
+                },
+                document_ir::MathExpression::Fraction {
+                    numerator: Box::new(math_atom("h")),
+                    denominator: Box::new(math_atom("i")),
+                    line: document_ir::MathFractionLine::None,
+                },
+            ]),
+        },
+    });
+    let exported = export_docx_bytes(&graph).expect("export math variants");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(
+        xml.contains("<m:rad><m:radPr><m:degHide m:val=\"1\"/></m:radPr><m:deg/>"),
+        "a root without an index hides the degree: {xml}"
+    );
+    assert!(xml.contains("<m:rad><m:deg><m:r><m:t>3</m:t></m:r></m:deg>"), "a cube root keeps its index: {xml}");
+    assert!(
+        xml.contains("<m:d><m:dPr><m:begChr m:val=\"[\"/><m:endChr m:val=\"]\"/></m:dPr><m:e>"),
+        "a delimited body keeps both brackets: {xml}"
+    );
+    assert!(xml.contains("<m:acc><m:accPr><m:chr m:val=\"^\"/></m:accPr>"), "an accent keeps its mark: {xml}");
+    assert!(xml.contains("<m:limUpp>"), "stack above becomes `m:limUpp`: {xml}");
+    assert!(xml.contains("<m:limLow>"), "stack below becomes `m:limLow`: {xml}");
+    assert!(xml.contains("<m:sSub>"), "a subscript-only script becomes `m:sSub`: {xml}");
+    assert!(xml.contains("<m:fPr><m:fType m:val=\"noBar\"/></m:fPr>"), "a barless fraction keeps `fType`: {xml}");
+}
+
 #[test]
 fn docx_export_keeps_unsupported_math_fragments_as_visible_text() {
     let mut graph = DocumentGraph::new(DocumentId(62));
