@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::Duration,
+};
 
 use boost_diagnostic::{DiagnosticSeverity, Message, MessageArg};
 use crawler_browser::{BrowserProvider, snapshot_to_fetch_artifact};
@@ -34,6 +37,10 @@ pub const LOW_YIELD_MIN_TEXT_CHARS: u64 = 64;
 /// Minimum number of content-bearing `notedown-ir` blocks an HTTP extraction
 /// must yield before the crawl accepts the fetched page as real content.
 pub const LOW_YIELD_MIN_CONTENT_BLOCKS: u32 = 1;
+
+/// Maximum fetch attempts for one frontier item before it is completed as
+/// failed. Attempt one has `attempts == 0` on the item.
+pub const MAX_FETCH_ATTEMPTS: u32 = 5;
 
 /// Inline `<script>` payload size from which a page may be considered
 /// script-dominant rather than content-dominant.
@@ -123,6 +130,20 @@ pub struct CrawlState {
     pub report: CrawlReport,
     /// Last frontier item paused for operator action.
     pub last_paused_item: Option<FrontierItem>,
+}
+
+/// How one claimed frontier item leaves the work loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkOutcome {
+    /// The item is finished and leaves the frontier.
+    Done,
+    /// The item paused the run and returns to pending unchanged.
+    Paused,
+    /// The store should requeue the item with an advanced attempt count.
+    Retry {
+        /// Server-requested host delay from `Retry-After`.
+        retry_after: Option<Duration>,
+    },
 }
 
 /// Output of a crawl run.
@@ -269,12 +290,24 @@ fn next_work(
 fn finish_work(
     store: &mut Option<&mut dyn Store>,
     frontier: &mut Option<StoreFrontier>,
+    queue: &mut FrontierQueue,
+    item: &FrontierItem,
     token: Option<&ClaimToken>,
-    paused: bool,
+    outcome: WorkOutcome,
 ) {
     if let (Some(store), Some(frontier), Some(token)) = (store.as_deref_mut(), frontier.as_mut(), token) {
-        let result = if paused { frontier.release_pending(store, token) } else { frontier.release_done(store, token) };
+        let result = match outcome {
+            WorkOutcome::Done => frontier.release_done(store, token),
+            WorkOutcome::Paused => frontier.release_pending(store, token),
+            WorkOutcome::Retry { retry_after } => frontier.release_failed(store, token, item.attempts, retry_after),
+        };
         let _ = result;
+        return;
+    }
+    if let WorkOutcome::Retry { .. } = outcome {
+        let mut retry = item.clone();
+        retry.attempts = retry.attempts.saturating_add(1);
+        queue.requeue(retry);
     }
 }
 
@@ -309,7 +342,7 @@ fn run_crawl_loop<T: Transport>(
             // The claim was already taken, so return it to pending instead of
             // letting it ride out the lease. Work not yet admitted is dropped.
             if claim.is_some() {
-                finish_work(&mut store, &mut frontier, claim.as_ref(), true);
+                finish_work(&mut store, &mut frontier, &mut state.queue, &item, claim.as_ref(), WorkOutcome::Paused);
             }
             else {
                 state.queue.requeue(item);
@@ -319,17 +352,17 @@ fn run_crawl_loop<T: Transport>(
         }
         if state.requests_used >= request.budget.max_requests {
             if claim.is_none() {
-                state.queue.requeue(item);
+                state.queue.requeue(item.clone());
             }
             let remaining = remaining_frontier(&state, &store);
             record_budget_exhausted(&mut state, remaining);
-            finish_work(&mut store, &mut frontier, claim.as_ref(), true);
+            finish_work(&mut store, &mut frontier, &mut state.queue, &item, claim.as_ref(), WorkOutcome::Paused);
             break;
         }
 
-        let paused = process_one_item(
+        let outcome = process_one_item(
             &mut state,
-            item,
+            &item,
             &mut client,
             extractors,
             extract_budget,
@@ -342,8 +375,10 @@ fn run_crawl_loop<T: Transport>(
             claim.as_ref(),
             &request,
         )?;
-        finish_work(&mut store, &mut frontier, claim.as_ref(), paused);
-        if paused {
+        finish_work(&mut store, &mut frontier, &mut state.queue, &item, claim.as_ref(), outcome);
+        // Without a store the in-memory queue has no host scheduler, so the
+        // retry is immediate and only bounded by the attempt cap.
+        if outcome == WorkOutcome::Paused {
             break;
         }
     }
@@ -386,11 +421,11 @@ fn record_cancelled(state: &mut CrawlState, store: &Option<&mut dyn Store>) {
     state.report.push_diagnostic(diagnostic);
 }
 
-/// Process one claimed or queued item and report whether it paused the run.
+/// Process one claimed or queued item and report how it leaves the frontier.
 #[allow(clippy::too_many_arguments)]
 fn process_one_item<T: Transport>(
     state: &mut CrawlState,
-    item: FrontierItem,
+    item: &FrontierItem,
     client: &mut FetchClient<T>,
     extractors: &[&dyn Extractor],
     extract_budget: ExtractBudget,
@@ -402,12 +437,12 @@ fn process_one_item<T: Transport>(
     frontier: &mut Option<StoreFrontier>,
     claim: Option<&ClaimToken>,
     request: &CrawlRequest,
-) -> Result<bool> {
-    let decision = admit_frontier_item(&item, request);
+) -> Result<WorkOutcome> {
+    let decision = admit_frontier_item(item, request);
     state.report.events.push(CrawlEvent::Admitted { url: item.request_url.clone(), decision: decision.clone() });
     if !matches!(decision, AdmissionDecision::Admitted) {
         state.report.skipped += 1;
-        return Ok(false);
+        return Ok(WorkOutcome::Done);
     }
 
     state.requests_used += 1;
@@ -437,26 +472,31 @@ fn process_one_item<T: Transport>(
             let status_class = crawler_fetch::classify_http_status(artifact.status);
             match status_class {
                 crawler_fetch::HttpStatusClass::PermanentFailure => {
-                    record_skipped(state, &item, &format!("permanent-http-failure:{}", artifact.status));
-                    return Ok(false);
+                    record_skipped(state, item, &format!("permanent-http-failure:{}", artifact.status));
+                    return Ok(WorkOutcome::Done);
                 }
                 crawler_fetch::HttpStatusClass::ClientError => {
                     // 401/403 — don't extract, don't retry.
-                    record_skipped(state, &item, &format!("client-http-error:{}", artifact.status));
-                    return Ok(false);
+                    record_skipped(state, item, &format!("client-http-error:{}", artifact.status));
+                    return Ok(WorkOutcome::Done);
                 }
-                crawler_fetch::HttpStatusClass::Proceed | crawler_fetch::HttpStatusClass::Retryable => artifact,
+                crawler_fetch::HttpStatusClass::Retryable => {
+                    let retry_after = crawler_fetch::retry_after_delay(&artifact);
+                    let reason = format!("retryable-http-status:{}", artifact.status);
+                    return Ok(retry_or_exhaust(state, item, &reason, retry_after));
+                }
+                crawler_fetch::HttpStatusClass::Proceed => artifact,
             }
         }
         Err(error) => {
             if error.code().is_some_and(|code| code == pd::ROBOTS_DENIED) {
                 record_crawl_diagnostic(state, &error);
-                record_skipped(state, &item, "robots-denied");
-                return Ok(false);
+                record_skipped(state, item, "robots-denied");
+                return Ok(WorkOutcome::Done);
             }
             record_crawl_diagnostic(state, &error);
             let fetch_error = error.to_string();
-            match try_browser_fallback(&item, options) {
+            match try_browser_fallback(item, options) {
                 BrowserFallbackAttempt::Captured { snapshot, browser_engine } => {
                     state.report.events.push(CrawlEvent::BrowserFallback {
                         url: item.request_url.clone(),
@@ -466,11 +506,11 @@ fn process_one_item<T: Transport>(
                         observed_text_chars: None,
                         observed_content_blocks: None,
                     });
-                    if let Some(artifact) = accept_browser_snapshot(state, &item, snapshot, options) {
-                        discover_sitemap(state, &item, client, sitemap_discovered, store, frontier)?;
+                    if let Some(artifact) = accept_browser_snapshot(state, item, snapshot, options) {
+                        discover_sitemap(state, item, client, sitemap_discovered, store, frontier)?;
                         process_fetched_item(
                             state,
-                            &item,
+                            item,
                             artifact,
                             extractors,
                             extract_budget,
@@ -485,16 +525,14 @@ fn process_one_item<T: Transport>(
                             claim,
                         );
                     }
-                    return Ok(item_paused(state, &item));
+                    return Ok(work_outcome(state, item));
                 }
                 BrowserFallbackAttempt::Failed(error) => {
-                    record_browser_fallback_failure(state, &item, BrowserFallbackTrigger::FetchFailure, error);
-                    return Ok(false);
+                    record_browser_fallback_failure(state, item, BrowserFallbackTrigger::FetchFailure, error);
+                    return Ok(WorkOutcome::Done);
                 }
                 BrowserFallbackAttempt::Disabled => {
-                    state.report.failed += 1;
-                    state.report.events.push(CrawlEvent::Failed { url: item.request_url.clone(), reason: fetch_error });
-                    return Ok(false);
+                    return Ok(retry_or_exhaust(state, item, &fetch_error, None));
                 }
             }
         }
@@ -504,10 +542,10 @@ fn process_one_item<T: Transport>(
         let _ = store.put_response_cache(&artifact);
     }
 
-    discover_sitemap(state, &item, client, sitemap_discovered, store, frontier)?;
+    discover_sitemap(state, item, client, sitemap_discovered, store, frontier)?;
     process_fetched_item(
         state,
-        &item,
+        item,
         artifact,
         extractors,
         extract_budget,
@@ -521,11 +559,50 @@ fn process_one_item<T: Transport>(
         frontier,
         claim,
     );
-    Ok(item_paused(state, &item))
+    Ok(work_outcome(state, item))
 }
 
 fn item_paused(state: &CrawlState, item: &FrontierItem) -> bool {
     state.last_paused_item.as_ref().is_some_and(|paused| paused.request_url == item.request_url)
+}
+
+fn work_outcome(state: &CrawlState, item: &FrontierItem) -> WorkOutcome {
+    if item_paused(state, item) { WorkOutcome::Paused } else { WorkOutcome::Done }
+}
+
+/// Requeue a failed attempt through the frontier until the attempt cap is hit.
+///
+/// The store advances `attempts` on requeue. The host scheduler applies the
+/// policy backoff and extends it with any `Retry-After` window. Exhausted
+/// items leave the frontier as done with a diagnostic instead of retrying
+/// forever.
+fn retry_or_exhaust(state: &mut CrawlState, item: &FrontierItem, reason: &str, retry_after: Option<Duration>) -> WorkOutcome {
+    let attempt_number = item.attempts.saturating_add(1);
+    if attempt_number >= MAX_FETCH_ATTEMPTS {
+        state.report.failed += 1;
+        state
+            .report
+            .events
+            .push(CrawlEvent::Failed { url: item.request_url.clone(), reason: format!("retry-exhausted:{reason}") });
+        let diagnostic = boost_diagnostic::Diagnostic::new(
+            pd::code(pd::FETCH_RETRY_EXHAUSTED),
+            DiagnosticSeverity::Warning,
+            pd::origin_fetch(),
+            Message::new("crawler.diagnostic.fetchRetryExhausted")
+                .with_arg("url", MessageArg::Text(item.request_url.to_string()))
+                .with_arg("attempts", MessageArg::U64(u64::from(attempt_number)))
+                .with_arg("reason", MessageArg::Text(reason.to_string()))
+                .with_fallback(format!(
+                    "retry attempts exhausted for `{}` after {attempt_number} attempt(s): {reason}",
+                    item.request_url
+                )),
+        );
+        state.report.push_diagnostic(diagnostic);
+        WorkOutcome::Done
+    }
+    else {
+        WorkOutcome::Retry { retry_after }
+    }
 }
 
 fn discover_sitemap<T: Transport>(

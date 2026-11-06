@@ -236,10 +236,6 @@ name = "boost-log"
 version = "0.1.0"
 
 [[package]]
-name = "boost-random"
-version = "0.1.0"
-
-[[package]]
 name = "boost-source"
 version = "0.1.0"
 dependencies = [
@@ -329,6 +325,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
+name = "core_detect"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
+
+[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -389,6 +391,7 @@ dependencies = [
  "crawler-types",
  "document-formats",
  "document-ir",
+ "encoding_rs",
  "url",
 ]
 
@@ -399,7 +402,6 @@ dependencies = [
  "boost-diagnostic",
  "boost-http",
  "boost-log",
- "boost-random",
  "crawler-types",
  "serde",
  "url",
@@ -868,6 +870,20 @@ dependencies = [
  "document-ir",
  "serde",
  "url",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89253175e704ab869b04f9db224d38630e0211a53841a79181deae0889e169f5"
+dependencies = [
+ "cfg-if",
+ "core_detect",
+ "multiversion_no_op",
+ "rustversion",
+ "scopeguard",
+ "simdutf8",
 ]
 
 [[package]]
@@ -1473,6 +1489,12 @@ checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
 ]
+
+[[package]]
+name = "multiversion_no_op"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 
 [[package]]
 name = "naga"
@@ -2341,6 +2363,12 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "simdutf8"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
 name = "slab"
@@ -3359,4 +3387,8 @@ version = "0.0.12"
 
 [[patch.unused]]
 name = "boost-benchmark"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "boost-random"
 version = "0.1.0"

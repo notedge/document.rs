@@ -17,7 +17,7 @@ mod robots_txt;
 mod select;
 
 pub use cache::ResponseCache;
-pub use client::{FetchClient, HttpStatusClass, classify_http_status, fetch_url};
+pub use client::{FetchClient, HttpStatusClass, classify_http_status, fetch_url, retry_after_delay};
 pub use file::FileTransport;
 pub use http::{DEFAULT_FETCH_BODY_BUDGET_BYTES, HttpTransport};
 pub use memory::{MemoryEntry, MemoryTransport};

@@ -10,13 +10,19 @@ use document_ir::{Block, DocumentGraph, SourceKind};
 use url::Url;
 
 fn artifact(page: &str, html: &str) -> FetchArtifact {
+    artifact_bytes(page, "text/html", html.as_bytes().to_vec())
+}
+
+fn artifact_bytes(page: &str, content_type: &str, body: Vec<u8>) -> FetchArtifact {
+    let mut response_headers = BTreeMap::new();
+    response_headers.insert("content-type".into(), content_type.into());
     FetchArtifact {
         request_url: Url::parse(page).expect("url"),
         final_url: Url::parse(page).expect("url"),
         status: 200,
-        response_headers: BTreeMap::new(),
-        content_type: Some("text/html".into()),
-        body: BodyStorage::inline(html.as_bytes().to_vec()),
+        response_headers,
+        content_type: Some(content_type.into()),
+        body: BodyStorage::inline(body),
         redirect_chain: Vec::new(),
         retrieved_at_epoch: 1,
         transport_provenance: TransportProvenance::Test,
@@ -221,20 +227,66 @@ fn html_links_resolve_against_page_base_and_keep_crawl_relations() {
 }
 
 #[test]
-fn import_failure_preserves_notedown_format_code_in_loss() {
-    // Use invalid UTF-8 bytes so notedown-formats HTML import hits the
-    // `from_utf8` guard and returns `FormatError::parse("html", ...)`.
-    let mut artifact = artifact("https://example.com/broken.html", "<html></html>");
-    // Override with non-UTF-8 bytes — invalid UTF-8 triggers FormatError::parse.
-    artifact.body = crawler_types::BodyStorage::inline(vec![0xFF, 0xFE, 0x80]);
+fn utf8_bom_overrides_transport_and_meta_charsets() {
+    let bytes = b"\xEF\xBB\xBF<html><head><meta charset=\"windows-1252\"></head><body>caf\xC3\xA9</body></html>".to_vec();
+    let artifact = artifact_bytes("https://example.com/bom.html", "text/html; charset=windows-1252", bytes);
+    let result = HtmlExtractor
+        .extract(ExtractInput { artifact: &artifact, budget: ExtractBudget::default() }, &ExtractContext::default());
+
+    assert_eq!(result.status, ExtractStatus::Partial, "{:?}", result.losses);
+    let document = result.document.expect("document");
+    let text = document.metadata.title.as_deref().unwrap_or("");
+    assert!(text.is_empty());
+    assert!(plain_text(&document).contains("café"), "BOM must win over conflicting transport charset");
+}
+
+#[test]
+fn transport_charset_decodes_legacy_body_without_meta() {
+    let bytes = b"<html><body>caf\xE9</body></html>".to_vec();
+    let artifact = artifact_bytes("https://example.com/latin1.html", "text/html; charset=iso-8859-1", bytes);
+    let result = HtmlExtractor
+        .extract(ExtractInput { artifact: &artifact, budget: ExtractBudget::default() }, &ExtractContext::default());
+
+    let document = result.document.expect("document");
+    assert!(plain_text(&document).contains("café"), "Content-Type charset must decode legacy bytes");
+}
+
+#[test]
+fn meta_charset_is_used_when_transport_has_none() {
+    let bytes = b"<html><head><meta charset=\"windows-1252\"></head><body>caf\xE9</body></html>".to_vec();
+    let artifact = artifact_bytes("https://example.com/meta.html", "text/html", bytes);
+    let result = HtmlExtractor
+        .extract(ExtractInput { artifact: &artifact, budget: ExtractBudget::default() }, &ExtractContext::default());
+
+    let document = result.document.expect("document");
+    assert!(plain_text(&document).contains("café"), "meta charset must decode legacy bytes");
+}
+
+#[test]
+fn undecodable_body_is_a_failed_extraction() {
+    let artifact = artifact_bytes("https://example.com/broken.html", "text/html", vec![b'<', 0xFF, 0x80, b'>']);
     let result = HtmlExtractor
         .extract(ExtractInput { artifact: &artifact, budget: ExtractBudget::default() }, &ExtractContext::default());
 
     assert_eq!(result.status, ExtractStatus::Failed);
-    // The primary loss must carry a `notedown.format.*` code from the
-    // formats-layer Diagnostic, not a free-form Crawler-only string.
-    let primary_code = result.losses.first().map(|l| l.code.as_str()).unwrap_or("");
-    assert!(primary_code.starts_with("notedown.format."), "expected notedown.format.* code, got {primary_code:?}");
-    // Crawler-side context loss must still be present.
-    assert!(result.losses.iter().any(|l| l.code == "crawler.extract.html_import_failed"));
+    assert!(result.document.is_none());
+    let loss = result.losses.first().expect("encoding loss");
+    assert_eq!(loss.code, "crawler.extract.encoding_failed");
+    assert!(loss.message.contains("malformed"), "{:?}", loss.message);
+}
+
+fn plain_text(document: &DocumentGraph) -> String {
+    document.blocks.iter().map(|node| block_text(&node.block)).collect::<Vec<_>>().join(" ")
+}
+
+fn block_text(block: &Block) -> String {
+    match block {
+        Block::Section { title, .. } => inline_text(title),
+        Block::Paragraph { content } | Block::Quote { content, .. } => inline_text(content),
+        _ => String::new(),
+    }
+}
+
+fn inline_text(inlines: &[document_ir::Inline]) -> String {
+    inlines.iter().map(document_ir::Inline::plain_text).collect::<Vec<_>>().join("")
 }

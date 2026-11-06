@@ -1,9 +1,12 @@
 use blake3::Hash;
-use crawler_fetch::{FetchClient, FetchRequest, Transport};
+use crawler_fetch::{FetchClient, FetchRequest, HttpStatusClass, Transport, classify_http_status, retry_after_delay};
 use crawler_types::Result;
 use document_ir::{DocumentGraph, LossMarker, SemanticStatus};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, thread, time::Duration};
 use url::Url;
+
+/// Maximum fetch attempts for one unresolved asset.
+const ASSET_MAX_ATTEMPTS: u32 = 5;
 
 /// Download and materialize unresolved document assets through the fetch layer.
 pub fn hydrate_assets<T: Transport>(
@@ -36,7 +39,7 @@ pub fn hydrate_assets<T: Transport>(
                 continue;
             }
         };
-        let artifact = match client.fetch(&FetchRequest { url, headers: BTreeMap::new() }) {
+        let artifact = match fetch_asset(client, &url) {
             Ok(artifact) => artifact,
             Err(error) => {
                 document.push_loss(asset_loss("fetch_failed", &source, error.to_string()));
@@ -68,6 +71,27 @@ pub fn hydrate_assets<T: Transport>(
         }
     }
     Ok(hydrated)
+}
+
+/// Fetch one asset, retrying retryable HTTP statuses without transport sleeps.
+fn fetch_asset<T: Transport>(client: &mut FetchClient<T>, url: &Url) -> Result<crawler_types::FetchArtifact> {
+    let mut retry_after: Option<Duration> = None;
+    for attempt in 0..ASSET_MAX_ATTEMPTS {
+        if let Some(delay) = retry_after.take() {
+            if !delay.is_zero() {
+                thread::sleep(delay);
+            }
+        }
+        let artifact = client.fetch(&FetchRequest { url: url.clone(), headers: BTreeMap::new() })?;
+        if !matches!(classify_http_status(artifact.status), HttpStatusClass::Retryable) {
+            return Ok(artifact);
+        }
+        if attempt + 1 >= ASSET_MAX_ATTEMPTS {
+            return Ok(artifact);
+        }
+        retry_after = retry_after_delay(&artifact).or(Some(Duration::from_millis(250)));
+    }
+    unreachable!("the final attempt returns inside the loop")
 }
 
 /// Blake3 hex fingerprint for asset bytes.

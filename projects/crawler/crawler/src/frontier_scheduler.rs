@@ -133,6 +133,16 @@ impl HostScheduler {
         state.next_available_ms = now_ms.saturating_add(backoff);
     }
 
+    /// Defer one host by an explicit delay without changing its concurrency.
+    ///
+    /// Used for `Retry-After`: other hosts keep running while this host sits
+    /// out the server-requested window.
+    pub fn defer(&mut self, host: &str, now_ms: u64, delay: Duration) {
+        let until = now_ms.saturating_add(delay.as_millis() as u64);
+        let state = self.state.entry(host.to_owned()).or_default();
+        state.next_available_ms = state.next_available_ms.max(until);
+    }
+
     /// Record that the store had no claimable item for this host.
     ///
     /// The host is retried after [`Self::empty_retry`] because the pending item
@@ -270,11 +280,22 @@ impl StoreFrontier {
     /// Requeue a failed item with its attempt count advanced and a host backoff.
     ///
     /// `attempts` is the count the item had on this attempt, before the store
-    /// advances it.
-    pub fn release_failed(&mut self, store: &mut dyn Store, token: &ClaimToken, attempts: u32) -> crawler_store::Result<()> {
+    /// advances it. `retry_after` extends the host deferral when the server
+    /// asked for a longer window than the policy backoff.
+    pub fn release_failed(
+        &mut self,
+        store: &mut dyn Store,
+        token: &ClaimToken,
+        attempts: u32,
+        retry_after: Option<Duration>,
+    ) -> crawler_store::Result<()> {
         store.release_claim(token, ReleaseOutcome::Requeue)?;
         if let Some(host) = self.host_by_item.get(&token.item_id) {
-            self.scheduler.on_failure(host, now_millis(), attempts);
+            let now = now_millis();
+            self.scheduler.on_failure(host, now, attempts);
+            if let Some(delay) = retry_after {
+                self.scheduler.defer(host, now, delay);
+            }
         }
         Ok(())
     }

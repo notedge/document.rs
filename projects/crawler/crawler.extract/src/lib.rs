@@ -8,6 +8,7 @@ use crawler_types::{
 };
 use document_formats::import::html::{HtmlImport, HtmlLink, HtmlLinkRole, import_html_bytes_with_links};
 
+mod encoding;
 mod html;
 mod inspect;
 
@@ -58,9 +59,11 @@ pub fn run_extract(
     }
 }
 
-/// Import an HTML page through `notedown-formats`, receiving raw bytes so
-/// invalid UTF-8 trips the `FormatError::parse` path and produces a stable
-/// `notedown.format.parse-failed` diagnostic rather than a lossy round-trip.
+/// Import a decoded HTML page through `notedown-formats`.
+///
+/// `HtmlExtractor` sniffs the character encoding first and always passes UTF-8
+/// bytes here, so a source-declared legacy charset does not become a parse
+/// failure.
 pub(crate) fn import_html_page(page_url: &url::Url, bytes: &[u8]) -> Result<HtmlImport, document_formats::FormatError> {
     import_html_bytes_with_links(&page_url.to_string(), bytes)
 }

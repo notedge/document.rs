@@ -49,6 +49,25 @@ fn host_scheduler_partitions_claims_and_honours_concurrency() {
 }
 
 #[test]
+fn retry_after_defers_only_the_affected_host() {
+    let mut scheduler = fast_scheduler()
+        .with_host_policy("a.test", HostPolicy::new(1, Duration::ZERO))
+        .with_host_policy("b.test", HostPolicy::new(1, Duration::ZERO));
+    scheduler.note_queued("a.test", 0);
+    scheduler.note_queued("b.test", 0);
+    scheduler.on_claim("a.test", 0);
+    scheduler.on_release("a.test", 0);
+    scheduler.defer("a.test", 0, Duration::from_secs(2));
+
+    assert_eq!(scheduler.select(0).as_deref(), Some("b.test"), "the other host keeps running");
+    assert_eq!(scheduler.select(1_999).as_deref(), Some("b.test"));
+    assert_eq!(scheduler.select(2_000).as_deref(), Some("b.test"), "b.test is still the earliest host");
+    scheduler.on_claim("b.test", 2_000);
+    scheduler.on_release("b.test", 2_000);
+    assert!(scheduler.select(2_000).as_deref() == Some("a.test"), "a.test returns after its Retry-After window");
+}
+
+#[test]
 fn expired_claim_is_reclaimed_after_restart_and_stale_release_is_rejected() {
     let mut store = MemoryStore::open(StoreConfig::memory().with_claim_lease(LEASE)).expect("open");
     begin(&mut store, "https://a.test/");

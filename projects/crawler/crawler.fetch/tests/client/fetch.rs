@@ -6,7 +6,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crawler_fetch::{FetchClient, MemoryEntry, MemoryTransport, RobotsPolicy, Transport, fetch_url, site_key_for_url};
+use crawler_fetch::{
+    FetchClient, MemoryEntry, MemoryTransport, RobotsPolicy, Transport, fetch_url, retry_after_delay, site_key_for_url,
+};
 use crawler_types::{BodyStorage, CrawlError, FetchArtifact, HttpStatus, PolitenessProfile, TransportProvenance};
 use url::Url;
 
@@ -133,36 +135,33 @@ fn failed_transport_attempt_keeps_site_timing_state() {
 }
 
 #[test]
-fn retries_429_after_retry_after_header_until_success() {
+fn retryable_status_is_returned_without_transport_retry_or_sleep() {
     let url = Url::parse("file:///seq").expect("url");
-    let transport = SeqTransport::new(vec![
-        Ok(SeqTransport::artifact(
-            url.as_str(),
-            429,
-            BTreeMap::from([("retry-after".into(), "1".into())]),
-            b"rate-limited".as_slice(),
-        )),
-        Ok(SeqTransport::artifact(url.as_str(), 200, Default::default(), b"ok".as_slice())),
-    ]);
+    let transport = SeqTransport::new(vec![Ok(SeqTransport::artifact(
+        url.as_str(),
+        429,
+        BTreeMap::from([("retry-after".into(), "1".into())]),
+        b"rate-limited".as_slice(),
+    ))]);
     let mut client = FetchClient::new(transport.clone(), RobotsPolicy::from_profile(PolitenessProfile::Developer));
     let started = Instant::now();
-    let artifact = fetch_url(&mut client, url).expect("success after retry");
-    assert_eq!(artifact.status, 200);
-    assert!(started.elapsed() >= Duration::from_millis(900), "Retry-After should have caused at least 1s delay");
-    assert_eq!(transport.remaining(), 0, "both queued artifacts should be consumed");
+    let artifact = fetch_url(&mut client, url).expect("retryable status stays an artifact");
+    assert_eq!(artifact.status, 429);
+    assert!(started.elapsed() < Duration::from_millis(500), "the transport must not sleep on retry");
+    assert_eq!(transport.remaining(), 0, "only one attempt is made");
+    assert_eq!(retry_after_delay(&artifact), Some(Duration::from_secs(1)));
 }
 
 #[test]
-fn retries_stop_after_max_attempts_and_keep_final_status() {
+fn retry_after_requires_a_numeric_header() {
     let url = Url::parse("file:///seq").expect("url");
-    let transport = SeqTransport::new(vec![
-        Ok(SeqTransport::artifact(url.as_str(), 429, BTreeMap::from([("retry-after".into(), "1".into())]), b"too-busy")),
-        Ok(SeqTransport::artifact(url.as_str(), 429, BTreeMap::from([("retry-after".into(), "1".into())]), b"too-busy")),
-        Ok(SeqTransport::artifact(url.as_str(), 429, BTreeMap::from([("retry-after".into(), "1".into())]), b"too-busy")),
-        Ok(SeqTransport::artifact(url.as_str(), 429, BTreeMap::from([("retry-after".into(), "1".into())]), b"too-busy")),
-    ]);
-    let mut client = FetchClient::new(transport.clone(), RobotsPolicy::from_profile(PolitenessProfile::Developer));
-    let artifact = fetch_url(&mut client, url).expect("final 429 returned as artifact");
-    assert_eq!(artifact.status, 429, "retry loop should stop after MAX_HTTP_RETRIES");
-    assert_eq!(transport.remaining(), 0, "all queued artifacts should be consumed (1 initial + 3 retries)");
+    let without = SeqTransport::artifact(url.as_str(), 503, BTreeMap::new(), b"busy");
+    assert_eq!(retry_after_delay(&without), None);
+    let with_date = SeqTransport::artifact(
+        url.as_str(),
+        503,
+        BTreeMap::from([("retry-after".into(), "Wed, 21 Oct 2015 07:28:00 GMT".into())]),
+        b"busy",
+    );
+    assert_eq!(retry_after_delay(&with_date), None, "HTTP-date Retry-After is not supported");
 }

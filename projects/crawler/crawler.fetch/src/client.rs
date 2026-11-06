@@ -5,18 +5,10 @@ use std::{
 };
 
 use boost_diagnostic::{DiagnosticSeverity, Message, MessageArg};
-use boost_random::{Random, Secure};
 use crawler_types::{CrawlError, FetchArtifact, Result, TransportProvenance, diagnostics as pd};
 use url::Url;
 
 use super::{FetchRequest, Transport, cache::ResponseCache, robots::RobotsPolicy, robots_txt::site_key_for_url};
-
-/// Maximum retries for retryable HTTP status codes with `Retry-After` or exponential backoff.
-const MAX_HTTP_RETRIES: usize = 3;
-
-/// Fraction of the computed backoff used as a symmetric ±jitter window.
-/// The final delay is `backoff ± backoff * JITTER_FRACTION`.
-const JITTER_FRACTION: f64 = 0.25;
 
 /// Classify an HTTP response status for crawl policy decisions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,41 +34,13 @@ pub fn classify_http_status(status: u16) -> HttpStatusClass {
     }
 }
 
-/// Whether an HTTP status warrants a retry after a delay.
-fn is_retryable_status(status: u16) -> bool {
-    matches!(classify_http_status(status), HttpStatusClass::Retryable)
-}
-
-/// Compute the delay before the next retry attempt.
+/// Delay requested by a `Retry-After` header, in numeric seconds.
 ///
-/// Prefers the `Retry-After` header (numeric seconds only); falls back to
-/// exponential backoff bounded at 30 seconds with ±25% jitter. Returns `None`
-/// when the status is not retryable.
-fn compute_retry_delay(artifact: &FetchArtifact, attempt: usize) -> Option<Duration> {
-    if !is_retryable_status(artifact.status) {
-        return None;
-    }
-    if let Some(raw) = artifact.response_headers.get("retry-after") {
-        if let Ok(seconds) = raw.trim().parse::<u64>() {
-            return Some(Duration::from_secs(seconds));
-        }
-    }
-    let base_secs = 2u64.pow(attempt.min(4) as u32).min(30);
-    let jittered = apply_jitter(base_secs);
-    Some(Duration::from_secs(jittered.max(1)))
-}
-
-/// Apply ±25% jitter to a base seconds value.
-///
-/// Uses the current monotonic clock's nanosecond fraction as a cheap random
-/// source so we don't need a dedicated RNG dependency.
-fn apply_jitter(base: u64) -> u64 {
-    // Sample a uniform f64 in [0, 1) from the OS entropy source.
-    let frac = Random::new(Secure::system()).unit_f64().unwrap_or_else(|_| 0.5);
-    // Map to [-1, 1], scale by JITTER_FRACTION, apply symmetric ±jitter.
-    let offset = (frac - 0.5) * 2.0 * JITTER_FRACTION;
-    let jittered = base as f64 * (1.0 + offset);
-    jittered.round() as u64
+/// The transport never sleeps on retries: the orchestrator requeues the
+/// frontier item and delays only the affected host by this value.
+pub fn retry_after_delay(artifact: &FetchArtifact) -> Option<Duration> {
+    let raw = artifact.response_headers.get("retry-after")?;
+    raw.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
 /// Fetch orchestration with robots checks and response caching.
@@ -162,21 +126,17 @@ impl<T: Transport> FetchClient<T> {
 
         self.wait_for_crawl_delay(&request.url);
         self.last_site_requests.insert(site_key_for_url(&request.url), Instant::now());
-        let mut artifact = self.transport.fetch(request)?;
+        let artifact = self.transport.fetch(request)?;
 
-        for attempt in 0..MAX_HTTP_RETRIES {
-            let Some(delay) = compute_retry_delay(&artifact, attempt)
-            else {
-                break;
-            };
-            thread::sleep(delay);
-            self.wait_for_crawl_delay(&request.url);
-            self.last_site_requests.insert(site_key_for_url(&request.url), Instant::now());
-            artifact = self.transport.fetch(request)?;
+        // Only successful responses are cacheable. Retryable and error
+        // statuses stay out of the cache so the orchestrator's retry
+        // revalidates them against the network instead of replaying a cached
+        // failure.
+        if (200..300).contains(&artifact.status) {
+            let key = self.cache.put(artifact);
+            return Ok(self.cache.get(&key).cloned().expect("artifact inserted into cache"));
         }
-
-        let key = self.cache.put(artifact);
-        Ok(self.cache.get(&key).cloned().expect("artifact inserted into cache"))
+        Ok(artifact)
     }
 
     fn try_revalidate(&mut self, request: &FetchRequest, cached: &FetchArtifact) -> Result<Option<FetchArtifact>> {

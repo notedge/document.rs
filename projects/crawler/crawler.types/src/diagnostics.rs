@@ -98,6 +98,8 @@ pub const FETCH_TLS_FAILED: &str = "crawler.fetch.tls-failed";
 pub const FETCH_BODY_BUDGET: &str = "crawler.fetch.body-budget";
 /// Response body (gzip / brotli / raw) failed to decode.
 pub const FETCH_DECODE_FAILED: &str = "crawler.fetch.decode-failed";
+/// Retry attempts were exhausted and the frontier item was completed as failed.
+pub const FETCH_RETRY_EXHAUSTED: &str = "crawler.fetch.retry-exhausted";
 
 // ── robots ──
 
@@ -213,6 +215,7 @@ mod tests {
             FETCH_TLS_FAILED,
             FETCH_BODY_BUDGET,
             FETCH_DECODE_FAILED,
+            FETCH_RETRY_EXHAUSTED,
             ROBOTS_DENIED,
             ROBOTS_UNAVAILABLE,
             ROBOTS_PARSE_FAILED,

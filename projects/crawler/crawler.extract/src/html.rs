@@ -4,7 +4,7 @@ use crawler_types::{
 use document_formats::from_format_error;
 use document_ir::{Block, DocumentGraph, DocumentId, Inline, LossMarker, SemanticStatus, SourceKind, SourceSpan};
 
-use super::{Extractor, import_html_page, link_candidates_from_import, resolve_base_url};
+use super::{Extractor, encoding::decode_html, import_html_page, link_candidates_from_import, resolve_base_url};
 
 /// HTML extractor backed by the `notedown-formats` HTML import.
 ///
@@ -30,8 +30,11 @@ impl Extractor for HtmlExtractor {
     fn extract(&self, input: ExtractInput<'_>, ctx: &ExtractContext) -> ExtractResult {
         let artifact = input.artifact;
         let label = artifact.final_url.to_string();
-        let bytes = artifact.body_bytes().unwrap_or(&[]);
-        let import = match import_html_page(&artifact.final_url, bytes) {
+        let decoded = match decode_html(artifact) {
+            Ok(text) => text,
+            Err(error) => return decode_failure(artifact, &error),
+        };
+        let import = match import_html_page(&artifact.final_url, decoded.as_bytes()) {
             Ok(import) => import,
             Err(format_error) => {
                 // Preserve the `notedown.format.*` code and typed args so
@@ -92,6 +95,27 @@ impl Extractor for HtmlExtractor {
             losses,
             extractor: "html".into(),
         }
+    }
+}
+
+/// Report an undecodable HTML body as a failed extraction.
+///
+/// Encoding is an extractor capability, so the crawl treats an undecodable
+/// body as a permanent page failure instead of retrying it through the
+/// frontier.
+fn decode_failure(artifact: &FetchArtifact, error: &super::encoding::DecodeError) -> ExtractResult {
+    let message = error.message();
+    ExtractResult {
+        status: ExtractStatus::Failed,
+        source_url: artifact.final_url.clone(),
+        document: None,
+        discovered_links: Vec::new(),
+        losses: vec![LossMarker {
+            code: "crawler.extract.encoding_failed".into(),
+            message: message.clone(),
+            status: SemanticStatus::Partial,
+        }],
+        extractor: "html".into(),
     }
 }
 

@@ -5,7 +5,6 @@ pub const REJECT_UNSUPPORTED_SCHEME: &str = "crawler.reject.unsupported-scheme";
 /// URL host is outside the run scope allow-list.
 pub const REJECT_OUT_OF_SCOPE: &str = "crawler.reject.out-of-scope";
 pub const REJECT_DEPTH_EXCEEDED: &str = "crawler.reject.depth-exceeded";
-pub const REJECT_RETRY_EXHAUSTED: &str = "crawler.reject.retry-exhausted";
 
 /// Evaluate whether a frontier item may proceed to fetch.
 pub fn admit_frontier_item(item: &FrontierItem, request: &CrawlRequest) -> AdmissionDecision {
@@ -19,10 +18,6 @@ pub fn admit_frontier_item(item: &FrontierItem, request: &CrawlRequest) -> Admis
 
     if item.depth > request.budget.max_depth {
         return AdmissionDecision::Rejected { reason: REJECT_DEPTH_EXCEEDED.into() };
-    }
-
-    if item.attempts > 0 && item.attempts > 3 {
-        return AdmissionDecision::Rejected { reason: REJECT_RETRY_EXHAUSTED.into() };
     }
 
     AdmissionDecision::Admitted

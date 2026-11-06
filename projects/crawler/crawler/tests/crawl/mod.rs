@@ -1,16 +1,23 @@
 //! Extracted from `src/crawl.rs`.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use crawler::{
     CancelSignal, CrawlOptions, Extractor, FixtureBrowserProvider, HtmlExtractor, resume_crawl_from_store, run_crawl,
     run_crawl_with_options, run_crawl_with_store, run_extract,
 };
-use crawler_fetch::{MemoryEntry, MemoryTransport};
+use crawler_fetch::{FetchRequest, MemoryEntry, MemoryTransport, Transport, build_artifact};
 use crawler_store::{MemoryStore, Store, StoreConfig};
 use crawler_types::{
-    BrowserFallbackPolicy, BrowserSnapshot, ChallengePolicy, CrawlBudgetStatus, CrawlEvent, CrawlRequest, CrawlScope,
-    ExtractBudget, ExtractContext, ExtractStatus, PageChallengeState, diagnostics as pd,
+    BodyStorage, BrowserFallbackPolicy, BrowserSnapshot, ChallengePolicy, CrawlBudgetStatus, CrawlEvent, CrawlRequest,
+    CrawlScope, ExtractBudget, ExtractContext, ExtractStatus, FetchArtifact, PageChallengeState, PolitenessProfile,
+    TransportProvenance, diagnostics as pd,
 };
 use url::Url;
 
@@ -580,4 +587,136 @@ fn robots_denied_pages_are_skipped_not_failed() {
         event,
         CrawlEvent::Skipped { reason, .. } if reason == "robots-denied"
     )));
+}
+
+/// Transport that plays page responses in FIFO order and answers robots.txt
+/// with a 404 so the fallback policy applies.
+#[derive(Clone)]
+struct RetryTransport {
+    responses: Arc<Mutex<VecDeque<MemoryEntry>>>,
+    page_attempts: Arc<AtomicUsize>,
+}
+
+impl RetryTransport {
+    fn new(responses: Vec<MemoryEntry>) -> Self {
+        Self { responses: Arc::new(Mutex::new(VecDeque::from(responses))), page_attempts: Arc::new(AtomicUsize::new(0)) }
+    }
+
+    fn attempts(&self) -> usize {
+        self.page_attempts.load(Ordering::SeqCst)
+    }
+}
+
+impl Transport for RetryTransport {
+    fn fetch(&self, request: &FetchRequest) -> crawler_types::Result<FetchArtifact> {
+        if request.url.path() == "/robots.txt" {
+            return Ok(build_artifact(
+                request.url.clone(),
+                request.url.clone(),
+                404,
+                BTreeMap::new(),
+                BodyStorage::inline(Vec::new()),
+                Vec::new(),
+                TransportProvenance::Test,
+                None,
+            ));
+        }
+        self.page_attempts.fetch_add(1, Ordering::SeqCst);
+        let entry = {
+            let mut responses = self.responses.lock().expect("responses");
+            if responses.len() > 1 {
+                responses.pop_front().expect("queued response")
+            }
+            else {
+                responses.front().expect("final response").clone()
+            }
+        };
+        Ok(build_artifact(
+            request.url.clone(),
+            request.url.clone(),
+            entry.status,
+            entry.headers,
+            BodyStorage::Inline(entry.body),
+            Vec::new(),
+            TransportProvenance::Test,
+            None,
+        ))
+    }
+}
+
+fn retry_entry(status: u16, body: &[u8]) -> MemoryEntry {
+    MemoryEntry { status, headers: BTreeMap::from([("retry-after".into(), "0".into())]), body: body.to_vec() }
+}
+
+fn html_entry(title: &str) -> MemoryEntry {
+    MemoryEntry {
+        status: 200,
+        headers: BTreeMap::from([("content-type".into(), "text/html".into())]),
+        body: format!("<html><head><title>{title}</title></head><body>{title}</body></html>").into_bytes(),
+    }
+}
+
+#[test]
+fn retryable_http_status_is_requeued_until_success() {
+    let transport = RetryTransport::new(vec![retry_entry(503, b"busy"), html_entry("Recovered")]);
+    let mut request = CrawlRequest::from_seed("https://example.com/").expect("seed");
+    request.politeness = PolitenessProfile::Developer;
+    let html = HtmlExtractor;
+    let extractors: [&dyn Extractor; 1] = [&html];
+    let output = run_crawl(request, transport.clone(), &extractors).expect("crawl");
+    assert_eq!(output.report.committed, 1);
+    assert_eq!(transport.attempts(), 2, "the retryable status is retried once through the frontier");
+    assert_eq!(output.report.failed, 0);
+}
+
+#[test]
+fn retry_exhaustion_marks_the_item_done_with_a_diagnostic() {
+    let transport = RetryTransport::new(vec![retry_entry(503, b"busy"); 5]);
+    let mut request = CrawlRequest::from_seed("https://example.com/").expect("seed");
+    request.politeness = PolitenessProfile::Developer;
+    let html = HtmlExtractor;
+    let extractors: [&dyn Extractor; 1] = [&html];
+    let output = run_crawl(request, transport.clone(), &extractors).expect("crawl");
+    assert_eq!(transport.attempts(), 5, "the attempt cap is five");
+    assert_eq!(output.report.failed, 1);
+    assert_eq!(output.report.committed, 0);
+    assert!(
+        output.report.diagnostics.diagnostics.iter().any(|diagnostic| diagnostic.code().as_str() == pd::FETCH_RETRY_EXHAUSTED),
+        "exhausted retries carry a structured diagnostic"
+    );
+    assert!(output.report.events.events().iter().any(|event| matches!(
+        event,
+        CrawlEvent::Failed { reason, .. } if reason.starts_with("retry-exhausted:")
+    )));
+}
+
+#[test]
+fn store_requeues_a_retryable_status_and_commits_after_success() {
+    let transport = RetryTransport::new(vec![retry_entry(503, b"busy"), html_entry("Recovered")]);
+    let mut request = CrawlRequest::from_seed("https://example.com/").expect("seed");
+    request.politeness = PolitenessProfile::Developer;
+    let html = HtmlExtractor;
+    let extractors: [&dyn Extractor; 1] = [&html];
+    let mut store = MemoryStore::open(StoreConfig::memory()).expect("store");
+    let output = run_crawl_with_store(request, transport.clone(), &extractors, CrawlOptions::default(), &mut store)
+        .expect("crawl");
+    assert_eq!(output.report.committed, 1);
+    assert_eq!(transport.attempts(), 2);
+    assert_eq!(store.pending_frontier_count().expect("frontier count"), 0);
+}
+
+#[test]
+fn store_completes_exhausted_retries_without_leaving_a_pending_item() {
+    let transport = RetryTransport::new(vec![retry_entry(503, b"busy"); 5]);
+    let mut request = CrawlRequest::from_seed("https://example.com/").expect("seed");
+    request.politeness = PolitenessProfile::Developer;
+    let html = HtmlExtractor;
+    let extractors: [&dyn Extractor; 1] = [&html];
+    let mut store = MemoryStore::open(StoreConfig::memory()).expect("store");
+    let output = run_crawl_with_store(request, transport.clone(), &extractors, CrawlOptions::default(), &mut store)
+        .expect("crawl");
+    assert_eq!(transport.attempts(), 5);
+    assert_eq!(output.report.failed, 1);
+    assert_eq!(store.pending_frontier_count().expect("frontier count"), 0, "exhausted items leave the frontier");
+    assert!(output.report.diagnostics.diagnostics.iter().any(|diagnostic| diagnostic.code().as_str() == pd::FETCH_RETRY_EXHAUSTED));
 }
