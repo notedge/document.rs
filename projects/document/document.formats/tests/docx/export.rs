@@ -498,6 +498,23 @@ fn docx_export_writes_undefined_note_reference_as_text() {
 }
 
 #[test]
+fn docx_export_writes_footnote_separators() {
+    let graph = import_markdown_bytes("separators.md", "One[^1].\n\n[^1]: Body.\n").expect("import markdown");
+    let exported = export_docx_bytes(&graph).expect("export docx");
+    let payload = String::from_utf8_lossy(&exported);
+    assert!(
+        payload.contains(r#"<w:footnote w:type="separator" w:id="-1">"#),
+        "the reserved separator note must precede the content notes: {payload}"
+    );
+    assert!(
+        payload.contains(r#"<w:footnote w:type="continuationSeparator" w:id="0">"#),
+        "the reserved continuation separator must be present: {payload}"
+    );
+    assert!(payload.contains("<w:separator/>"), "the separator run draws the rule: {payload}");
+    assert!(payload.contains("<w:continuationSeparator/>"), "the continuation separator is drawn: {payload}");
+}
+
+#[test]
 fn docx_export_round_trips_hyperlinks() {
     let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"

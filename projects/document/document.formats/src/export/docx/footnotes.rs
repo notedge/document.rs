@@ -106,6 +106,14 @@ pub fn render_footnotes_xml(catalog: &FootnoteCatalog) -> Result<String, FormatE
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
     );
+    // Word expects the separator and continuation separator parts before the
+    // content notes. Their reserved ids are -1 and 0, which never collide with
+    // the catalog ids that start at 1.
+    xml.push_str(
+        r#"
+  <w:footnote w:type="separator" w:id="-1"><w:p><w:pPr><w:spacing w:after="0" w:line="240" w:lineRule="auto"/></w:pPr><w:r><w:separator/></w:r></w:p></w:footnote>
+  <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>"#,
+    );
     for (id, body) in catalog.bodies() {
         xml.push_str("\n  <w:footnote w:id=\"");
         xml.push_str(&id.to_string());
