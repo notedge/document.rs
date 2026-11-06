@@ -1,5 +1,49 @@
 //! Page geometry, body metrics, and the measurable style tokens behind them.
 
+/// Where the running header text comes from.
+///
+/// The theme paints chrome from page two on. A template can override the source
+/// without touching the theme: `Title` keeps the document-derived header,
+/// `None` drops the header while keeping the folio, and `Literal` paints fixed
+/// text the template owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChromeHeader {
+    /// Document title, falling back to the first level-1 section title.
+    Title,
+    /// No running header.
+    None,
+    /// Fixed text supplied by a template.
+    Literal(&'static str),
+}
+
+/// Template overrides for the page chrome the theme enables.
+///
+/// The theme decides whether chrome exists and how it looks. This hint only
+/// chooses which pages carry it, where the header text comes from, and whether
+/// a folio is painted, so a template never needs to restate theme tokens.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChromeHint {
+    /// Header text source.
+    pub header: ChromeHeader,
+    /// Whether pages carry a folio.
+    pub folio: bool,
+    /// 1-based page index where chrome starts; earlier pages stay bare.
+    pub start_page: usize,
+}
+
+impl ChromeHint {
+    /// Theme behaviour: document title and folio from page two on.
+    pub const fn themed() -> Self {
+        Self { header: ChromeHeader::Title, folio: true, start_page: 2 }
+    }
+}
+
+impl Default for ChromeHint {
+    fn default() -> Self {
+        Self::themed()
+    }
+}
+
 use document_text::math::MathFontFamily;
 
 /// Horizontal alignment a theme asks for.
@@ -448,6 +492,15 @@ pub struct LayoutHint {
     /// math face passes the family explicitly, so the choice travels with the
     /// layout instead of with process startup order.
     pub math_font: Option<MathFontFamily>,
+    /// Page chrome overrides a template asks for.
+    pub chrome: ChromeHint,
+    /// Heading levels (H1 to H4) that start a new page.
+    ///
+    /// A template uses this to make level-1 sections open new pages. The
+    /// force-break never adds a blank page before the first heading on a page
+    /// that is already empty, so a document that starts with an H1 keeps its
+    /// first page.
+    pub section_breaks: [bool; 4],
 }
 
 impl Default for LayoutHint {
@@ -472,6 +525,8 @@ impl LayoutHint {
             line_height: 1.72,
             style: StyleTokens::modern(),
             math_font: None,
+            chrome: ChromeHint::themed(),
+            section_breaks: [false; 4],
         }
     }
 

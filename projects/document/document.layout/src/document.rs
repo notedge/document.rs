@@ -19,7 +19,7 @@ use document_text::math::{FontMetricsSystem, builtin_font_metrics};
 
 use crate::{
     diagram::Diagrams,
-    hint::{Align, LayoutHint},
+    hint::{Align, ChromeHeader, LayoutHint},
     math::{LayoutNode, collect_paint, is_tex_formula, layout_formula, layout_formula_for},
     plan::{Graphic, ImagePlaceholder, LayoutItem, LayoutPage, LayoutPlan, Rect, Rule, TextRun},
 };
@@ -616,6 +616,14 @@ impl<'a> PageBuilder<'a> {
         }
     }
 
+    /// Start a new page unconditionally, unless the current page is empty.
+    fn force_page_break(&mut self) {
+        if self.page_has_items() {
+            self.pages.push(blank_page(&self.hint));
+            self.cursor = self.hint.margin.top;
+        }
+    }
+
     fn left(&self, indent: f64) -> f64 {
         self.hint.margin.left + indent
     }
@@ -679,6 +687,9 @@ impl<'a> PageBuilder<'a> {
         let tokens = self.hint.style;
         let base = self.body_size();
         let index = usize::from(level.clamp(1, 4)) - 1;
+        if self.hint.section_breaks[index] {
+            self.force_page_break();
+        }
         let size = base * tokens.heading_scales[index];
         let line_box = self.line_box(size);
         self.pad(tokens.heading_gap_before[index]);
@@ -1408,20 +1419,27 @@ impl<'a> PageBuilder<'a> {
         let page_height = self.hint.page_height;
         let left = self.hint.margin.left;
         let right = page_width - self.hint.margin.right;
-        let title =
-            graph.metadata.title.as_deref().map(str::trim).filter(|title| !title.is_empty()).map(str::to_string).or_else(
-                || {
-                    graph.blocks.iter().find_map(|node| match &node.block {
-                        Block::Section { level: 1, title, .. } => {
-                            let text = title.iter().map(Inline::plain_text).collect::<String>();
-                            (!text.trim().is_empty()).then_some(text)
-                        }
-                        _ => None,
-                    })
-                },
-            );
-        for index in 1..self.pages.len() {
-            if let Some(title) = title.as_deref() {
+        let header = match self.hint.chrome.header {
+            ChromeHeader::None => None,
+            ChromeHeader::Literal(text) => Some(text.to_string()),
+            ChromeHeader::Title => {
+                graph.metadata.title.as_deref().map(str::trim).filter(|title| !title.is_empty()).map(str::to_string).or_else(
+                    || {
+                        graph.blocks.iter().find_map(|node| match &node.block {
+                            Block::Section { level: 1, title, .. } => {
+                                let text = title.iter().map(Inline::plain_text).collect::<String>();
+                                (!text.trim().is_empty()).then_some(text)
+                            }
+                            _ => None,
+                        })
+                    },
+                )
+            }
+        };
+        let start = self.hint.chrome.start_page.saturating_sub(1);
+        let folio = self.hint.chrome.folio;
+        for index in start..self.pages.len() {
+            if let Some(title) = header.as_deref() {
                 let width = self.text.measure(title, tokens.header_size, BODY_FACE);
                 let x = match tokens.header_align {
                     Align::Left => left,
@@ -1443,23 +1461,25 @@ impl<'a> PageBuilder<'a> {
                     artifact: true,
                 }));
             }
-            let folio = format!("{}", index + 1);
-            let width = self.text.measure(&folio, tokens.folio_size, BODY_FACE);
-            let x = ((left + right - width) / 2.0).max(left);
-            self.pages[index].items.push(LayoutItem::TextRun(TextRun {
-                x,
-                y: page_height - tokens.chrome_bottom,
-                size: tokens.folio_size,
-                width,
-                font_family: SERIF.to_string(),
-                style: FontStyle::Normal,
-                text: folio,
-                href: None,
-                title: None,
-                color: Some(tokens.folio_color),
-                numeric: true,
-                artifact: true,
-            }));
+            if folio {
+                let folio = format!("{}", index + 1);
+                let width = self.text.measure(&folio, tokens.folio_size, BODY_FACE);
+                let x = ((left + right - width) / 2.0).max(left);
+                self.pages[index].items.push(LayoutItem::TextRun(TextRun {
+                    x,
+                    y: page_height - tokens.chrome_bottom,
+                    size: tokens.folio_size,
+                    width,
+                    font_family: SERIF.to_string(),
+                    style: FontStyle::Normal,
+                    text: folio,
+                    href: None,
+                    title: None,
+                    color: Some(tokens.folio_color),
+                    numeric: true,
+                    artifact: true,
+                }));
+            }
         }
     }
 
@@ -1957,6 +1977,7 @@ fn wrap_text(widths: &TextMeasure<'_>, text: &str, size: f64, max_width: f64) ->
 #[cfg(test)]
 mod kerning_tests {
     use super::*;
+    use crate::hint::ChromeHint;
 
     /// Body bytes are host-owned, so read the VuTeX pack beside this
     /// repository, or the directory named by `VUTEX_FONT_DIR`. A missing pack
@@ -2059,5 +2080,98 @@ mod kerning_tests {
         // so the user sees a page with a warning instead of an empty document.
         assert_eq!(plan.pages.len(), 1);
         assert!(plan.pages[0].items.iter().any(|item| matches!(item, LayoutItem::TextRun(_))));
+    }
+
+    #[test]
+    fn template_section_break_starts_the_next_heading_on_a_new_page() {
+        fn section(level: u8, title: &str) -> Block {
+            Block::Section {
+                level,
+                title: vec![Inline::Text { text: title.to_string() }],
+                children: Vec::new(),
+            }
+        }
+        let metrics = metrics();
+        let mut graph = DocumentGraph::new(document_ir::DocumentId(11));
+        graph.push_block(section(1, "One"));
+        graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Body".to_string() }] });
+        graph.push_block(section(1, "Two"));
+
+        let plain = LayoutHint::a4();
+        let (plain_plan, _) = layout_with_metrics(&graph, &plain, &Diagrams::new(), &metrics);
+        assert_eq!(plain_plan.pages.len(), 1, "without a break both headings share the page");
+
+        let mut broken = LayoutHint::a4();
+        broken.section_breaks[0] = true;
+        let (broken_plan, _) = layout_with_metrics(&graph, &broken, &Diagrams::new(), &metrics);
+        assert_eq!(broken_plan.pages.len(), 2, "the second H1 opens a new page");
+        assert!(
+            broken_plan.pages[0]
+                .items
+                .iter()
+                .any(|item| matches!(item, LayoutItem::TextRun(run) if run.text == "One")),
+            "the first section keeps the opening page"
+        );
+        assert!(
+            broken_plan.pages[1]
+                .items
+                .iter()
+                .any(|item| matches!(item, LayoutItem::TextRun(run) if run.text == "Two")),
+            "the second section starts the new page"
+        );
+    }
+
+    #[test]
+    fn template_chrome_paints_a_literal_header_on_the_first_page_without_a_folio() {
+        let metrics = metrics();
+        let mut graph = DocumentGraph::new(document_ir::DocumentId(12));
+        graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Body".to_string() }] });
+
+        let mut hint = LayoutHint::a4();
+        hint.chrome = ChromeHint { header: ChromeHeader::Literal("ACME REPORT"), folio: false, start_page: 1 };
+        let (plan, _) = layout_with_metrics(&graph, &hint, &Diagrams::new(), &metrics);
+
+        let runs: Vec<&TextRun> = plan.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LayoutItem::TextRun(run) => Some(run),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            runs.iter().any(|run| run.artifact && !run.numeric && run.text == "ACME REPORT"),
+            "the template header paints on page one"
+        );
+        assert!(!runs.iter().any(|run| run.artifact && run.numeric), "folio is off for this template");
+    }
+
+    #[test]
+    fn template_style_reflow_changes_body_and_heading_sizes() {
+        let metrics = metrics();
+        let mut graph = DocumentGraph::new(document_ir::DocumentId(13));
+        graph.push_block(Block::Section {
+            level: 1,
+            title: vec![Inline::Text { text: "Heading".to_string() }],
+            children: Vec::new(),
+        });
+        graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Body".to_string() }] });
+
+        let mut hint = LayoutHint::a4();
+        hint.base_font_size = 12.0;
+        hint.line_height = 1.8;
+        hint.style.heading_scales = [1.6, 1.35, 1.18, 1.08];
+        let (plan, _) = layout_with_metrics(&graph, &hint, &Diagrams::new(), &metrics);
+
+        let sizes: Vec<(String, f64)> = plan.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                LayoutItem::TextRun(run) => Some((run.text.clone(), run.size)),
+                _ => None,
+            })
+            .collect();
+        assert!(sizes.iter().any(|(text, size)| text == "Body" && (size - 12.0).abs() < 1e-9), "{sizes:?}");
+        assert!(sizes.iter().any(|(text, size)| text == "Heading" && (size - 19.2).abs() < 1e-9), "{sizes:?}");
     }
 }
