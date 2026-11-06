@@ -479,11 +479,13 @@ impl LayoutEngine {
     /// No `MATH` constant carries this number: the table has one
     /// `subscriptShiftDown`, and the bundled faces fill it with TeX's `sub2`
     /// (σ17, applied when a superscript shares the base). The semantics layer
-    /// holds the per-face TeX parameter. A face without one falls back to the
-    /// font's `subscriptShiftDown` and lands in the G5 ledger, so a gate can
-    /// see the substitution instead of mistaking σ17 for σ16.
+    /// holds the per-face TeX parameter; a custom face inherits one only when
+    /// its host declared it, otherwise the font's `subscriptShiftDown` and the
+    /// G5 ledger take over, so a gate can see the substitution instead of
+    /// mistaking σ17 for σ16.
     fn lone_subscript_shift(&self, size: Fixed) -> Fixed {
-        match self.family.map(MathFontFamily::label).and_then(MathSemantics::tex_lone_subscript_shift_down) {
+        match self.family.and_then(MathFontFamily::tex_parameter_family).and_then(MathSemantics::tex_lone_subscript_shift_down)
+        {
             Some(sub1) => sub1 * size,
             None => {
                 self.record_fallback(FontFallback::MissingTexParameter("sub1"));

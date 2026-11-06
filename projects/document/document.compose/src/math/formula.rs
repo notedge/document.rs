@@ -646,6 +646,20 @@ impl MathSemantics {
             _ => None,
         }
     }
+
+    /// TeX parameter families this layer can answer for, as the labels
+    /// [`tex_lone_subscript_shift_down`][Self::tex_lone_subscript_shift_down]
+    /// accepts.
+    ///
+    /// A host-registered face declares one of these to inherit its subscript
+    /// parameters. A label outside this list has no TeX parameters, so layout
+    /// falls back to the font's own constants and records the substitution.
+    pub const TEX_PARAMETER_FAMILIES: &'static [&'static str] = &["latin-modern-math", "xits-math"];
+
+    /// Whether `family` names a TeX parameter family this layer knows.
+    pub fn tex_parameter_family_known(family: &str) -> bool {
+        Self::TEX_PARAMETER_FAMILIES.contains(&family)
+    }
 }
 
 /// One node of the structured math semantics tree.

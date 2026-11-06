@@ -61,6 +61,8 @@ struct InstalledMathFonts {
     xits: Option<&'static [u8]>,
     stix: Option<&'static [u8]>,
     custom: BTreeMap<&'static str, &'static [u8]>,
+    /// TeX parameter family each custom name declared, if any.
+    tex_parameters: BTreeMap<&'static str, &'static str>,
 }
 
 fn installed_fonts() -> &'static std::sync::RwLock<InstalledMathFonts> {
@@ -69,6 +71,7 @@ fn installed_fonts() -> &'static std::sync::RwLock<InstalledMathFonts> {
         xits: None,
         stix: None,
         custom: BTreeMap::new(),
+        tex_parameters: BTreeMap::new(),
     });
     &INSTALLED
 }
@@ -86,6 +89,7 @@ pub fn install_math_font(family: MathFontFamily, bytes: &'static [u8]) {
         MathFontFamily::StixTwoMath => guard.stix = Some(bytes),
         MathFontFamily::Custom(name) => {
             guard.custom.insert(name, bytes);
+            guard.tex_parameters.remove(name);
         }
     }
 }
@@ -98,6 +102,23 @@ pub fn install_math_font(family: MathFontFamily, bytes: &'static [u8]) {
 /// same name replaces its payload for the rest of the process.
 pub fn install_math_font_named(name: &'static str, bytes: &'static [u8]) {
     install_math_font(MathFontFamily::Custom(name), bytes);
+}
+
+/// Install host-owned bytes plus the TeX parameter family they follow.
+///
+/// A downloaded face carries its own `MATH` table but not TeX's rule-18
+/// parameter table, so `sub1` / `sub2` are not in the font at all. Passing a
+/// label from [`MathSemantics::TEX_PARAMETER_FAMILIES`] makes
+/// [`MathFontFamily::tex_parameter_family`] answer for that custom name, which
+/// is what lets layout apply the same σ16 correction it applies to a bundled
+/// face. Reinstalling the name through [`install_math_font_named`] drops the
+/// declaration, so a face never keeps parameters from an earlier payload.
+///
+/// [`MathSemantics::TEX_PARAMETER_FAMILIES`]: document_compose::math::MathSemantics::TEX_PARAMETER_FAMILIES
+pub fn install_math_font_named_with_parameters(name: &'static str, bytes: &'static [u8], parameters: &'static str) {
+    install_math_font(MathFontFamily::Custom(name), bytes);
+    let mut guard = installed_fonts().write().expect("math font registry");
+    guard.tex_parameters.insert(name, parameters);
 }
 
 impl MathFontFamily {
@@ -119,6 +140,20 @@ impl MathFontFamily {
             Self::XitsMath => guard.xits,
             Self::StixTwoMath => guard.stix,
             Self::Custom(name) => guard.custom.get(name).copied(),
+        }
+    }
+
+    /// TeX parameter family this face inherits its rule-18 parameters from.
+    ///
+    /// Bundled faces answer with their own label. A [`Custom`][Self::Custom]
+    /// face answers only when the host registered it through
+    /// [`install_math_font_named_with_parameters`]; an undeclared face returns
+    /// `None` so layout can fall back to the font's `MATH` constants and record
+    /// the substitution instead of borrowing another family's numbers.
+    pub fn tex_parameter_family(self) -> Option<&'static str> {
+        match self {
+            Self::LmMath | Self::XitsMath | Self::StixTwoMath => Some(self.label()),
+            Self::Custom(name) => installed_fonts().read().ok()?.tex_parameters.get(name).copied(),
         }
     }
 
@@ -802,6 +837,29 @@ mod tests {
         assert_eq!(family.label(), name);
         assert_eq!(family.bytes(), Some(PAYLOAD));
         assert!(MathFontFamily::Custom("custom-slot-absent").bytes().is_none());
+    }
+
+    #[test]
+    fn custom_families_inherit_declared_tex_parameters() {
+        static PAYLOAD: &[u8] = b"placeholder math face";
+        let name = "custom-tex-parameter-probe";
+        let family = MathFontFamily::Custom(name);
+        assert_eq!(family.tex_parameter_family(), None);
+
+        install_math_font_named_with_parameters(name, PAYLOAD, "xits-math");
+        assert_eq!(family.tex_parameter_family(), Some("xits-math"));
+        assert_eq!(family.bytes(), Some(PAYLOAD));
+
+        // A reinstall without a declaration drops the inherited family rather
+        // than keeping numbers that belong to the previous payload.
+        install_math_font_named(name, PAYLOAD);
+        assert_eq!(family.tex_parameter_family(), None);
+    }
+
+    #[test]
+    fn bundled_families_answer_with_their_own_label() {
+        assert_eq!(MathFontFamily::LmMath.tex_parameter_family(), Some("latin-modern-math"));
+        assert_eq!(MathFontFamily::XitsMath.tex_parameter_family(), Some("xits-math"));
     }
 
     #[test]
