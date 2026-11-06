@@ -614,7 +614,8 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                 .iter()
                 .filter_map(|child| match child {
                     HtmlNode::Text(text) => {
-                        let content = text.content.trim();
+                        let content = decode_character_references(&text.content);
+                        let content = content.trim();
                         (!content.is_empty()).then(|| Inline::Text { text: content.to_string() })
                     }
                     HtmlNode::Element(inner) if !is_table_structure(inner) => {
@@ -1066,7 +1067,7 @@ fn text_content(element: &Element) -> String {
     let mut text = String::new();
     for child in &element.children {
         match child {
-            HtmlNode::Text(text_node) => text.push_str(&text_node.content),
+            HtmlNode::Text(text_node) => text.push_str(&decode_character_references(&text_node.content)),
             HtmlNode::Element(child) => text.push_str(&text_content(child)),
             HtmlNode::Comment(_) => {}
         }
@@ -1207,6 +1208,7 @@ fn inline_attributes(element: &Element, graph: &mut DocumentGraph) -> Attributes
 }
 
 fn push_text(inlines: &mut Vec<Inline>, text: String) {
+    let text = decode_character_references(&text);
     if text.is_empty() {
         return;
     }
