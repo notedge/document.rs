@@ -1,5 +1,7 @@
 //! Page geometry, body metrics, and the measurable style tokens behind them.
 
+use document_text::math::MathFontFamily;
+
 /// Horizontal alignment a theme asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
@@ -438,6 +440,14 @@ pub struct LayoutHint {
     pub line_height: f64,
     /// Measurable style tokens painted by the layout pass.
     pub style: StyleTokens,
+    /// OpenType MATH family every formula in the pass lays out with.
+    ///
+    /// `None` keeps the process-wide host default installed through
+    /// `document_text::math::install_math_font`, resolved by
+    /// [`MathFontFamily::builtin_default`]. A host that lets a document pick a
+    /// math face passes the family explicitly, so the choice travels with the
+    /// layout instead of with process startup order.
+    pub math_font: Option<MathFontFamily>,
 }
 
 impl Default for LayoutHint {
@@ -461,6 +471,7 @@ impl LayoutHint {
             base_font_size: 11.0,
             line_height: 1.72,
             style: StyleTokens::modern(),
+            math_font: None,
         }
     }
 

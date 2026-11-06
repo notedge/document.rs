@@ -146,3 +146,42 @@ fn inline_math_limits_misuse_reaches_the_document_diagnostics() {
     assert_eq!(diagnostics[0].severity, Severity::Warning);
     assert!(!plan.pages.is_empty() && !plan.pages[0].items.is_empty(), "the formula must still lay out: {plan:?}");
 }
+
+/// A hint that names a MATH family lays the formula out with that face, so the
+/// declared face travels with the document instead of with process startup.
+#[test]
+fn explicit_math_font_changes_the_formula_ink() {
+    crate::math::install_host_math_fonts();
+    use document_text::math::MathFontFamily;
+
+    let mut graph = DocumentGraph::new(DocumentId(4));
+    graph.push_block(Block::Math {
+        formula: document_formats::lower_tex_formula_source("\\int_0^1 x^2 \\, dx", document_ir::MathDisplay::Display),
+    });
+
+    let ink_span = |family: MathFontFamily| {
+        let mut hint = LayoutHint::a4();
+        hint.math_font = Some(family);
+        let (plan, _) = layout_with_diagnostics(&graph, &hint, &Diagrams::new(), &BodyMetrics::default());
+        let paths: Vec<(f64, f64)> = plan
+            .pages
+            .iter()
+            .flat_map(|page| page.items.iter())
+            .filter_map(|item| match item {
+                LayoutItem::Path(path) => Some((path.x, path.width)),
+                _ => None,
+            })
+            .collect();
+        assert!(!paths.is_empty(), "{family:?} must paint the formula as outlines");
+        let left = paths.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
+        let right = paths.iter().map(|(x, width)| x + width).fold(f64::NEG_INFINITY, f64::max);
+        right - left
+    };
+
+    let lm = ink_span(MathFontFamily::LmMath);
+    let xits = ink_span(MathFontFamily::XitsMath);
+    assert!(
+        (lm - xits).abs() > 1.0,
+        "the declared MATH family must change the formula ink span: lm {lm}, xits {xits}"
+    );
+}

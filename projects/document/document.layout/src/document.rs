@@ -11,16 +11,16 @@ use std::{
 
 use document_compose::{
     Diagnostic, Severity, SourceSpan,
-    math::{FontStyle, GlyphKey, MathError},
+    math::{FontStyle, FormulaLayoutResult, GlyphKey, MathError, MathResult},
 };
 use document_fonts::{BodyMetrics, key_for_run};
-use document_ir::{AssetId, Block, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
+use document_ir::{AssetId, Block, DocumentGraph, Inline, ListItem, MathFormula, NodeId, RelationEndpoint, TableRow};
 use document_text::math::{FontMetricsSystem, builtin_font_metrics};
 
 use crate::{
     diagram::Diagrams,
     hint::{Align, LayoutHint},
-    math::{collect_paint, is_tex_formula, layout_formula},
+    math::{LayoutNode, collect_paint, is_tex_formula, layout_formula, layout_formula_for},
     plan::{Graphic, ImagePlaceholder, LayoutItem, LayoutPage, LayoutPlan, Rect, Rule, TextRun},
 };
 
@@ -345,6 +345,21 @@ pub fn layout_with_metrics(
     let mut diagnostics = builder.diagnostics;
     diagnostics.extend(builder.text.diagnostics());
     (LayoutPlan { pages: builder.pages }, diagnostics)
+}
+
+/// Lay one formula out with the MATH family the hint selects.
+///
+/// Without an explicit family the pass keeps the host-installed default, so
+/// existing callers observe exactly the face they installed at startup.
+fn lay_formula(
+    formula: &MathFormula,
+    size: f64,
+    hint: &LayoutHint,
+) -> MathResult<(FormulaLayoutResult, LayoutNode, Vec<Diagnostic>)> {
+    match hint.math_font {
+        Some(family) => layout_formula_for(formula, size, family),
+        None => layout_formula(formula, size),
+    }
 }
 
 /// Block ids that no section or list item claims as a child, in graph order.
@@ -760,7 +775,7 @@ impl<'a> PageBuilder<'a> {
                 Inline::InlineMath { formula } => {
                     flow.pending.flush(&mut flow.atoms);
                     if is_tex_formula(formula) {
-                        match layout_formula(formula, size) {
+                        match lay_formula(formula, size, &self.hint) {
                             Ok((result, _root, math_diagnostics)) => {
                                 self.diagnostics.extend(math_diagnostics);
                                 let metrics = &result.metrics;
@@ -1295,7 +1310,7 @@ impl<'a> PageBuilder<'a> {
             self.emit_math_text_fallback(&formula.source, indent);
             return;
         }
-        match layout_formula(formula, size) {
+        match lay_formula(formula, size, &self.hint) {
             Ok((result, _root, math_diagnostics)) => {
                 self.diagnostics.extend(math_diagnostics);
                 let metrics = &result.metrics;
