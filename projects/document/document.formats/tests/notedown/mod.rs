@@ -230,3 +230,79 @@ fn notedown_import_lowers_pipe_tables() {
     assert!(markdown.contains("| Beta | 2 |"));
     assert!(!markdown.contains("| ------ |"), "GFM separator row should not round-trip as data: {markdown}");
 }
+
+#[test]
+fn notedown_import_reports_partial_coverage_loss() {
+    let graph = import_notedown_bytes("coverage.nd", "# Title\n\nBody.\n").expect("import notedown");
+    assert!(!graph.coverage.complete);
+    let codes = loss_codes(&graph);
+    assert!(codes.contains(&"import.notedown.partial_coverage"), "{codes:?}");
+}
+
+#[test]
+fn notedown_import_reports_empty_document_loss() {
+    let graph = import_notedown_bytes("empty.nd", "   \n").expect("import notedown");
+    assert!(graph.blocks.is_empty(), "{:?}", graph.blocks);
+    let codes = loss_codes(&graph);
+    assert!(codes.contains(&"import.notedown.empty_document"), "{codes:?}");
+}
+
+#[test]
+fn notedown_import_reports_task_list_as_partial() {
+    let source = "- [ ] todo\n- [x] done\n";
+    let graph = import_notedown_bytes("tasks.nd", source).expect("import notedown");
+    assert!(graph.blocks.iter().any(|node| matches!(
+        &node.block,
+        Block::List { ordered: false, items } if items.len() == 2
+    )), "{:?}", graph.blocks);
+    let codes = loss_codes(&graph);
+    assert!(codes.contains(&"import.notedown.partial_coverage"), "{codes:?}");
+    let markdown = export_markdown(&graph).expect("export markdown");
+    assert!(markdown.contains("todo"), "{markdown:?}");
+    assert!(markdown.contains("done"), "{markdown:?}");
+}
+
+#[test]
+fn notedown_round_trip_preserves_supported_semantics() {
+    let source = "# Title\n\nBody **bold** and *italic*.\n\n- Alpha\n- Beta\n\n> Quoted\n\n```rust\nfn main() {}\n```\n\n| Name | Value |\n|------|-------|\n| Alpha | 1 |\n\n[home](https://example.com)\n";
+    let graph = import_notedown_bytes("roundtrip.nd", source).expect("import notedown");
+    let markdown = export_markdown(&graph).expect("export markdown");
+    let reopened = import_markdown_bytes("roundtrip.md", &markdown).expect("re-import markdown");
+
+    assert!(reopened.blocks.iter().any(|node| matches!(
+        &node.block,
+        Block::Section { level: 1, title, .. }
+            if title == &[Inline::Text { text: "Title".into() }]
+    )), "{:?}", reopened.blocks);
+    assert!(reopened.blocks.iter().any(|node| matches!(
+        &node.block,
+        Block::Paragraph { content }
+            if content.iter().any(|inline| matches!(inline, Inline::Styled { style, .. } if style == "bold"))
+    )), "{:?}", reopened.blocks);
+    assert!(reopened.blocks.iter().any(|node| matches!(
+        &node.block,
+        Block::List { ordered: false, items } if items.len() == 2
+    )), "{:?}", reopened.blocks);
+    assert!(reopened.blocks.iter().any(|node| matches!(
+        &node.block,
+        Block::Quote { content, .. }
+            if content.iter().any(|inline| matches!(inline, Inline::Text { text } if text.contains("Quoted")))
+    )), "{:?}", reopened.blocks);
+    assert!(reopened.blocks.iter().any(|node| matches!(
+        &node.block,
+        Block::Code { language: Some(language), content } if language == "rust" && content.contains("fn main")
+    )), "{:?}", reopened.blocks);
+    assert!(reopened.blocks.iter().any(|node| matches!(
+        &node.block,
+        Block::Table { rows, .. } if rows.len() == 2 && rows[0].is_header
+    )), "{:?}", reopened.blocks);
+    assert!(reopened.blocks.iter().any(|node| matches!(
+        &node.block,
+        Block::Paragraph { content }
+            if content.iter().any(|inline| matches!(inline, Inline::Link { .. }))
+    )), "{:?}", reopened.blocks);
+}
+
+fn loss_codes(graph: &document_ir::DocumentGraph) -> Vec<&str> {
+    graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect()
+}
