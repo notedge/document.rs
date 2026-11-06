@@ -156,7 +156,7 @@ fn unmapped_metadata_fields(opf_xml: &[u8]) -> Vec<String> {
     };
 
     let mut fields = Vec::new();
-    for child in metadata.children.iter().filter_map(oak_xml::ast::XmlValue::as_element) {
+    for child in metadata.children.iter().filter_map(|value| value.as_element()) {
         let name = if acorn_epub::element_is(child, "meta") {
             acorn_epub::attribute_value(child, "property")
                 .or_else(|| acorn_epub::attribute_value(child, "name"))
