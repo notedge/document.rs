@@ -37,6 +37,41 @@ fn export_markdown_project_materializes_assets_and_rewrites_image_paths() {
 }
 
 #[test]
+fn export_markdown_project_deduplicates_assets_by_content_fingerprint() {
+    let mut graph = DocumentGraph::new(DocumentId(1));
+    for (id, source) in [(1, "media/a.png"), (2, "media/b.png")] {
+        graph.push_asset(Asset {
+            id: AssetId(id),
+            kind: AssetKind::Image,
+            content_identity: Some("blake3:identical".into()),
+            source: Some(source.into()),
+            media_type: Some("image/png".into()),
+            status: SemanticStatus::Resolved,
+            bytes: Some(b"same-bytes".to_vec()),
+        });
+    }
+    for (node_id, asset_id, source) in [(1, 1, "media/a.png"), (2, 2, "media/b.png")] {
+        graph.push_block_with_id(
+            NodeId(node_id),
+            Block::Paragraph {
+                content: vec![Inline::Image {
+                    source: source.into(),
+                    alt: vec![Inline::Text { text: format!("Image {asset_id}") }],
+                    title: None,
+                    asset: Some(AssetId(asset_id)),
+                }],
+            },
+        );
+    }
+
+    let project = export_markdown_project(&graph).expect("export project");
+    assert_eq!(project.assets.len(), 1, "identical content must materialize once");
+    assert_eq!(project.assets[0].relative_path, "assets/a.png");
+    assert!(project.index_markdown.contains("![Image 1](assets/a.png)"));
+    assert!(project.index_markdown.contains("![Image 2](assets/a.png)"));
+}
+
+#[test]
 fn export_markdown_project_keeps_unresolved_sources_in_markdown() {
     let mut graph = DocumentGraph::new(DocumentId(1));
     graph.push_asset(Asset {

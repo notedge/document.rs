@@ -181,6 +181,10 @@ fn plan_project_assets(
     let mut assets = Vec::new();
     let mut unresolved = Vec::new();
     let mut used_names = HashSet::new();
+    // Content-addressed assets share one project file: sources whose bytes hash
+    // to an already materialized fingerprint alias that file instead of
+    // duplicating the payload under a second name.
+    let mut paths_by_identity: HashMap<String, String> = HashMap::new();
 
     for asset in &graph.assets {
         if asset.kind != AssetKind::Image {
@@ -195,10 +199,18 @@ fn plan_project_assets(
             unresolved.push(source.clone());
             continue;
         };
+        let identity = asset.content_identity.as_ref().filter(|identity| !identity.is_empty());
+        if let Some(existing) = identity.and_then(|identity| paths_by_identity.get(identity)) {
+            register_image_url_alias(&mut image_urls, source, existing);
+            continue;
+        }
         let file_name = stable_asset_file_name(asset, &used_names);
         used_names.insert(file_name.clone());
         let relative_path = format!("assets/{file_name}");
         register_image_url_alias(&mut image_urls, source, &relative_path);
+        if let Some(identity) = identity {
+            paths_by_identity.insert(identity.clone(), relative_path.clone());
+        }
         assets.push(MarkdownProjectAsset { relative_path, bytes: bytes.clone(), asset_id: asset.id });
     }
 
