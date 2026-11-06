@@ -17,7 +17,7 @@ use document_layout::{
     plan::{LayoutItem, LayoutPage, LayoutPlan},
 };
 use document_presentation::build_display_presentation;
-use document_renderer_pdf::render_pdf_with_diagnostics;
+use document_renderer_pdf::{PdfFontPolicy, render_pdf_with_font_policy_and_diagnostics};
 
 /// Page geometry every formula below is placed on.
 const PAGE_WIDTH: f64 = 400.0;
@@ -100,7 +100,7 @@ fn render_formula(source: &str) -> (Vec<u8>, Vec<LayoutItem>, Vec<Diagnostic>) {
     let items = collect_paint(&result, 72.0, BASELINE, &mut diagnostics);
     let plan = LayoutPlan { pages: vec![LayoutPage { width: PAGE_WIDTH, height: PAGE_HEIGHT, items: items.clone() }] };
     let display = build_display_presentation(&plan);
-    let outcome = render_pdf_with_diagnostics(&display).expect("pdf render");
+    let outcome = render_pdf_with_font_policy_and_diagnostics(&display, &PdfFontPolicy::Base14Only).expect("pdf render");
     (outcome.pdf, items, diagnostics)
 }
 
