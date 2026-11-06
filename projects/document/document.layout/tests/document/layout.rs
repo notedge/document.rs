@@ -180,8 +180,5 @@ fn explicit_math_font_changes_the_formula_ink() {
 
     let lm = ink_span(MathFontFamily::LmMath);
     let xits = ink_span(MathFontFamily::XitsMath);
-    assert!(
-        (lm - xits).abs() > 1.0,
-        "the declared MATH family must change the formula ink span: lm {lm}, xits {xits}"
-    );
+    assert!((lm - xits).abs() > 1.0, "the declared MATH family must change the formula ink span: lm {lm}, xits {xits}");
 }
