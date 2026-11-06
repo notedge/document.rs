@@ -303,6 +303,30 @@ fn html_import_records_block_source_spans() {
 }
 
 #[test]
+fn html_import_keeps_the_head_title_out_of_the_body() {
+    // A document without `<body>` falls back to lowering its root nodes. The
+    // `<head>` subtree carries metadata only, so `<title>` must not reopen as
+    // a body paragraph on the way through `html -> html -> markdown`.
+    for source in [
+        r#"<html><head><title>Doc Title</title></head><p>Body text.</p></html>"#,
+        r#"<title>Doc Title</title><p>Body text.</p>"#,
+        r#"<head><title>Doc Title</title></head><p>Body text.</p>"#,
+    ] {
+        let graph = import_html_text("title.html", source).expect("import html");
+        assert_eq!(graph.metadata.title.as_deref(), Some("Doc Title"), "{source}");
+        let html = export_html(&graph).expect("export html");
+        let reopened = import_html_text("reopen.html", &html).expect("reopen html");
+        assert_eq!(reopened.metadata.title.as_deref(), Some("Doc Title"), "{html}");
+        assert_eq!(reopened.blocks.len(), 1, "the title must not reopen as body content: {html}");
+        let Block::Paragraph { content } = &reopened.blocks[0].block
+        else {
+            panic!("expected the body paragraph, got {:?}", reopened.blocks)
+        };
+        assert!(matches!(content.first(), Some(Inline::Text { text }) if text == "Body text."), "{content:?}");
+    }
+}
+
+#[test]
 fn html_import_keeps_inline_content_under_containers() {
     let graph = import_html_text(
         "container.html",

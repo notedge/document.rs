@@ -206,6 +206,18 @@ fn lower_children(children: &[HtmlNode], graph: &mut DocumentGraph, source: &str
             HtmlNode::Element(element) if is_document_title_header(element) => {
                 flush_inline_run(&mut result, &mut pending, &mut pending_span);
             }
+            HtmlNode::Element(element) if element.tag_name.eq_ignore_ascii_case("html") => {
+                // A document without `<body>` falls back to lowering its root
+                // nodes. Recurse through the root instead of flattening it as
+                // inline text, so `<head>` metadata never becomes body content.
+                flush_inline_run(&mut result, &mut pending, &mut pending_span);
+                result.extend(lower_children(&element.children, graph, source));
+            }
+            HtmlNode::Element(element) if is_head_metadata(element) => {
+                // `<title>` already became `graph.metadata.title`. Lowering it
+                // again would reopen the document title as a body paragraph.
+                flush_inline_run(&mut result, &mut pending, &mut pending_span);
+            }
             HtmlNode::Element(element) if is_block_element(element) || is_display_math(element) => {
                 flush_inline_run(&mut result, &mut pending, &mut pending_span);
                 result.extend(lower_blocks(element, graph, source));
@@ -276,6 +288,10 @@ fn find_element<'a>(element: &'a Element, tag: &str) -> Option<&'a Element> {
         return Some(element);
     }
     element.children.iter().filter_map(as_element).find_map(|child| find_element(child, tag))
+}
+
+fn is_head_metadata(element: &Element) -> bool {
+    matches!(element.tag_name.to_ascii_lowercase().as_str(), "head" | "title")
 }
 
 fn is_document_title_header(element: &Element) -> bool {
