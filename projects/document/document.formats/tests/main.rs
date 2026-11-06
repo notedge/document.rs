@@ -1,7 +1,9 @@
 //! 冒烟入口：能力表与 feature 开关的一致性断言，以及 Markdown 损失 span 与数学 IR。
 
 mod capability;
+#[cfg(feature = "markdown")]
 mod markdown_loss_span;
+#[cfg(feature = "markdown")]
 mod markdown_math_ir;
 #[cfg(any(feature = "docx", feature = "html", feature = "epub"))]
 mod math_import;
@@ -13,16 +15,16 @@ mod xlsx;
 mod common;
 #[cfg(feature = "doc")]
 mod doc;
-#[cfg(feature = "docx")]
+#[cfg(all(feature = "docx", feature = "markdown"))]
 mod docx;
-#[cfg(feature = "epub")]
+#[cfg(all(feature = "epub", feature = "markdown"))]
 mod epub;
-#[cfg(feature = "html")]
+#[cfg(all(feature = "html", feature = "markdown"))]
 mod html;
 mod integration;
 #[cfg(feature = "markdown")]
 mod markdown;
-#[cfg(feature = "notedown")]
+#[cfg(all(feature = "notedown", feature = "markdown", feature = "html"))]
 mod notedown;
 #[cfg(feature = "pdf")]
 mod pdf;
