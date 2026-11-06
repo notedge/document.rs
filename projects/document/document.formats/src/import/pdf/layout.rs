@@ -111,12 +111,16 @@ pub(crate) fn page_flow(items: &[PageItem], profile: &StyleProfile) -> Vec<FlowB
             PageItem::NamedImage(name) => {
                 flush_paragraph(&mut blocks, &mut paragraph);
                 layout_lines(&mut blocks, &mut paragraph, &lines, profile);
+                // The lines before the image belong to the flow that ends here,
+                // so the image must come after their paragraph, not before it.
+                flush_paragraph(&mut blocks, &mut paragraph);
                 lines.clear();
                 blocks.push(FlowBlock::NamedImage(name.clone()));
             }
             PageItem::InlineImage(image) => {
                 flush_paragraph(&mut blocks, &mut paragraph);
                 layout_lines(&mut blocks, &mut paragraph, &lines, profile);
+                flush_paragraph(&mut blocks, &mut paragraph);
                 lines.clear();
                 blocks.push(FlowBlock::InlineImage(image.clone()));
             }
