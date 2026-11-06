@@ -87,7 +87,7 @@ pub fn tex_conformance_corpus() -> Vec<TexCorpusCase> {
         ..TexCorpusCase::kinds("escaped-characters", "\\$5\\%\\&\\_\n", &["paragraph"])
     });
     cases.push(TexCorpusCase {
-        expected_loss_codes: &["import.tex.partial_coverage"],
+        expected_loss_codes: &["import.tex.unsupported_command"],
         ..TexCorpusCase::kinds("unknown-command", "\\frobnicate{thing}\n", &["opaque"])
     });
     cases.push(TexCorpusCase {

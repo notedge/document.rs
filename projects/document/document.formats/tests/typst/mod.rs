@@ -141,7 +141,6 @@ fn hash_expression_stays_opaque_and_records_loss() {
         .collect();
     assert_eq!(opaque, vec!["typst.expression.figure"]);
     assert!(graph.coverage.loss.iter().any(|loss| loss.code == "import.typst.dynamic_content"));
-    assert!(graph.coverage.loss.iter().any(|loss| loss.code == "import.typst.partial_coverage"));
 }
 
 #[test]

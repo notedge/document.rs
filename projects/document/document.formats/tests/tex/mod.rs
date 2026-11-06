@@ -109,7 +109,7 @@ fn unknown_command_stays_opaque_and_records_loss() {
         .collect();
     assert_eq!(opaque, vec!["tex.foo"]);
     assert!(!graph.coverage.complete);
-    assert!(graph.coverage.loss.iter().any(|loss| loss.code == "import.tex.partial_coverage"));
+    assert!(graph.coverage.loss.iter().any(|loss| loss.code == "import.tex.unsupported_command"));
 }
 
 #[test]
@@ -194,16 +194,29 @@ fn simple_tabular_becomes_table() {
 fn verbatim_and_verb_become_code() {
     let text = "\\begin{verbatim}\nlet x = 1;\n\\end{verbatim}\n\n\\verb|inline|\n";
     let graph = import_tex_bytes("code.tex", text).unwrap();
-    let code: Vec<&str> = blocks(&graph)
+    let code_blocks: Vec<&str> = blocks(&graph)
         .iter()
         .filter_map(|node| match &node.block {
             Block::Code { content, .. } => Some(content.as_str()),
             _ => None,
         })
         .collect();
-    assert_eq!(code.len(), 2);
-    assert_eq!(code[0], "let x = 1;");
-    assert_eq!(code[1], "inline");
+    assert_eq!(code_blocks, vec!["let x = 1;"]);
+    // `\verb` is text-mode inline material, so it stays `InlineCode` inside the
+    // surrounding paragraph instead of becoming a block.
+    let inline_code: Vec<&str> = blocks(&graph)
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::Paragraph { content } => Some(content),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|inline| match inline {
+            Inline::InlineCode { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(inline_code, vec!["inline"]);
 }
 
 #[test]

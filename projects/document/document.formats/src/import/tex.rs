@@ -467,6 +467,17 @@ impl<'a> TexLowerer<'a> {
                             SemanticStatus::Partial,
                         );
                     }
+                    else {
+                        // The opaque block keeps the authored bytes, but the
+                        // semantic layer never sees the command, so the loss is
+                        // recorded per construction instead of as a blanket
+                        // coverage marker.
+                        self.loss(
+                            "import.tex.unsupported_command",
+                            format!("command has no semantic mapping: {}", raw.trim()),
+                            SemanticStatus::Unsupported,
+                        );
+                    }
                     self.push_block(
                         sink,
                         Block::Opaque { kind, payload_hint: raw.trim().to_string(), status: SemanticStatus::Partial },
