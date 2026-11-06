@@ -145,13 +145,8 @@ fn resolve_block_targets(block: &mut Block, base_url: &url::Url) {
                 resolve_inline_targets(&mut item.content, base_url);
             }
         }
-        Block::Table { rows, caption: _ } => {
-            for row in rows {
-                for cell in &mut row.cells {
-                    resolve_inline_targets(&mut cell.content, base_url);
-                }
-            }
-        }
+        // Table cell bodies are separate blocks in the same graph, so each child
+        // paragraph is resolved by its own arm.
         _ => {}
     }
 }
@@ -302,13 +297,8 @@ fn collect_bitmap_diagrams(block: &Block, out: &mut Vec<(String, String)>) {
                 collect_bitmap_inlines(&item.content, out);
             }
         }
-        Block::Table { rows, .. } => {
-            for row in rows {
-                for cell in &row.cells {
-                    collect_bitmap_inlines(&cell.content, out);
-                }
-            }
-        }
+        // Table cell bodies are separate blocks in the same graph, so each child
+        // paragraph is collected by its own arm.
         _ => {}
     }
 }

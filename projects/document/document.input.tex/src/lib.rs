@@ -337,7 +337,7 @@ fn math_mismatches(graph: &DocumentGraph) -> Vec<MathMismatch> {
             check_math(formula, &location, &mut mismatches);
         }
         let mut slices = Vec::new();
-        block_inline_slices(&node.block, &mut slices);
+        block_inline_slices(graph, &node.block, &mut slices);
         for slice in slices {
             check_inlines(slice, &location, &mut mismatches);
         }
@@ -357,7 +357,7 @@ fn leaked_commands(graph: &DocumentGraph) -> Vec<LeakedCommand> {
     let mut seen: Vec<String> = Vec::new();
     for node in &graph.blocks {
         let mut slices = Vec::new();
-        block_inline_slices(&node.block, &mut slices);
+        block_inline_slices(graph, &node.block, &mut slices);
         for slice in slices {
             let mut formulas = Vec::new();
             let mut texts = Vec::new();
@@ -377,7 +377,7 @@ fn leaked_commands(graph: &DocumentGraph) -> Vec<LeakedCommand> {
 }
 
 /// Inline slices owned by one block.
-fn block_inline_slices<'a>(block: &'a Block, slices: &mut Vec<&'a [Inline]>) {
+fn block_inline_slices<'a>(graph: &'a DocumentGraph, block: &'a Block, slices: &mut Vec<&'a [Inline]>) {
     match block {
         Block::Section { title, .. } => slices.push(title),
         Block::Paragraph { content } => slices.push(content),
@@ -386,10 +386,14 @@ fn block_inline_slices<'a>(block: &'a Block, slices: &mut Vec<&'a [Inline]>) {
                 slices.push(&item.content);
             }
         }
-        Block::Table { rows, .. } => {
-            for row in rows {
-                for cell in &row.cells {
-                    slices.push(&cell.content);
+        Block::Table { head, body, foot, .. } => {
+            for cell in head.iter().chain(body).chain(foot).flat_map(|row| row.cells.iter()) {
+                for child in &cell.children {
+                    if let Some(node) = graph.block(*child) {
+                        if let Block::Paragraph { content } = &node.block {
+                            slices.push(content);
+                        }
+                    }
                 }
             }
         }

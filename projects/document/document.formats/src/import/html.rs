@@ -9,7 +9,7 @@ use oak_html::{
 };
 
 use super::{
-    common::register_image_assets,
+    common::{cell_children, register_image_assets},
     math_latex::record_math_unsupported,
     math_ml::{is_display_math, lower_math_element, math_display, single_display_math_child},
 };
@@ -602,7 +602,7 @@ fn flatten_table_spans(rows: Vec<document_ir::TableRow>) -> (Vec<document_ir::Ta
     }
     let columns =
         rows.iter().map(|row| row.cells.iter().map(|cell| cell.colspan.max(1) as usize).sum::<usize>()).max().unwrap_or(0);
-    let mut grid: Vec<Vec<Option<Vec<Inline>>>> = vec![vec![None; columns]; rows.len()];
+    let mut grid: Vec<Vec<Option<Vec<NodeId>>>> = vec![vec![None; columns]; rows.len()];
     for (row_index, row) in rows.iter().enumerate() {
         let mut column = 0;
         for cell in &row.cells {
@@ -618,7 +618,7 @@ fn flatten_table_spans(rows: Vec<document_ir::TableRow>) -> (Vec<document_ir::Ta
                 for covered_column in column..(column + colspan).min(columns) {
                     if grid[covered_row][covered_column].is_none() {
                         grid[covered_row][covered_column] = Some(if covered_row == row_index && covered_column == column {
-                            cell.content.clone()
+                            cell.children.clone()
                         }
                         else {
                             Vec::new()
@@ -632,11 +632,10 @@ fn flatten_table_spans(rows: Vec<document_ir::TableRow>) -> (Vec<document_ir::Ta
     let flattened = rows
         .into_iter()
         .zip(grid)
-        .map(|(row, cells)| document_ir::TableRow {
-            is_header: row.is_header,
+        .map(|(_row, cells)| document_ir::TableRow {
             cells: cells
                 .into_iter()
-                .map(|content| document_ir::TableCell { content: content.unwrap_or_default(), colspan: 1, rowspan: 1 })
+                .map(|children| document_ir::TableCell { children: children.unwrap_or_default(), colspan: 1, rowspan: 1 })
                 .collect(),
         })
         .collect();
@@ -778,40 +777,55 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                 })
                 .and_then(|cap| if cap.is_empty() { None } else { Some(cap) });
             // A cell holds a block layout in HTML (`<td><p>one</p><p>two</p></td>`),
-            // but the IR table cell only carries inline content. The authored text
-            // survives as a flattened inline run, so this is a recorded partial
-            // loss rather than a silent downgrade.
+            // but this importer still lowers a cell as one inline run. The
+            // authored text survives as one paragraph child of the cell, so this
+            // is a recorded partial loss rather than a silent downgrade.
             let mut flattened_cell_blocks = false;
             let mut flattened_nested_tables = false;
-            let rows: Vec<document_ir::TableRow> = table_rows(element)
-                .into_iter()
-                .map(|row| {
-                    let mut is_header = false;
-                    let cells: Vec<document_ir::TableCell> = row
-                        .children
-                        .iter()
-                        .filter_map(as_element)
-                        .filter(|cell| matches!(cell.tag_name.to_ascii_lowercase().as_str(), "td" | "th"))
-                        .map(|cell| {
-                            if cell.tag_name.eq_ignore_ascii_case("th") {
-                                is_header = true;
-                            }
-                            if !descendants(cell, "table").is_empty() {
-                                flattened_nested_tables = true;
-                            }
-                            if cell.children.iter().filter_map(as_element).any(is_block_element) {
-                                flattened_cell_blocks = true;
-                            }
-                            document_ir::TableCell {
-                                content: lower_inlines(cell, graph, source),
-                                colspan: cell_span("colspan", cell, graph),
-                                rowspan: cell_span("rowspan", cell, graph),
-                            }
-                        })
-                        .collect();
-                    document_ir::TableRow { is_header, cells }
-                })
-                .collect();
+            let mut head: Vec<document_ir::TableRow> = Vec::new();
+            let mut body: Vec<document_ir::TableRow> = Vec::new();
+            let mut foot: Vec<document_ir::TableRow> = Vec::new();
+            let mut seen_body = false;
+            let mut header_after_body = false;
+            for (row_element, section) in table_section_rows(element) {
+                let mut is_header = matches!(section, TableSection::Head);
+                let cells: Vec<document_ir::TableCell> = row_element
+                    .children
+                    .iter()
+                    .filter_map(as_element)
+                    .filter(|cell| matches!(cell.tag_name.to_ascii_lowercase().as_str(), "td" | "th"))
+                    .map(|cell| {
+                        if cell.tag_name.eq_ignore_ascii_case("th") {
+                            is_header = true;
+                        }
+                        if !descendants(cell, "table").is_empty() {
+                            flattened_nested_tables = true;
+                        }
+                        if cell.children.iter().filter_map(as_element).any(is_block_element) {
+                            flattened_cell_blocks = true;
+                        }
+                        let colspan = cell_span("colspan", cell, graph);
+                        let rowspan = cell_span("rowspan", cell, graph);
+                        let content = lower_inlines(cell, graph, source);
+                        document_ir::TableCell { children: cell_children(graph, content), colspan, rowspan }
+                    })
+                    .collect();
+                let row = document_ir::TableRow { cells };
+                match section {
+                    TableSection::Foot => foot.push(row),
+                    TableSection::Head => head.push(row),
+                    TableSection::Body => {
+                        if is_header && !seen_body && foot.is_empty() {
+                            head.push(row);
+                        }
+                        else {
+                            header_after_body |= is_header;
+                            seen_body = true;
+                            body.push(row);
+                        }
+                    }
+                }
+            }
             if flattened_nested_tables {
                 graph.push_loss_at(
                     LossMarker {
@@ -834,22 +848,10 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                     element_source_span(element),
                 );
             }
-            // The IR keeps one `is_header` flag per row, so the exporter can only
-            // rebuild `<thead>` from a single leading run. A header row after a
-            // body row cannot be expressed, and stays a recorded loss rather
-            // than a silent regroup.
-            let mut seen_body = false;
-            let mut header_after_body = false;
-            for row in &rows {
-                if row.is_header {
-                    if seen_body {
-                        header_after_body = true;
-                    }
-                }
-                else {
-                    seen_body = true;
-                }
-            }
+            // The IR keeps one head band, one body band, and one foot band, so
+            // the exporter can only rebuild `<thead>` from a single leading run.
+            // A header row after a body row cannot be expressed, and stays a
+            // recorded loss rather than a silent regroup.
             if header_after_body {
                 graph.push_loss_at(
                     LossMarker {
@@ -866,7 +868,15 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
             // Flatten spans into a rectangular grid (the covered slots stay
             // empty) and record the downgrade so the table stays a semantic
             // `Block::Table` and renders as a pipe table.
-            let (rows, flattened_spans) = flatten_table_spans(rows);
+            let head_count = head.len();
+            let body_count = body.len();
+            let mut rows = head;
+            rows.extend(body);
+            rows.extend(foot);
+            let (mut rows, flattened_spans) = flatten_table_spans(rows);
+            let foot = rows.split_off(head_count + body_count);
+            let body = rows.split_off(head_count);
+            let head = rows;
             if flattened_spans {
                 graph.push_loss_at(
                     LossMarker {
@@ -903,7 +913,7 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
             if !stray.is_empty() {
                 blocks.push((Block::Paragraph { content: stray }, span.clone()));
             }
-            blocks.push((Block::Table { caption, rows }, span));
+            blocks.push((Block::Table { caption, head, body, foot }, span));
             blocks
         }
         "hr" => vec![(
@@ -1328,16 +1338,40 @@ fn lower_list_item_inlines(item: &Element, graph: &mut DocumentGraph, source: &s
     result
 }
 
-fn table_rows<'a>(table: &'a Element) -> Vec<&'a Element> {
+/// Section a direct or grouped table row belongs to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TableSection {
+    Head,
+    Body,
+    Foot,
+}
+
+/// Direct rows of a table together with the band each one belongs to.
+///
+/// A bare `<tr>` under `<table>` is body content, while rows inside
+/// `<thead>`/`<tbody>`/`<tfoot>` keep the authored band. Nested-table rows are
+/// not collected because only direct children are walked.
+fn table_section_rows<'a>(table: &'a Element) -> Vec<(&'a Element, TableSection)> {
     let mut rows = Vec::new();
     for child in table.children.iter().filter_map(as_element) {
         if child.tag_name.eq_ignore_ascii_case("tr") {
-            rows.push(child);
+            rows.push((child, TableSection::Body));
             continue;
         }
-        if matches!(child.tag_name.to_ascii_lowercase().as_str(), "thead" | "tbody" | "tfoot") {
-            rows.extend(child.children.iter().filter_map(as_element).filter(|row| row.tag_name.eq_ignore_ascii_case("tr")));
-        }
+        let section = match child.tag_name.to_ascii_lowercase().as_str() {
+            "thead" => TableSection::Head,
+            "tfoot" => TableSection::Foot,
+            "tbody" => TableSection::Body,
+            _ => continue,
+        };
+        rows.extend(
+            child
+                .children
+                .iter()
+                .filter_map(as_element)
+                .filter(|row| row.tag_name.eq_ignore_ascii_case("tr"))
+                .map(|row| (row, section)),
+        );
     }
     rows
 }

@@ -44,15 +44,18 @@ fn nested_blocks_register_each_image_occurrence_once() {
 #[test]
 fn table_images_keep_separate_occurrence_identity_and_node_endpoint() {
     let mut graph = DocumentGraph::new(DocumentId(2));
-    let table = graph.push_block(Block::Table {
+    let first = graph.push_block(Block::Paragraph { content: vec![image("same.png")] });
+    let second = graph.push_block(Block::Paragraph { content: vec![image("same.png")] });
+    graph.push_block(Block::Table {
         caption: None,
-        rows: vec![TableRow {
-            is_header: false,
+        head: Vec::new(),
+        body: vec![TableRow {
             cells: vec![
-                TableCell { content: vec![image("same.png")], colspan: 1, rowspan: 1 },
-                TableCell { content: vec![image("same.png")], colspan: 1, rowspan: 1 },
+                TableCell { children: vec![first], colspan: 1, rowspan: 1 },
+                TableCell { children: vec![second], colspan: 1, rowspan: 1 },
             ],
         }],
+        foot: Vec::new(),
     });
 
     register_image_assets(&mut graph);
@@ -61,26 +64,11 @@ fn table_images_keep_separate_occurrence_identity_and_node_endpoint() {
     assert_ne!(graph.assets[0].id, graph.assets[1].id);
     assert!(graph.assets.iter().all(|asset| asset.source.as_deref() == Some("same.png")));
     assert_eq!(graph.relations.len(), 2);
-    assert!(
-        graph
-            .relations
-            .iter()
-            .all(|relation| { relation.kind == RelationKind::Embeds && relation.source == RelationEndpoint::Node(table) })
-    );
-    let Block::Table { rows, .. } = &graph.blocks[0].block
-    else {
-        panic!("expected table");
-    };
-    assert_eq!(
-        rows[0]
-            .cells
-            .iter()
-            .map(|cell| match &cell.content[0] {
-                Inline::Image { asset, .. } => *asset,
-                _ => None,
-            })
-            .collect::<Vec<_>>(),
-        vec![Some(graph.assets[0].id), Some(graph.assets[1].id)]
-    );
+    assert!(graph.relations.iter().all(|relation| {
+        relation.kind == RelationKind::Embeds
+            && matches!(relation.source, RelationEndpoint::Node(node) if node == first || node == second)
+    }));
+    assert_eq!(bound_assets(&graph.blocks[0].block), vec![Some(graph.assets[0].id)]);
+    assert_eq!(bound_assets(&graph.blocks[1].block), vec![Some(graph.assets[1].id)]);
     assert!(graph.validate().is_valid());
 }

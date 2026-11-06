@@ -796,15 +796,24 @@ fn imports_pdf_page_geometry_and_body_metrics_from_the_text_layer() {
     assert!((margin_top - (792.0 - 700.0 - 9.5)).abs() < 0.01, "{margin_top}");
 }
 
-fn table_row_texts(row: &document_ir::TableRow) -> Vec<String> {
+fn table_rows(head: &[document_ir::TableRow], body: &[document_ir::TableRow]) -> Vec<document_ir::TableRow> {
+    head.iter().chain(body).cloned().collect()
+}
+
+fn table_row_texts(graph: &DocumentGraph, row: &document_ir::TableRow) -> Vec<String> {
     row.cells
         .iter()
         .map(|cell| {
-            cell.content
+            cell.children
                 .iter()
+                .filter_map(|id| graph.block(*id))
+                .flat_map(|node| match &node.block {
+                    Block::Paragraph { content } => content.clone(),
+                    _ => Vec::new(),
+                })
                 .map(|inline| match inline {
-                    Inline::Text { text } => text.as_str(),
-                    _ => "",
+                    Inline::Text { text } => text,
+                    _ => String::new(),
                 })
                 .collect::<String>()
         })
@@ -833,13 +842,13 @@ fn merged_header_rows_with_span_blanks_join_the_table_grid() {
         .blocks
         .iter()
         .find_map(|node| match &node.block {
-            Block::Table { rows, .. } => Some(rows.clone()),
+            Block::Table { head, body, .. } => Some(table_rows(head, body)),
             _ => None,
         })
         .expect("table block");
     assert_eq!(table.len(), 4, "{table:?}");
-    assert_eq!(table_row_texts(&table[0]), vec!["Item".to_owned(), String::new(), "Total".to_owned()]);
-    assert_eq!(table_row_texts(&table[1]), vec!["Name".to_owned(), "Qty".to_owned(), "Note".to_owned()]);
+    assert_eq!(table_row_texts(&graph, &table[0]), vec!["Item".to_owned(), String::new(), "Total".to_owned()]);
+    assert_eq!(table_row_texts(&graph, &table[1]), vec!["Name".to_owned(), "Qty".to_owned(), "Note".to_owned()]);
 }
 
 #[test]
@@ -859,7 +868,7 @@ fn plain_text_above_a_table_stays_outside_the_grid() {
         .blocks
         .iter()
         .find_map(|node| match &node.block {
-            Block::Table { rows, .. } => Some(rows.clone()),
+            Block::Table { head, body, .. } => Some(table_rows(head, body)),
             _ => None,
         })
         .expect("table block");

@@ -23,9 +23,7 @@
 use std::collections::{HashMap, HashSet};
 
 use boost_diagnostic::{Diagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticSeverity, Message, MessageArg};
-use document_ir::{
-    AssetId, Block, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, RewriteResult, TableRow, Traversal,
-};
+use document_ir::{AssetId, Block, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, RewriteResult, Traversal};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -514,28 +512,9 @@ fn resolve_block(
                 .collect::<Vec<_>>();
             changed.then(|| Block::List { ordered: *ordered, items })
         }
-        // Table captions are already plain strings and cell content is inline
-        // prose, so references can still appear inside cells.
-        Block::Table { caption, rows } => {
-            let mut changed = false;
-            let rows = rows
-                .iter()
-                .map(|row| {
-                    let cells = row
-                        .cells
-                        .iter()
-                        .map(|cell| {
-                            let (content, cell_changed) =
-                                resolve_inlines(&cell.content, targets, repaired_references, diagnostics, pass_name);
-                            changed |= cell_changed;
-                            document_ir::TableCell { content, colspan: cell.colspan, rowspan: cell.rowspan }
-                        })
-                        .collect::<Vec<_>>();
-                    TableRow { is_header: row.is_header, cells }
-                })
-                .collect::<Vec<_>>();
-            changed.then(|| Block::Table { caption: caption.clone(), rows })
-        }
+        // Table captions are plain strings and cell bodies are their own
+        // paragraph blocks, so the paragraph arm resolves every cell reference.
+        Block::Table { .. } => None,
         Block::Code { .. }
         | Block::Math { .. }
         | Block::Diagram { .. }
@@ -658,10 +637,20 @@ fn readable_block_text(graph: &DocumentGraph, block: &Block) -> String {
             }))
         }
         Block::List { items, .. } => joined_text(items.iter().map(|item| plain_text_of(&item.content))),
-        Block::Table { caption, rows } => match caption.as_deref().map(str::trim).filter(|caption| !caption.is_empty()) {
-            Some(caption) => caption.to_string(),
-            None => joined_text(rows.iter().flat_map(|row| row.cells.iter()).map(|cell| plain_text_of(&cell.content))),
-        },
+        Block::Table { caption, head, body, foot } => {
+            match caption.as_deref().map(str::trim).filter(|caption| !caption.is_empty()) {
+                Some(caption) => caption.to_string(),
+                None => joined_text(
+                    head.iter()
+                        .chain(body)
+                        .chain(foot)
+                        .flat_map(|row| row.cells.iter())
+                        .flat_map(|cell| cell.children.iter())
+                        .filter_map(|child_id| graph.block(*child_id))
+                        .map(|child| readable_block_text(graph, &child.block)),
+                ),
+            }
+        }
         Block::Code { .. }
         | Block::Math { .. }
         | Block::Diagram { .. }
@@ -824,28 +813,16 @@ fn rewrite_block(block: &Block, search: &str, replacement: &str) -> Option<(Bloc
                 .collect::<Vec<_>>();
             (occurrences > 0).then(|| (Block::List { ordered: *ordered, items }, occurrences))
         }
-        Block::Table { caption, rows } => {
+        // Cell paragraph bodies are their own blocks, so only the caption is
+        // rewritten here and the bands keep their child ids.
+        Block::Table { caption, head, body, foot } => {
             let mut occurrences = 0;
             let caption = caption.as_ref().map(|caption| {
                 occurrences += caption.matches(search).count();
                 caption.replace(search, replacement)
             });
-            let rows = rows
-                .iter()
-                .map(|row| {
-                    let cells = row
-                        .cells
-                        .iter()
-                        .map(|cell| {
-                            let (content, count) = rewrite_inlines(&cell.content, search, replacement);
-                            occurrences += count;
-                            document_ir::TableCell { content, colspan: cell.colspan, rowspan: cell.rowspan }
-                        })
-                        .collect::<Vec<_>>();
-                    TableRow { is_header: row.is_header, cells }
-                })
-                .collect::<Vec<_>>();
-            (occurrences > 0).then(|| (Block::Table { caption, rows }, occurrences))
+            (occurrences > 0)
+                .then(|| (Block::Table { caption, head: head.clone(), body: body.clone(), foot: foot.clone() }, occurrences))
         }
         // Diagram and chart source is authored data, not inline prose, so text
         // replacement must not rewrite or corrupt it.

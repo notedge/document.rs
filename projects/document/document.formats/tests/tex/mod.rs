@@ -180,14 +180,24 @@ fn simple_tabular_becomes_table() {
     let table = blocks(&graph)
         .iter()
         .find_map(|node| match &node.block {
-            Block::Table { rows, .. } => Some(rows),
+            Block::Table { body, .. } => Some(body),
             _ => None,
         })
         .expect("table block");
+    let cell_text = |cell: &document_ir::TableCell| {
+        cell.children
+            .iter()
+            .filter_map(|id| graph.block(*id))
+            .flat_map(|node| match &node.block {
+                Block::Paragraph { content } => content.iter().map(Inline::plain_text).collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect::<String>()
+    };
     assert_eq!(table.len(), 2);
     assert_eq!(table[0].cells.len(), 2);
-    assert_eq!(table[0].cells[0].content.iter().map(Inline::plain_text).collect::<String>(), "Name");
-    assert_eq!(table[1].cells[1].content.iter().map(Inline::plain_text).collect::<String>(), "1");
+    assert_eq!(cell_text(&table[0].cells[0]), "Name");
+    assert_eq!(cell_text(&table[1].cells[1]), "1");
 }
 
 #[test]

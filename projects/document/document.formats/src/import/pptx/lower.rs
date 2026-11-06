@@ -13,6 +13,7 @@ use document_ir::{
 };
 
 use super::{
+    super::common::cell_children,
     model::{IssueStatus, Paragraph, PptxIssue, PptxPresentation, ShapeKind, TextFrame, codes},
     reader::import_pptx_bytes,
 };
@@ -125,23 +126,25 @@ pub fn presentation_to_graph(presentation: &PptxPresentation, options: &GraphOpt
                 }
                 ShapeKind::Table => {
                     if let Some(table) = &shape.table {
-                        let rows = table
-                            .rows
-                            .iter()
-                            .map(|row| TableRow {
-                                is_header: false,
-                                cells: row
-                                    .cells
-                                    .iter()
-                                    .map(|cell| TableCell {
-                                        content: cell.text.paragraphs.iter().flat_map(paragraph_inlines).collect(),
-                                        colspan: cell.colspan,
-                                        rowspan: cell.rowspan,
-                                    })
-                                    .collect(),
-                            })
-                            .collect();
-                        children.push(graph.push_block(Block::Table { caption: Some(shape.name.clone()), rows }));
+                        let mut body = Vec::new();
+                        for row in &table.rows {
+                            let mut cells = Vec::new();
+                            for cell in &row.cells {
+                                let content: Vec<_> = cell.text.paragraphs.iter().flat_map(paragraph_inlines).collect();
+                                cells.push(TableCell {
+                                    children: cell_children(&mut graph, content),
+                                    colspan: cell.colspan,
+                                    rowspan: cell.rowspan,
+                                });
+                            }
+                            body.push(TableRow { cells });
+                        }
+                        children.push(graph.push_block(Block::Table {
+                            caption: Some(shape.name.clone()),
+                            head: Vec::new(),
+                            body,
+                            foot: Vec::new(),
+                        }));
                     }
                 }
                 ShapeKind::Chart => {

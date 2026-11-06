@@ -4,6 +4,30 @@ use document_formats::{
 };
 use document_ir::{Block, BreakKind, DocumentGraph, DocumentId, Inline, RelationKind, SemanticStatus, SourceKind};
 
+fn table(
+    graph: &DocumentGraph,
+) -> (&Option<String>, &[document_ir::TableRow], &[document_ir::TableRow], &[document_ir::TableRow]) {
+    graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { caption, head, body, foot } => Some((caption, head.as_slice(), body.as_slice(), foot.as_slice())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("table expected, got {:?}", graph.blocks))
+}
+
+fn cell_text(graph: &DocumentGraph, cell: &document_ir::TableCell) -> String {
+    cell.children
+        .iter()
+        .filter_map(|id| graph.block(*id))
+        .flat_map(|node| match &node.block {
+            Block::Paragraph { content } => content.iter().map(Inline::plain_text).collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
 fn quote_paragraph(graph: &DocumentGraph) -> &[Inline] {
     let children = graph
         .blocks
@@ -673,21 +697,20 @@ fn html_import_flattens_table_cell_spans_into_a_pipe_table() {
         "<body><table><tr><th colspan=\"2\">Head</th></tr><tr><td rowspan=\"2\">a</td><td>b</td></tr><tr><td>c</td></tr></table></body>",
     )
     .expect("import html");
-    let Block::Table { rows, .. } = &graph.blocks[0].block
-    else {
-        panic!("table expected, got {:?}", graph.blocks)
-    };
+    let (_, head, body, _) = table(&graph);
+    let rows: Vec<&document_ir::TableRow> = head.iter().chain(body).collect();
     // The covered slots become empty continuation cells and every span
     // collapses to 1, so the table stays a rectangular pipe table.
     assert!(rows.iter().flat_map(|row| &row.cells).all(|cell| cell.colspan == 1 && cell.rowspan == 1));
-    assert_eq!(rows.len(), 3);
+    assert_eq!(head.len(), 1);
+    assert_eq!(body.len(), 2);
     assert_eq!(rows[0].cells.len(), 2);
-    assert_eq!(rows[0].cells[0].content, vec![Inline::Text { text: "Head".into() }]);
-    assert!(rows[0].cells[1].content.is_empty());
-    assert_eq!(rows[1].cells[0].content, vec![Inline::Text { text: "a".into() }]);
-    assert_eq!(rows[1].cells[1].content, vec![Inline::Text { text: "b".into() }]);
-    assert!(rows[2].cells[0].content.is_empty());
-    assert_eq!(rows[2].cells[1].content, vec![Inline::Text { text: "c".into() }]);
+    assert_eq!(cell_text(&graph, &rows[0].cells[0]), "Head");
+    assert!(rows[0].cells[1].children.is_empty());
+    assert_eq!(cell_text(&graph, &rows[1].cells[0]), "a");
+    assert_eq!(cell_text(&graph, &rows[1].cells[1]), "b");
+    assert!(rows[2].cells[0].children.is_empty());
+    assert_eq!(cell_text(&graph, &rows[2].cells[1]), "c");
     assert!(
         graph.coverage.loss.iter().any(|loss| loss.code == "import.html.table_spans" && loss.status == SemanticStatus::Partial),
         "the flatten downgrade must be reported: {:?}",
@@ -704,10 +727,8 @@ fn html_import_refuses_invalid_cell_span_instead_of_collapsing_it() {
         "<body><table><tr><td colspan=\"0\">a</td><td rowspan=\"wide\">b</td></tr></table></body>",
     )
     .expect("import html");
-    let Block::Table { rows, .. } = &graph.blocks[0].block
-    else {
-        panic!("table expected, got {:?}", graph.blocks)
-    };
+    let (_, head, body, _) = table(&graph);
+    let rows: Vec<&document_ir::TableRow> = head.iter().chain(body).collect();
     assert_eq!(rows[0].cells[0].colspan, 1);
     assert_eq!(rows[0].cells[1].rowspan, 1);
     let invalid: Vec<&document_ir::LossMarker> =
@@ -752,14 +773,11 @@ fn nested_table_rows_do_not_leak_into_the_outer_table() {
         ),
     )
     .expect("import html");
-    let Block::Table { rows, .. } = &graph.blocks[0].block
-    else {
-        panic!("table expected, got {:?}", graph.blocks)
-    };
-    assert_eq!(rows.len(), 2, "inner rows must not become outer rows");
-    assert_eq!(rows[1].cells.len(), 1);
-    let text = rows[1].cells[0].content.iter().map(Inline::plain_text).collect::<String>();
-    assert_eq!(text, "outerinner-oneinner-two");
+    let (_, head, body, _) = table(&graph);
+    assert_eq!(head.len() + body.len(), 2, "inner rows must not become outer rows");
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0].cells.len(), 1);
+    assert_eq!(cell_text(&graph, &body[0].cells[0]), "outerinner-oneinner-two");
     assert!(
         graph
             .coverage
@@ -783,11 +801,8 @@ fn html_import_records_flattened_table_cell_blocks() {
         "<body><table><tr><th>Head</th></tr><tr><td><p>one</p><p>two</p></td></tr></table></body>",
     )
     .expect("import html");
-    let Block::Table { rows, .. } = &graph.blocks[0].block
-    else {
-        panic!("table expected, got {:?}", graph.blocks)
-    };
-    assert_eq!(rows[1].cells[0].content.iter().map(Inline::plain_text).collect::<String>(), "onetwo");
+    let (_, _, body, _) = table(&graph);
+    assert_eq!(cell_text(&graph, &body[0].cells[0]), "onetwo");
     assert!(
         graph
             .coverage

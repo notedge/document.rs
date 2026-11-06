@@ -972,10 +972,9 @@ fn block_text_chars(block: &Block) -> Option<u64> {
         Block::Section { title, .. } => inline_text_chars(title),
         Block::Paragraph { content } => inline_text_chars(content),
         Block::List { items, .. } => items.iter().map(|item| inline_text_chars(&item.content)).sum(),
-        Block::Table { caption, rows } => {
-            caption.as_deref().map(|caption| caption.chars().count() as u64).unwrap_or(0)
-                + rows.iter().flat_map(|row| &row.cells).map(|cell| inline_text_chars(&cell.content)).sum::<u64>()
-        }
+        // Cell paragraph bodies are their own graph blocks and are counted by
+        // the caller as they are visited, so only the caption is charged here.
+        Block::Table { caption, .. } => caption.as_deref().map(|caption| caption.chars().count() as u64).unwrap_or(0),
         Block::Quote { .. } => return None,
         Block::Code { content, .. } => content.chars().count() as u64,
         Block::Math { formula } => formula.source.chars().count() as u64,

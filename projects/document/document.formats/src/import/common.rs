@@ -65,15 +65,17 @@ fn bind_block_image_assets(node: document_ir::NodeId, block: &mut Block, referen
                 bind_inline_image_assets(node, &mut item.content, references);
             }
         }
-        Block::Table { rows, .. } => {
-            for row in rows {
-                for cell in &mut row.cells {
-                    bind_inline_image_assets(node, &mut cell.content, references);
-                }
-            }
-        }
         _ => {}
     }
+}
+
+/// Build the child blocks a table cell carries from its authored inline run.
+///
+/// The IR cell body is a block container. An importer that only produces one
+/// inline run takes the minimum semantic step: one paragraph child when the
+/// run is non-empty, and no child for an empty cell.
+pub fn cell_children(graph: &mut DocumentGraph, content: Vec<Inline>) -> Vec<document_ir::NodeId> {
+    if content.is_empty() { Vec::new() } else { vec![graph.push_block(Block::Paragraph { content })] }
 }
 
 fn bind_inline_image_assets(

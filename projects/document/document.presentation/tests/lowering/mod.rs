@@ -20,8 +20,8 @@ fn styled(style: &str, children: Vec<Inline>) -> Inline {
     Inline::Styled { style: style.to_string(), children }
 }
 
-fn cell(content: Vec<Inline>) -> TableCell {
-    TableCell { content, colspan: 1, rowspan: 1 }
+fn cell(graph: &mut DocumentGraph, content: Vec<Inline>) -> TableCell {
+    TableCell { children: vec![graph.push_block(Block::Paragraph { content })], colspan: 1, rowspan: 1 }
 }
 
 fn run(text: &str, style: FontStyle) -> FlowRun {
@@ -254,15 +254,14 @@ fn flow_quote_runs_keep_inline_code_as_monospace() {
 #[test]
 fn flow_table_cell_runs_preserve_bold_and_header_role() {
     let mut graph = DocumentGraph::new(DocumentId(5));
+    let metric = cell(&mut graph, vec![styled("bold", vec![text("Metric")])]);
+    let accuracy = cell(&mut graph, vec![text("Accuracy")]);
+    let score = cell(&mut graph, vec![styled("bold", vec![text("0.9")])]);
     graph.push_block(Block::Table {
         caption: Some("Scores".to_string()),
-        rows: vec![
-            TableRow { is_header: true, cells: vec![cell(vec![styled("bold", vec![text("Metric")])])] },
-            TableRow {
-                is_header: false,
-                cells: vec![cell(vec![text("Accuracy")]), cell(vec![styled("bold", vec![text("0.9")])])],
-            },
-        ],
+        head: vec![TableRow { cells: vec![metric] }],
+        body: vec![TableRow { cells: vec![accuracy, score] }],
+        foot: Vec::new(),
     });
 
     let presentation = build_flow_presentation(&graph);

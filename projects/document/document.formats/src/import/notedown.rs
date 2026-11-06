@@ -6,7 +6,7 @@ use document_ir::{
 use oak_core::{Parser, RedNode, RedTree, SourceText, parser::session::ParseSession};
 use oak_notedown::{NoteLanguage, NoteParser, lexer::token_type::NoteTokenType, parser::element_type::NoteElementType};
 
-use super::common::{decode_escaped_text, register_image_assets};
+use super::common::{cell_children, decode_escaped_text, register_image_assets};
 use crate::FormatError;
 
 /// Losses collected while lowering, each carrying the authored span that produced it.
@@ -175,7 +175,10 @@ fn lower_block_node(
             let (language, content) = extract_code_block(node, source);
             if content.is_empty() { None } else { Some(Block::Code { language, content }) }
         }
-        NoteElementType::Table => Some(Block::Table { caption: None, rows: extract_table_rows(node, source, losses) }),
+        NoteElementType::Table => {
+            let (head, body) = extract_table_rows(node, source, losses, graph);
+            Some(Block::Table { caption: None, head, body, foot: Vec::new() })
+        }
         NoteElementType::Blockquote => {
             let text = extract_notedown_blockquote_text(node, source);
             if text.is_empty() {
@@ -325,31 +328,46 @@ fn extract_code_block(node: RedNode<NoteLanguage>, source: &SourceText) -> (Opti
     (language, content.trim().to_string())
 }
 
-fn extract_table_rows(node: RedNode<NoteLanguage>, source: &SourceText, losses: &mut LossQueue) -> Vec<TableRow> {
-    let mut rows = Vec::new();
+fn extract_table_rows(
+    node: RedNode<NoteLanguage>,
+    source: &SourceText,
+    losses: &mut LossQueue,
+    graph: &mut DocumentGraph,
+) -> (Vec<TableRow>, Vec<TableRow>) {
+    let mut head = Vec::new();
+    let mut body = Vec::new();
     for child in node.children() {
         if let RedTree::Node(row_node) = child {
             if row_node.element_type() != NoteElementType::TableRow {
                 continue;
             }
-            let mut cells = Vec::new();
+            let mut contents = Vec::new();
             for cell_child in row_node.children() {
                 if let RedTree::Node(cell_node) = cell_child {
                     let cell = trim_cell_inlines(collect_inlines(cell_node, source, losses));
                     if !cell.is_empty() {
-                        cells.push(cell);
+                        contents.push(cell);
                     }
                 }
             }
-            if cells.is_empty() || is_gfm_table_separator_row(&cells) {
+            if contents.is_empty() || is_gfm_table_separator_row(&contents) {
                 continue;
             }
-            let is_header = rows.is_empty(); // separator 行已被过滤，首个非分隔行即表头
-            let cells = cells.into_iter().map(|content| document_ir::TableCell { content, colspan: 1, rowspan: 1 }).collect();
-            rows.push(TableRow { is_header, cells });
+            let is_header = head.is_empty() && body.is_empty(); // separator 行已被过滤，首个非分隔行即表头
+            let cells = contents
+                .into_iter()
+                .map(|content| document_ir::TableCell { children: cell_children(graph, content), colspan: 1, rowspan: 1 })
+                .collect();
+            let row = TableRow { cells };
+            if is_header {
+                head.push(row);
+            }
+            else {
+                body.push(row);
+            }
         }
     }
-    rows
+    (head, body)
 }
 
 fn is_gfm_table_separator_row(cells: &[Vec<Inline>]) -> bool {

@@ -1,7 +1,7 @@
 //! Inline emphasis reaches headings, lists, quotes, and table cells.
 
 use document_compose::math::FontStyle;
-use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, TableCell, TableRow};
+use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, NodeId, TableCell, TableRow};
 use document_layout::{
     LayoutHint,
     document::layout_with_hint,
@@ -35,8 +35,8 @@ fn quote_graph(id: u64, children: Vec<Inline>) -> DocumentGraph {
     graph
 }
 
-fn cell(content: Vec<Inline>) -> TableCell {
-    TableCell { content, colspan: 1, rowspan: 1 }
+fn cell(paragraph: NodeId) -> TableCell {
+    TableCell { children: vec![paragraph], colspan: 1, rowspan: 1 }
 }
 
 fn text_runs(page: &LayoutPage) -> Vec<&TextRun> {
@@ -120,19 +120,17 @@ fn inline_code_runs_survive_inside_a_quote() {
 #[test]
 fn bold_runs_survive_inside_a_table_cell_without_moving_columns() {
     let hint = LayoutHint::a4();
-    let graph = graph_with(
-        44,
-        Block::Table {
-            caption: None,
-            rows: vec![
-                TableRow { is_header: true, cells: vec![cell(vec![text("Header")]), cell(vec![text("Value")])] },
-                TableRow {
-                    is_header: false,
-                    cells: vec![cell(vec![styled("bold", vec![text("strong cell")])]), cell(vec![text("plain")])],
-                },
-            ],
-        },
-    );
+    let mut graph = DocumentGraph::new(DocumentId(44));
+    let header = graph.push_block(Block::Paragraph { content: vec![text("Header")] });
+    let value = graph.push_block(Block::Paragraph { content: vec![text("Value")] });
+    let strong = graph.push_block(Block::Paragraph { content: vec![styled("bold", vec![text("strong cell")])] });
+    let plain_cell = graph.push_block(Block::Paragraph { content: vec![text("plain")] });
+    graph.push_block(Block::Table {
+        caption: None,
+        head: vec![TableRow { cells: vec![cell(header), cell(value)] }],
+        body: vec![TableRow { cells: vec![cell(strong), cell(plain_cell)] }],
+        foot: Vec::new(),
+    });
     let plan = layout_with_hint(&graph, &hint);
     let runs = text_runs(&plan.pages[0]);
 
@@ -166,9 +164,12 @@ fn unstyled_block_content_stays_normal_serif() {
     });
     let quote = graph.push_block(Block::Paragraph { content: vec![text("plain quote")] });
     graph.push_block(Block::Quote { children: vec![quote] });
+    let plain_cell = graph.push_block(Block::Paragraph { content: vec![text("plain cell")] });
     graph.push_block(Block::Table {
         caption: None,
-        rows: vec![TableRow { is_header: false, cells: vec![cell(vec![text("plain cell")])] }],
+        head: Vec::new(),
+        body: vec![TableRow { cells: vec![cell(plain_cell)] }],
+        foot: Vec::new(),
     });
 
     let plan = layout(&graph);
@@ -239,16 +240,20 @@ fn wrapped_list_content_keeps_the_content_indent() {
 fn table_row_height_follows_the_tallest_wrapped_cell() {
     let hint = LayoutHint::a4().with_page_size(320.0, 600.0).with_margin(Margin::uniform(40.0));
     let long = "word ".repeat(30);
-    let graph = graph_with(
-        48,
-        Block::Table {
-            caption: None,
-            rows: vec![
-                TableRow { is_header: false, cells: vec![cell(vec![text(long.trim())]), cell(vec![text("short")])] },
-                TableRow { is_header: false, cells: vec![cell(vec![text("next")]), cell(vec![text("value")])] },
-            ],
-        },
-    );
+    let mut graph = DocumentGraph::new(DocumentId(48));
+    let first = graph.push_block(Block::Paragraph { content: vec![text(long.trim())] });
+    let short = graph.push_block(Block::Paragraph { content: vec![text("short")] });
+    let next = graph.push_block(Block::Paragraph { content: vec![text("next")] });
+    let value = graph.push_block(Block::Paragraph { content: vec![text("value")] });
+    graph.push_block(Block::Table {
+        caption: None,
+        head: Vec::new(),
+        body: vec![
+            TableRow { cells: vec![cell(first), cell(short)] },
+            TableRow { cells: vec![cell(next), cell(value)] },
+        ],
+        foot: Vec::new(),
+    });
     let plan = layout_with_hint(&graph, &hint);
     let runs = text_runs(&plan.pages[0]);
 

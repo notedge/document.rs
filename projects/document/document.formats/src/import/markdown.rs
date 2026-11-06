@@ -10,7 +10,7 @@ use oak_markdown::{
 };
 
 use super::{
-    common::{decode_escaped_text, register_image_assets},
+    common::{cell_children, decode_escaped_text, register_image_assets},
     tex_math::lower_formula_source,
 };
 use crate::FormatError;
@@ -599,7 +599,8 @@ fn lower_block_node(
         }
         MarkdownElementType::Blockquote => BlockOutcome::Block(lower_blockquote(node, source, context, graph)),
         MarkdownElementType::Table => {
-            BlockOutcome::Block(Block::Table { caption: None, rows: extract_table(node, source, context) })
+            let (head, body) = extract_table(node, source, context, graph);
+            BlockOutcome::Block(Block::Table { caption: None, head, body, foot: Vec::new() })
         }
         MarkdownElementType::HorizontalRule => BlockOutcome::Block(Block::Opaque {
             kind: "thematic_break".into(),
@@ -1846,27 +1847,48 @@ fn lower_html_table_block(html: &str, graph: &mut DocumentGraph) -> Option<Block
         return None;
     }
     let imported = crate::import::html::import_html_text("markdown-html-table", trimmed).ok()?;
-    let mut blocks = imported.blocks.into_iter();
-    let first = blocks.next()?;
-    if blocks.next().is_some() {
+    // Cell content is a child block now, so the imported graph holds one
+    // paragraph block per populated cell in addition to the table. The table
+    // stays the only semantic block, and every other block must be referenced
+    // by a cell or the block is not one standalone table.
+    let table = imported.blocks.iter().find(|node| matches!(node.block, Block::Table { .. }))?;
+    let cell_children: std::collections::HashSet<NodeId> = match &table.block {
+        Block::Table { head, body, foot, .. } => head
+            .iter()
+            .chain(body)
+            .chain(foot)
+            .flat_map(|row| row.cells.iter())
+            .flat_map(|cell| cell.children.iter().copied())
+            .collect(),
+        _ => return None,
+    };
+    if imported.blocks.iter().any(|node| node.id != table.id && !cell_children.contains(&node.id)) {
         return None;
     }
-    match first.block {
-        block @ Block::Table { .. } => {
-            // The nested HTML import flattens merged cells. Carry the table
-            // losses back so the reopen never downgrades silently.
-            for loss in imported
-                .coverage
-                .loss
-                .into_iter()
-                .filter(|loss| matches!(loss.code.as_str(), "import.html.table_spans" | "import.html.invalid_cell_span"))
-            {
-                graph.push_loss(loss);
-            }
-            Some(block)
+    let mut remap = std::collections::HashMap::new();
+    for node in &imported.blocks {
+        if node.id == table.id {
+            continue;
         }
-        _ => None,
+        remap.insert(node.id, graph.push_block(node.block.clone()));
     }
+    let mut block = table.block.clone();
+    if let Block::Table { head, body, foot, .. } = &mut block {
+        for cell in head.iter_mut().chain(body).chain(foot).flat_map(|row| row.cells.iter_mut()) {
+            cell.children = cell.children.iter().map(|child| remap.get(child).copied()).collect::<Option<Vec<_>>>()?;
+        }
+    }
+    // The nested HTML import flattens merged cells. Carry the table losses
+    // back so the reopen never downgrades silently.
+    for loss in imported
+        .coverage
+        .loss
+        .into_iter()
+        .filter(|loss| matches!(loss.code.as_str(), "import.html.table_spans" | "import.html.invalid_cell_span"))
+    {
+        graph.push_loss(loss);
+    }
+    Some(block)
 }
 
 /// Lower a blockquote into a quote whose children carry its whole body.
@@ -2065,8 +2087,14 @@ fn lower_blockquote_inlines(node: RedNode<MarkdownLanguage>, source: &SourceText
     inlines
 }
 
-fn extract_table(node: RedNode<MarkdownLanguage>, source: &SourceText, context: &mut LinkContext) -> Vec<TableRow> {
-    let mut rows = Vec::new();
+fn extract_table(
+    node: RedNode<MarkdownLanguage>,
+    source: &SourceText,
+    context: &mut LinkContext,
+    graph: &mut DocumentGraph,
+) -> (Vec<TableRow>, Vec<TableRow>) {
+    let mut head = Vec::new();
+    let mut body = Vec::new();
     let mut header_pending = true;
     for child in node.children() {
         let RedTree::Node(row_node) = child
@@ -2076,7 +2104,7 @@ fn extract_table(node: RedNode<MarkdownLanguage>, source: &SourceText, context: 
         if row_node.element_type() != MarkdownElementType::TableRow {
             continue;
         }
-        let mut cells = Vec::new();
+        let mut contents = Vec::new();
         for cell_child in row_node.children() {
             let RedTree::Node(cell_node) = cell_child
             else {
@@ -2086,13 +2114,13 @@ fn extract_table(node: RedNode<MarkdownLanguage>, source: &SourceText, context: 
                 continue;
             }
             let content = decode_table_cell_inline_code(trim_inline_edges(collect_inlines(cell_node, source, context)));
-            cells.push(TableCell { content, colspan: 1, rowspan: 1 });
+            contents.push(content);
         }
-        if cells.last().is_some_and(|cell| inline_text(&cell.content).is_empty()) {
-            cells.pop();
+        if contents.last().is_some_and(|content| inline_text(content).is_empty()) {
+            contents.pop();
         }
-        if cells.is_empty() || is_table_separator_row(&cells) {
-            if cells.iter().any(|cell| inline_text(&cell.content).contains(':')) {
+        if contents.is_empty() || is_table_separator_row(&contents) {
+            if contents.iter().any(|content| inline_text(content).contains(':')) {
                 let span = row_node.span();
                 context.losses.push((
                     LossMarker {
@@ -2107,15 +2135,24 @@ fn extract_table(node: RedNode<MarkdownLanguage>, source: &SourceText, context: 
             }
             continue;
         }
-        let is_header = header_pending;
-        header_pending = false;
-        rows.push(TableRow { is_header, cells });
+        let cells = contents
+            .into_iter()
+            .map(|content| TableCell { children: cell_children(graph, content), colspan: 1, rowspan: 1 })
+            .collect();
+        let row = TableRow { cells };
+        if header_pending {
+            head.push(row);
+            header_pending = false;
+        }
+        else {
+            body.push(row);
+        }
     }
-    rows
+    (head, body)
 }
 
-fn is_table_separator_row(cells: &[TableCell]) -> bool {
-    let text = cells.iter().flat_map(|cell| cell.content.iter().map(Inline::plain_text)).collect::<String>();
+fn is_table_separator_row(cells: &[Vec<Inline>]) -> bool {
+    let text = cells.iter().flat_map(|cell| cell.iter().map(Inline::plain_text)).collect::<String>();
     let visible = text.trim();
     !visible.is_empty() && visible.contains('-') && visible.chars().all(|character| matches!(character, '-' | ':'))
 }

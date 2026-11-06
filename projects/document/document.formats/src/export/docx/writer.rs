@@ -150,8 +150,8 @@ fn write_block(
         Block::List { ordered, items } => {
             write_list(out, *ordered, items, graph, rels)?;
         }
-        Block::Table { rows, .. } => {
-            write_table(out, rows, graph, rels)?;
+        Block::Table { head, body, foot, .. } => {
+            write_table(out, head, body, foot, graph, rels)?;
         }
         Block::Math { formula } => {
             out.push_str("<w:p><m:oMathPara><m:oMath>");
@@ -259,6 +259,17 @@ fn collect_nested_ids(block: &Block, ids: &mut HashSet<NodeId>, graph: &Document
                 }
             }
         }
+        Block::Table { head, body, foot, .. } => {
+            for cell in head.iter().chain(body).chain(foot).flat_map(|row| row.cells.iter()) {
+                for child in &cell.children {
+                    if ids.insert(*child) {
+                        if let Some(node) = graph.block(*child) {
+                            collect_nested_ids(&node.block, ids, graph);
+                        }
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -307,10 +318,15 @@ fn place_cells(rows: &[TableRow]) -> (Vec<Vec<Option<GridOrigin>>>, usize) {
 
 fn write_table(
     out: &mut String,
-    rows: &[TableRow],
+    head: &[TableRow],
+    body: &[TableRow],
+    foot: &[TableRow],
     graph: &DocumentGraph,
     rels: &mut DocumentRelsRegistry,
 ) -> Result<(), FormatError> {
+    // WordprocessingML has no head/body/foot section element, so the bands are
+    // laid out as one continuous row sequence in authored order.
+    let rows: Vec<TableRow> = head.iter().chain(body).chain(foot).cloned().collect();
     if rows.is_empty() {
         return Ok(());
     }
@@ -320,7 +336,7 @@ fn write_table(
     // widths. Spanned cells carry `w:gridSpan` / `w:vMerge`, and a slot covered
     // by a `rowspan` still emits a continuation cell so the grid stays aligned.
     let setup = DocxPageSetup::from_graph(graph);
-    let (slots, columns) = place_cells(rows);
+    let (slots, columns) = place_cells(&rows);
     let total = twips((setup.page_width - setup.margin_left - setup.margin_right).max(1.0));
     let widths = column_widths(total, columns);
     out.push_str("<w:tbl><w:tblPr>");
@@ -353,9 +369,21 @@ fn write_table(
                 if origin.rowspan > 1 {
                     out.push_str("<w:vMerge w:val=\"restart\"/>");
                 }
-                out.push_str("</w:tcPr><w:p>");
-                write_inlines(out, &row.cells[origin.cell].content, graph, rels)?;
-                out.push_str("</w:p></w:tc>");
+                out.push_str("</w:tcPr>");
+                let cell = &row.cells[origin.cell];
+                if cell.children.is_empty() {
+                    out.push_str("<w:p/>");
+                }
+                else {
+                    for child_id in &cell.children {
+                        let Some(child) = graph.block(*child_id)
+                        else {
+                            return Err(FormatError::invalid_input(format!("table cell child `{child_id:?}` is missing")));
+                        };
+                        write_block(out, &child.block, graph, rels)?;
+                    }
+                }
+                out.push_str("</w:tc>");
             }
             else {
                 out.push_str("<w:vMerge/></w:tcPr><w:p/></w:tc>");

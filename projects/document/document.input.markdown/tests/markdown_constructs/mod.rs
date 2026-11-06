@@ -28,17 +28,17 @@ fn table_keeps_header_and_body_rows() {
 | Beta | 2 |
 ";
     let imported = import_source("virtual://table.md", source).expect("table must import");
-    let table = imported
+    let (head, body) = imported
         .graph
         .blocks
         .iter()
         .find_map(|node| match &node.block {
-            Block::Table { rows, .. } => Some(rows),
+            Block::Table { head, body, .. } => Some((head.as_slice(), body.as_slice())),
             _ => None,
         })
         .expect("a table block must be lowered");
-    assert_eq!(table.len(), 3, "one header row and two body rows");
-    assert!(table[0].is_header, "the first row stays the header");
+    assert_eq!(head.len(), 1, "one header row: {:#?}", head);
+    assert_eq!(body.len(), 2, "two body rows: {:#?}", body);
 
     let rendered = render(source);
     assert_clean(&rendered, &["Name", "Score", "Alpha", "Beta"]);

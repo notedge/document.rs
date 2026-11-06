@@ -151,6 +151,14 @@ fn nested_block_ids(graph: &DocumentGraph, node_id: NodeId) -> Vec<NodeId> {
                 }
             }
         }
+        Block::Table { head, body, foot, .. } => {
+            for cell in head.iter().chain(body).chain(foot).flat_map(|row| row.cells.iter()) {
+                for child in &cell.children {
+                    out.push(*child);
+                    out.extend(nested_block_ids(graph, *child));
+                }
+            }
+        }
         _ => {}
     }
     out
@@ -246,7 +254,7 @@ fn write_block(
             out.push_str("</div>\n");
         }
         Block::List { ordered, items } => write_list(out, graph, *ordered, items, source_map, footnote_refs)?,
-        Block::Table { rows, .. } => write_table(out, rows, source_map, footnote_refs)?,
+        Block::Table { head, body, foot, .. } => write_table(out, graph, head, body, foot, source_map, footnote_refs)?,
         Block::Opaque { kind, payload_hint, .. } if kind == "thematic_break" => {
             out.push_str("<hr/>");
             if !payload_hint.is_empty() {
@@ -295,34 +303,44 @@ fn write_list(
 
 fn write_table(
     out: &mut String,
-    rows: &[TableRow],
+    graph: &DocumentGraph,
+    head: &[TableRow],
+    body: &[TableRow],
+    foot: &[TableRow],
     source_map: Option<&std::collections::HashMap<String, String>>,
     footnote_refs: &mut FootnoteRefIds,
 ) -> Result<(), FormatError> {
     out.push_str("<table>\n");
-    for row in rows {
-        out.push_str("  <tr>\n");
-        let tag = if row.is_header { "th" } else { "td" };
-        for cell in &row.cells {
-            out.push_str("    <");
-            out.push_str(tag);
-            if cell.colspan > 1 {
-                out.push_str(" colspan=\"");
-                out.push_str(&cell.colspan.to_string());
-                out.push('"');
+    for (band, tag) in [(head, "th"), (body, "td"), (foot, "td")] {
+        for row in band {
+            out.push_str("  <tr>\n");
+            for cell in &row.cells {
+                out.push_str("    <");
+                out.push_str(tag);
+                if cell.colspan > 1 {
+                    out.push_str(" colspan=\"");
+                    out.push_str(&cell.colspan.to_string());
+                    out.push('"');
+                }
+                if cell.rowspan > 1 {
+                    out.push_str(" rowspan=\"");
+                    out.push_str(&cell.rowspan.to_string());
+                    out.push('"');
+                }
+                out.push('>');
+                for child_id in &cell.children {
+                    let Some(child) = graph.block(*child_id)
+                    else {
+                        return Err(FormatError::invalid_input(format!("table cell child `{child_id:?}` is missing")));
+                    };
+                    write_node(out, graph, &child.block, source_map, footnote_refs)?;
+                }
+                out.push_str("</");
+                out.push_str(tag);
+                out.push_str(">\n");
             }
-            if cell.rowspan > 1 {
-                out.push_str(" rowspan=\"");
-                out.push_str(&cell.rowspan.to_string());
-                out.push('"');
-            }
-            out.push('>');
-            write_inlines(out, &cell.content, source_map, footnote_refs)?;
-            out.push_str("</");
-            out.push_str(tag);
-            out.push_str(">\n");
+            out.push_str("  </tr>\n");
         }
-        out.push_str("  </tr>\n");
     }
     out.push_str("</table>\n");
     Ok(())

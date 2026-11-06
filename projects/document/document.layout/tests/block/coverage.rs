@@ -83,24 +83,25 @@ fn lays_out_quote_code_table_break_and_image() {
     let quote = graph.push_block(Block::Paragraph { content: vec![text("Quoted line")] });
     graph.push_block(Block::Quote { children: vec![quote] });
     graph.push_block(Block::Code { language: Some("rust".to_string()), content: "fn main() {}".to_string() });
+    let metric = graph.push_block(Block::Paragraph { content: vec![text("Metric")] });
+    let value = graph.push_block(Block::Paragraph { content: vec![text("Value")] });
+    let accuracy = graph.push_block(Block::Paragraph { content: vec![text("Accuracy")] });
+    let score = graph.push_block(Block::Paragraph { content: vec![text("0.9")] });
     graph.push_block(Block::Table {
         caption: Some("Table 1".to_string()),
-        rows: vec![
-            TableRow {
-                is_header: true,
-                cells: vec![
-                    TableCell { content: vec![text("Metric")], colspan: 1, rowspan: 1 },
-                    TableCell { content: vec![text("Value")], colspan: 1, rowspan: 1 },
-                ],
-            },
-            TableRow {
-                is_header: false,
-                cells: vec![
-                    TableCell { content: vec![text("Accuracy")], colspan: 1, rowspan: 1 },
-                    TableCell { content: vec![text("0.9")], colspan: 1, rowspan: 1 },
-                ],
-            },
-        ],
+        head: vec![TableRow {
+            cells: vec![
+                TableCell { children: vec![metric], colspan: 1, rowspan: 1 },
+                TableCell { children: vec![value], colspan: 1, rowspan: 1 },
+            ],
+        }],
+        body: vec![TableRow {
+            cells: vec![
+                TableCell { children: vec![accuracy], colspan: 1, rowspan: 1 },
+                TableCell { children: vec![score], colspan: 1, rowspan: 1 },
+            ],
+        }],
+        foot: Vec::new(),
     });
     graph.push_block(Block::Opaque {
         kind: "thematic_break".to_string(),

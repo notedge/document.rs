@@ -185,7 +185,7 @@ pub fn tex_conformance_corpus() -> Vec<TexCorpusCase> {
     cases.push(TexCorpusCase::kinds(
         "tabular-table",
         "\\begin{tabular}{lc}\nName & Value \\\\\nA & 1 \\\\\n\\end{tabular}\n",
-        &["table"],
+        &["paragraph", "paragraph", "paragraph", "paragraph", "table"],
     ));
     cases
 }

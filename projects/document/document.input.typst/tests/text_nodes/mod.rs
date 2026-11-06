@@ -2,9 +2,9 @@
 
 use document_compose::Severity;
 use document_input_typst::import_source;
-use document_ir::{Block, Inline};
+use document_ir::{Block, DocumentGraph, Inline};
 
-fn collect_text(block: &Block, texts: &mut Vec<String>) {
+fn collect_text(graph: &DocumentGraph, block: &Block, texts: &mut Vec<String>) {
     fn walk(inlines: &[Inline], texts: &mut Vec<String>) {
         for inline in inlines {
             match inline {
@@ -28,10 +28,14 @@ fn collect_text(block: &Block, texts: &mut Vec<String>) {
                 walk(&item.content, texts);
             }
         }
-        Block::Table { rows, .. } => {
-            for row in rows {
+        Block::Table { head, body, foot, .. } => {
+            for row in head.iter().chain(body).chain(foot) {
                 for cell in &row.cells {
-                    walk(&cell.content, texts);
+                    for child in &cell.children {
+                        if let Some(node) = graph.block(*child) {
+                            collect_text(graph, &node.block, texts);
+                        }
+                    }
                 }
             }
         }
@@ -88,7 +92,7 @@ Before /* COMMENT_BLOCK_MUST_VANISH */ after.
     let mut texts = Vec::new();
     let mut styles = Vec::new();
     for node in &imported.graph.blocks {
-        collect_text(&node.block, &mut texts);
+        collect_text(&imported.graph, &node.block, &mut texts);
         collect_styles(&node.block, &mut styles);
     }
 
@@ -120,7 +124,7 @@ fn escapes_keep_literal_text_and_do_not_shift_following_spans() {
 
         let mut texts = Vec::new();
         for node in &imported.graph.blocks {
-            collect_text(&node.block, &mut texts);
+            collect_text(&imported.graph, &node.block, &mut texts);
         }
         let joined = texts.join("");
         assert!(joined.contains(expected), "{source:?} must keep {expected:?}: {texts:#?}");

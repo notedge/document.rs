@@ -13,8 +13,8 @@ fn styled(style: &str, children: Vec<Inline>) -> Inline {
     Inline::Styled { style: style.to_string(), children }
 }
 
-fn cell(content: Vec<Inline>) -> TableCell {
-    TableCell { content, colspan: 1, rowspan: 1 }
+fn cell(graph: &mut DocumentGraph, content: Vec<Inline>) -> TableCell {
+    TableCell { children: vec![graph.push_block(Block::Paragraph { content })], colspan: 1, rowspan: 1 }
 }
 
 fn graph(content: Vec<Inline>) -> DocumentGraph {
@@ -158,15 +158,14 @@ fn reflow_quote_emits_code_inline() {
 #[test]
 fn reflow_table_cells_emit_strong_and_escape_text() {
     let mut graph = DocumentGraph::new(DocumentId(58));
+    let metric = cell(&mut graph, vec![styled("bold", vec![text("Metric")])]);
+    let escaped = cell(&mut graph, vec![styled("bold", vec![text("A & B")])]);
+    let plain = cell(&mut graph, vec![text("plain")]);
     graph.push_block(Block::Table {
         caption: Some("Scores".to_string()),
-        rows: vec![
-            TableRow { is_header: true, cells: vec![cell(vec![styled("bold", vec![text("Metric")])])] },
-            TableRow {
-                is_header: false,
-                cells: vec![cell(vec![styled("bold", vec![text("A & B")])]), cell(vec![text("plain")])],
-            },
-        ],
+        head: vec![TableRow { cells: vec![metric] }],
+        body: vec![TableRow { cells: vec![escaped, plain] }],
+        foot: Vec::new(),
     });
     let html = render_html_reflow(&build_flow_presentation(&graph)).expect("reflow html");
 

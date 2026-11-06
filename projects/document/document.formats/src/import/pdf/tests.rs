@@ -257,7 +257,7 @@ fn column_gaps_become_a_table() {
     let graph = import_pdf_bytes("table-gap", &pdf).expect("pdf import");
 
     let table = graph.blocks.iter().find_map(|node| match &node.block {
-        document_ir::Block::Table { rows, .. } => Some(rows.len()),
+        document_ir::Block::Table { head, body, foot, .. } => Some(head.len() + body.len() + foot.len()),
         _ => None,
     });
     assert_eq!(table, Some(2), "two rows of two cells become a table");

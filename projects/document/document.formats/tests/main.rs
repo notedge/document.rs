@@ -193,10 +193,26 @@ mod typst_local_degradation_smoke {
 #[cfg(feature = "html")]
 mod html_structure_smoke {
     use document_formats::{export::html::export_html, import::html::import_html_text};
+    use document_ir::Block;
 
     fn html(source: &str) -> String {
         let graph = import_html_text("html-structure", source).expect("html import");
         export_html(&graph).expect("html export")
+    }
+
+    fn table(
+        graph: &document_ir::DocumentGraph,
+    ) -> (&Option<String>, &[document_ir::TableRow], &[document_ir::TableRow], &[document_ir::TableRow]) {
+        graph
+            .blocks
+            .iter()
+            .find_map(|node| match &node.block {
+                Block::Table { caption, head, body, foot } => {
+                    Some((caption, head.as_slice(), body.as_slice(), foot.as_slice()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("table expected: {:#?}", graph.blocks))
     }
 
     fn loss_codes(source: &str) -> Vec<String> {
@@ -221,8 +237,8 @@ mod html_structure_smoke {
         let output = html(
             "<table><colgroup><col span=2></colgroup><thead><tr><th>h</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>",
         );
-        assert!(output.contains("<thead><tr><th>h</th></tr></thead>"), "{output}");
-        assert!(output.contains("<tbody><tr><td>b</td></tr></tbody>"), "{output}");
+        assert!(output.contains("<thead><tr><th><p>h</p></th></tr></thead>"), "{output}");
+        assert!(output.contains("<tbody><tr><td><p>b</p></td></tr></tbody>"), "{output}");
         assert!(
             !loss_codes("<table><thead><tr><th>h</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>")
                 .contains(&"import.html.table_sections".to_string())
@@ -231,12 +247,69 @@ mod html_structure_smoke {
 
     #[test]
     fn header_rows_after_body_rows_are_a_recorded_loss() {
-        let output = html("<table><tbody><tr><td>b</td></tr></tbody><thead><tr><th>h</th></tr></thead></table>");
-        assert!(output.contains("<th>h</th>"), "{output}");
+        let output = html("<table><tbody><tr><td>b</td></tr><tr><th>h</th></tr></tbody></table>");
+        // A loose `<th>` row inside a body section after a body row cannot move
+        // into the head band, so it is written as body content and the regroup
+        // stays a recorded loss.
+        assert!(output.contains("<td><p>h</p></td>"), "{output}");
         assert!(
-            loss_codes("<table><tbody><tr><td>b</td></tr></tbody><thead><tr><th>h</th></tr></thead></table>")
+            loss_codes("<table><tbody><tr><td>b</td></tr><tr><th>h</th></tr></tbody></table>")
                 .contains(&"import.html.table_sections".to_string())
         );
+    }
+
+    #[test]
+    fn table_bands_and_cell_children_survive_export_and_reimport() {
+        let source = concat!(
+            "<table><caption>Cap</caption>",
+            "<thead><tr><th>h1</th><th>h2</th></tr></thead>",
+            "<tbody><tr><td><p>a</p><p>b</p></td><td>c</td></tr></tbody>",
+            "<tfoot><tr><td>f</td><td>g</td></tr></tfoot></table>"
+        );
+        let graph = import_html_text("html-table-bands", source).expect("html import");
+        let (caption, head, body, foot) = table(&graph);
+        assert_eq!(caption.as_deref(), Some("Cap"));
+        assert_eq!((head.len(), body.len(), foot.len()), (1, 1, 1));
+        assert!(
+            loss_codes(source).contains(&"import.html.table_cell_blocks".to_string()),
+            "cell block layout stays a recorded loss"
+        );
+        let output = export_html(&graph).expect("html export");
+        assert!(output.contains("<thead><tr><th><p>h1</p></th><th><p>h2</p></th></tr></thead>"), "{output}");
+        assert!(output.contains("<tbody><tr><td><p>ab</p></td><td><p>c</p></td></tr></tbody>"), "{output}");
+        assert!(output.contains("<tfoot><tr><td><p>f</p></td><td><p>g</p></td></tr></tfoot>"), "{output}");
+
+        let reopened = import_html_text("html-table-bands-roundtrip", &output).expect("html reimport");
+        let (_, head, body, foot) = table(&reopened);
+        assert_eq!((head.len(), body.len(), foot.len()), (1, 1, 1));
+    }
+
+    #[test]
+    fn table_export_keeps_colspan_and_rowspan_in_the_band_that_owns_them() {
+        use document_ir::{DocumentGraph, DocumentId, Inline, TableCell, TableRow};
+
+        let mut graph = DocumentGraph::new(DocumentId(9));
+        let heading = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "h".into() }] });
+        let tall = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "a".into() }] });
+        let b = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "b".into() }] });
+        let c = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "c".into() }] });
+        graph.push_block(Block::Table {
+            caption: None,
+            head: vec![TableRow { cells: vec![TableCell { children: vec![heading], colspan: 2, rowspan: 1 }] }],
+            body: vec![
+                TableRow {
+                    cells: vec![
+                        TableCell { children: vec![tall], colspan: 1, rowspan: 2 },
+                        TableCell { children: vec![b], colspan: 1, rowspan: 1 },
+                    ],
+                },
+                TableRow { cells: vec![TableCell { children: vec![c], colspan: 1, rowspan: 1 }] },
+            ],
+            foot: Vec::new(),
+        });
+        let html = export_html(&graph).expect("html export with spans");
+        assert!(html.contains(r#"<th colspan="2">"#), "{html}");
+        assert!(html.contains(r#"<td rowspan="2">"#), "{html}");
     }
 
     #[test]

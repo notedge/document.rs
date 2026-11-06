@@ -123,17 +123,17 @@ fn table_quote_nested_list_and_task_list_reach_the_rendered_svg() {
         "a blockquote must lower to a quote block: {:#?}",
         imported.graph.blocks
     );
-    let table = imported
+    let (head, body) = imported
         .graph
         .blocks
         .iter()
         .find_map(|node| match &node.block {
-            Block::Table { rows, .. } => Some(rows),
+            Block::Table { head, body, .. } => Some((head.as_slice(), body.as_slice())),
             _ => None,
         })
         .expect("a GFM table must lower to a table block");
-    assert_eq!(table.len(), 2, "one header row and one body row: {table:#?}");
-    assert!(table[0].is_header);
+    assert_eq!(head.len(), 1, "one header row: {:#?}", head);
+    assert_eq!(body.len(), 1, "one body row: {:#?}", body);
 
     let lists: Vec<_> = imported
         .graph

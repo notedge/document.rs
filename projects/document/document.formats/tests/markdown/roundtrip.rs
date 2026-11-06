@@ -5,6 +5,17 @@ fn blocks(graph: &DocumentGraph) -> Vec<Block> {
     graph.blocks.iter().map(|node| node.block.clone()).collect()
 }
 
+fn cell_inlines<'a>(graph: &'a DocumentGraph, cell: &document_ir::TableCell) -> &'a [Inline] {
+    let Some(child) = cell.children.first().and_then(|id| graph.block(*id))
+    else {
+        return &[];
+    };
+    match &child.block {
+        Block::Paragraph { content } => content,
+        _ => &[],
+    }
+}
+
 fn round_trip(name: &str, source: &str) -> (DocumentGraph, DocumentGraph, String) {
     let graph = import_markdown_bytes(&format!("{name}.md"), source).expect("import markdown");
     let markdown = export_markdown(&graph).expect("export markdown");
@@ -68,16 +79,23 @@ fn markdown_fences_keep_language_and_source_across_long_and_indented_fences() {
 fn markdown_table_cells_keep_inline_shapes_and_escaped_pipes() {
     let source = "| **A** | [x](https://e.com) |\n| --- | --- |\n| `c|d` | a \\| b |\n";
     let (graph, reopened, markdown) = round_trip("table-inline", source);
-    let Block::Table { rows, .. } = &graph.blocks[0].block
-    else {
-        panic!("table expected: {:#?}", graph.blocks)
-    };
-    assert!(matches!(&rows[0].cells[0].content[0], Inline::Styled { style, .. } if style == "bold"), "{markdown}");
+    let (head, body) = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { head, body, .. } => Some((head.as_slice(), body.as_slice())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("table expected: {:#?}", graph.blocks));
     assert!(
-        matches!(&rows[0].cells[1].content[0], Inline::Link { target, .. } if *target == RelationEndpoint::ExternalUri("https://e.com".into()))
+        matches!(&cell_inlines(&graph, &head[0].cells[0])[0], Inline::Styled { style, .. } if style == "bold"),
+        "{markdown}"
     );
-    assert_eq!(rows[1].cells[0].content, vec![Inline::InlineCode { text: "c|d".into() }], "{markdown}");
-    assert_eq!(rows[1].cells[1].content, vec![Inline::Text { text: "a | b".into() }], "{markdown}");
+    assert!(
+        matches!(&cell_inlines(&graph, &head[0].cells[1])[0], Inline::Link { target, .. } if *target == RelationEndpoint::ExternalUri("https://e.com".into()))
+    );
+    assert_eq!(cell_inlines(&graph, &body[0].cells[0]), [Inline::InlineCode { text: "c|d".into() }], "{markdown}");
+    assert_eq!(cell_inlines(&graph, &body[0].cells[1]), [Inline::Text { text: "a | b".into() }], "{markdown}");
     assert_eq!(blocks(&reopened), blocks(&graph), "{markdown}");
 }
 

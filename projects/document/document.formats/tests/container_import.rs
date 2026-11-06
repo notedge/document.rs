@@ -86,13 +86,8 @@ fn note_labels(graph: &DocumentGraph) -> Vec<String> {
                     scan(&item.content, &mut labels);
                 }
             }
-            Block::Table { rows, .. } => {
-                for row in rows {
-                    for cell in &row.cells {
-                        scan(&cell.content, &mut labels);
-                    }
-                }
-            }
+            // Table cell bodies are separate blocks in the same graph, so their
+            // paragraphs are scanned by their own arm.
             _ => {}
         }
     }
@@ -114,7 +109,7 @@ fn has_attributed_class(graph: &DocumentGraph, class: &str) -> bool {
         Block::Paragraph { content } => scan(content, class),
         Block::Section { title, .. } => scan(title, class),
         Block::List { items, .. } => items.iter().any(|item| scan(&item.content, class)),
-        Block::Table { rows, .. } => rows.iter().any(|row| row.cells.iter().any(|cell| scan(&cell.content, class))),
+        // Cell paragraphs are their own blocks, so they are scanned separately.
         _ => false,
     })
 }
@@ -150,15 +145,14 @@ fn html_table_lowers_to_a_structured_table() {
     let graph = import_fixture_html("table.html");
     let tables = collect_blocks(&graph, &|block| matches!(block, Block::Table { .. }));
     assert_eq!(tables.len(), 1, "{:?}", collect_blocks(&graph, &|_| true));
-    let Block::Table { caption, rows } = tables[0]
+    let Block::Table { caption, head, body, .. } = tables[0]
     else {
         unreachable!()
     };
     assert_eq!(caption.as_deref(), Some("Table 1. Coverage by region."), "{caption:?}");
-    assert_eq!(rows.len(), 4, "{rows:?}");
-    assert!(rows[0].is_header);
-    assert!(rows[1].is_header);
-    assert!(rows.iter().all(|row| row.cells.iter().all(|cell| cell.colspan == 1 && cell.rowspan == 1)));
+    assert_eq!(head.len(), 2, "{head:?}");
+    assert_eq!(body.len(), 2, "{body:?}");
+    assert!(head.iter().chain(body).all(|row| row.cells.iter().all(|cell| cell.colspan == 1 && cell.rowspan == 1)));
     assert_eq!(loss(&graph, "import.html.table_spans"), SemanticStatus::Partial, "{:?}", loss_codes(&graph));
     let raw_tables: Vec<&Block> = collect_blocks(
         &graph,

@@ -190,7 +190,7 @@ impl Exporter<'_> {
                     Block::BulletList(pandoc_items)
                 }
             }
-            IrBlock::Table { caption, rows } => Block::Table(self.export_table(caption, rows)?),
+            IrBlock::Table { caption, head, body, foot } => Block::Table(self.export_table(caption, head, body, foot)?),
             IrBlock::Quote { children } => Block::BlockQuote(self.export_sequence(children)?),
             IrBlock::Code { language, content } => {
                 let mut classes = Vec::new();
@@ -241,55 +241,51 @@ impl Exporter<'_> {
         Ok(Block::RawBlock(format!("notedown.{kind}"), payload_hint.into()))
     }
 
-    fn export_table(&mut self, caption: &Option<String>, rows: &[document_ir::TableRow]) -> Result<Table, FormatError> {
+    fn export_table(
+        &mut self,
+        caption: &Option<String>,
+        head: &[document_ir::TableRow],
+        body: &[document_ir::TableRow],
+        foot: &[document_ir::TableRow],
+    ) -> Result<Table, FormatError> {
         let caption = match caption {
             Some(text) => Caption { short: None, blocks: vec![Block::Plain(vec![Inline::Str(text.clone())])] },
             None => Caption::empty(),
         };
-        let columns = rows
+        let columns = head
             .iter()
+            .chain(body)
+            .chain(foot)
             .map(|row| row.cells.iter().map(|cell| usize::try_from(cell.colspan.max(1)).unwrap_or(1)).sum::<usize>())
             .max()
             .unwrap_or(0);
         let colspecs = (0..columns).map(|_| ColSpec { alignment: super::model::Alignment::Default, width: 0.0 }).collect();
-        let mut head_rows = Vec::new();
-        let mut body_rows = Vec::new();
-        for row in rows {
-            let target = if row.is_header { &mut head_rows } else { &mut body_rows };
-            target.push(self.export_row(row)?);
-        }
-        if !body_rows.is_empty() && !head_rows.is_empty() {
-            let first_body = rows.iter().position(|row| !row.is_header);
-            let last_header = rows.iter().rposition(|row| row.is_header);
-            if let (Some(first_body), Some(last_header)) = (first_body, last_header) {
-                if first_body < last_header {
-                    self.loss(
-                        "export.pandoc-json.table_header_order",
-                        "header rows split across body rows were regrouped into the Pandoc table head".into(),
-                        SemanticStatus::Partial,
-                    );
-                }
-            }
-        }
+        let head_rows = head.iter().map(|row| self.export_row(row)).collect::<Result<Vec<_>, _>>()?;
+        let body_rows = body.iter().map(|row| self.export_row(row)).collect::<Result<Vec<_>, _>>()?;
+        let foot_rows = foot.iter().map(|row| self.export_row(row)).collect::<Result<Vec<_>, _>>()?;
         Ok(Table {
             attr: Attr::empty(),
             caption,
             colspecs,
             head: TableHead { attr: Attr::empty(), rows: head_rows },
             bodies: vec![TableBody { attr: Attr::empty(), row_head_columns: 0, head: Vec::new(), body: body_rows }],
-            foot: TableFoot::default(),
+            foot: TableFoot { attr: Attr::empty(), rows: foot_rows },
         })
     }
 
     fn export_row(&mut self, row: &document_ir::TableRow) -> Result<Row, FormatError> {
         let mut cells = Vec::with_capacity(row.cells.len());
         for cell in &row.cells {
+            let mut blocks = Vec::new();
+            for child in &cell.children {
+                blocks.extend(self.export_node(*child)?);
+            }
             cells.push(Cell {
                 attr: Attr::empty(),
                 alignment: super::model::Alignment::Default,
                 row_span: i64::from(cell.rowspan.max(1)),
                 col_span: i64::from(cell.colspan.max(1)),
-                blocks: vec![Block::Plain(self.export_inlines(&cell.content)?)],
+                blocks,
             });
         }
         Ok(Row { attr: Attr::empty(), cells })
@@ -450,6 +446,11 @@ fn referenced_children(graph: &DocumentGraph) -> HashSet<NodeId> {
             IrBlock::List { items, .. } => {
                 for item in items {
                     referenced.extend(item.children.iter().copied());
+                }
+            }
+            IrBlock::Table { head, body, foot, .. } => {
+                for cell in head.iter().chain(body).chain(foot).flat_map(|row| row.cells.iter()) {
+                    referenced.extend(cell.children.iter().copied());
                 }
             }
             _ => {}

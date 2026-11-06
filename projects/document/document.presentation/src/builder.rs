@@ -107,6 +107,11 @@ fn root_ids(graph: &DocumentGraph) -> Vec<NodeId> {
                     referenced.extend(item.children.iter().copied());
                 }
             }
+            Block::Table { head, body, foot, .. } => {
+                for cell in head.iter().chain(body).chain(foot).flat_map(|row| row.cells.iter()) {
+                    referenced.extend(cell.children.iter().copied());
+                }
+            }
             _ => {}
         }
     }
@@ -287,14 +292,41 @@ fn collect_flow(graph: &DocumentGraph, ids: &[NodeId], blocks: &mut Vec<FlowBloc
                 // they keep following the quotation in document order.
                 collect_flow(graph, &rest, blocks);
             }
-            Block::Table { caption, rows } => {
+            Block::Table { caption, head, body, foot } => {
+                let rows: Vec<(&document_ir::TableRow, bool)> = head
+                    .iter()
+                    .map(|row| (row, true))
+                    .chain(body.iter().map(|row| (row, false)))
+                    .chain(foot.iter().map(|row| (row, false)))
+                    .collect();
                 blocks.push(FlowBlock::Table {
                     caption: caption.clone(),
                     rows: rows
-                        .iter()
-                        .map(|row| FlowTableRow {
-                            is_header: row.is_header,
-                            cells: row.cells.iter().map(|cell| runs_of(&cell.content)).collect(),
+                        .into_iter()
+                        .map(|(row, is_header)| FlowTableRow {
+                            is_header,
+                            cells: row
+                                .cells
+                                .iter()
+                                .map(|cell| {
+                                    let mut content = Vec::new();
+                                    for child_id in &cell.children {
+                                        let Some(child) = graph.block(*child_id)
+                                        else {
+                                            continue;
+                                        };
+                                        let Block::Paragraph { content: paragraph } = &child.block
+                                        else {
+                                            continue;
+                                        };
+                                        if !content.is_empty() {
+                                            content.push(document_ir::Inline::Text { text: " ".into() });
+                                        }
+                                        content.extend(paragraph.iter().cloned());
+                                    }
+                                    runs_of(&content)
+                                })
+                                .collect(),
                         })
                         .collect(),
                 });

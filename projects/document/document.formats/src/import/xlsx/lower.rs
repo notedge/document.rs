@@ -13,6 +13,7 @@ use document_ir::{
 };
 
 use super::{
+    super::common::cell_children,
     model::{CellRange, CellValue, IssueStatus, SheetVisibility, XlsxIssue, XlsxSheet, XlsxWorkbook, codes},
     reader::import_xlsx_bytes,
     value::display_cell,
@@ -147,7 +148,8 @@ fn push_sheet_table(graph: &mut DocumentGraph, sheet: &XlsxSheet, workbook: &Xls
             status: SemanticStatus::Partial,
         });
     }
-    let mut rows = Vec::new();
+    let mut head = Vec::new();
+    let mut body = Vec::new();
     for row in range.start_row..=range.end_row {
         let mut cells = Vec::new();
         let mut column = range.start_column;
@@ -155,7 +157,7 @@ fn push_sheet_table(graph: &mut DocumentGraph, sheet: &XlsxSheet, workbook: &Xls
             if let Some(merge) = sheet.merge_covering(row, column) {
                 if merge.start_row == row && merge.start_column == column {
                     cells.push(TableCell {
-                        content: cell_inlines(sheet, workbook, row, column),
+                        children: cell_children(graph, cell_inlines(sheet, workbook, row, column)),
                         colspan: merge.end_column - merge.start_column + 1,
                         rowspan: merge.end_row - merge.start_row + 1,
                     });
@@ -163,16 +165,26 @@ fn push_sheet_table(graph: &mut DocumentGraph, sheet: &XlsxSheet, workbook: &Xls
                 column += 1;
                 continue;
             }
-            cells.push(TableCell { content: cell_inlines(sheet, workbook, row, column), colspan: 1, rowspan: 1 });
+            cells.push(TableCell {
+                children: cell_children(graph, cell_inlines(sheet, workbook, row, column)),
+                colspan: 1,
+                rowspan: 1,
+            });
             column += 1;
         }
         let is_header = row == range.start_row
             && (range.start_column..=range.end_column)
                 .any(|column| sheet.cell(row, column).map(|cell| cell.style.bold).unwrap_or(false));
-        rows.push(TableRow { is_header, cells });
+        let table_row = TableRow { cells };
+        if is_header {
+            head.push(table_row);
+        }
+        else {
+            body.push(table_row);
+        }
     }
     let caption = if sheet.name.is_empty() { None } else { Some(sheet.name.clone()) };
-    Some(graph.push_block(Block::Table { caption, rows }))
+    Some(graph.push_block(Block::Table { caption, head, body, foot: Vec::new() }))
 }
 
 fn used_range(sheet: &XlsxSheet) -> Option<CellRange> {

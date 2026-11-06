@@ -2,7 +2,32 @@ use document_formats::{
     export::{html::export_html, markdown::export_markdown},
     import::markdown::import_markdown_bytes,
 };
-use document_ir::{Block, DocumentGraph, DocumentId, Inline, MathExpression, RelationEndpoint, RelationKind, SemanticStatus};
+use document_ir::{
+    Block, DocumentGraph, DocumentId, Inline, MathExpression, RelationEndpoint, RelationKind, SemanticStatus, TableCell,
+    TableRow,
+};
+
+fn table<'a>(graph: &'a DocumentGraph) -> (&'a [TableRow], &'a [TableRow]) {
+    graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { head, body, .. } => Some((head.as_slice(), body.as_slice())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("table expected: {:#?}", graph.blocks))
+}
+
+fn cell_text(graph: &DocumentGraph, cell: &TableCell) -> String {
+    cell.children
+        .iter()
+        .filter_map(|id| graph.block(*id))
+        .flat_map(|node| match &node.block {
+            Block::Paragraph { content } => content.iter().map(Inline::plain_text).collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect()
+}
 
 #[test]
 fn markdown_stray_angle_bracket_stays_text_and_is_escaped_on_export() {
@@ -196,40 +221,30 @@ fn markdown_fenced_code_keeps_content_and_language() {
 fn markdown_tables_lower_header_and_rows() {
     let source = "| A | B |\n| --- | --- |\n| 1 | 2 |\n";
     let graph = import_markdown_bytes("table.md", source).expect("import markdown");
-    let Block::Table { caption: None, rows } = &graph.blocks[0].block
-    else {
-        panic!("table expected: {:#?}", graph.blocks)
-    };
-    assert_eq!(rows.len(), 2);
-    assert!(rows[0].is_header);
-    assert!(!rows[1].is_header);
-    assert_eq!(rows[0].cells.len(), 2);
+    let (head, body) = table(&graph);
+    assert_eq!(head.len(), 1);
+    assert_eq!(body.len(), 1);
+    assert_eq!(head[0].cells.len(), 2);
     assert_eq!(
-        rows[0].cells.iter().map(|cell| cell.content.clone()).collect::<Vec<_>>(),
-        vec![vec![Inline::Text { text: "A".into() }], vec![Inline::Text { text: "B".into() }],]
+        head[0].cells.iter().map(|cell| cell_text(&graph, cell)).collect::<Vec<_>>(),
+        vec!["A".to_string(), "B".to_string()]
     );
     assert_eq!(
-        rows[1].cells.iter().map(|cell| cell.content.clone()).collect::<Vec<_>>(),
-        vec![vec![Inline::Text { text: "1".into() }], vec![Inline::Text { text: "2".into() }],]
+        body[0].cells.iter().map(|cell| cell_text(&graph, cell)).collect::<Vec<_>>(),
+        vec!["1".to_string(), "2".to_string()]
     );
-    assert!(rows.iter().flat_map(|row| row.cells.iter()).all(|cell| cell.colspan == 1 && cell.rowspan == 1));
+    assert!(head.iter().chain(body).flat_map(|row| row.cells.iter()).all(|cell| cell.colspan == 1 && cell.rowspan == 1));
     assert!(graph.validate().is_valid());
 
     let markdown = export_markdown(&graph).expect("export markdown");
     let reopened = import_markdown_bytes("table-roundtrip.md", &markdown).expect("reopen markdown");
-    let Block::Table { rows: reopened_rows, .. } = &reopened.blocks[0].block
-    else {
-        panic!("reopened table expected: {:#?}", reopened.blocks)
-    };
-    assert_eq!(reopened_rows[0].is_header, true);
+    let (reopened_head, reopened_body) = table(&reopened);
+    assert_eq!(reopened_head.len(), 1);
     assert_eq!(
-        reopened_rows
+        reopened_head
             .iter()
-            .map(|row| row
-                .cells
-                .iter()
-                .map(|cell| cell.content.iter().map(Inline::plain_text).collect::<String>())
-                .collect::<Vec<_>>())
+            .chain(reopened_body)
+            .map(|row| row.cells.iter().map(|cell| cell_text(&reopened, cell)).collect::<Vec<_>>())
             .collect::<Vec<_>>(),
         vec![vec!["A".to_string(), "B".to_string()], vec!["1".to_string(), "2".to_string()]],
     );
@@ -243,14 +258,11 @@ fn markdown_table_export_uses_three_hyphen_delimiters() {
     let markdown = export_markdown(&graph).expect("export markdown");
     assert!(markdown.starts_with("| A | B |\n| --- | --- |\n"), "{markdown:?}");
     let reopened = import_markdown_bytes("table-delimiter-roundtrip.md", &markdown).expect("reopen markdown");
-    let Block::Table { rows, .. } = &reopened.blocks[0].block
-    else {
-        panic!("reopened table expected: {:#?}", reopened.blocks)
-    };
-    assert_eq!(rows.len(), 2);
-    assert!(rows[0].is_header);
+    let (head, body) = table(&reopened);
+    assert_eq!(head.len(), 1);
+    assert_eq!(body.len(), 1);
     assert_eq!(
-        rows[1].cells.iter().map(|cell| cell.content.iter().map(Inline::plain_text).collect::<String>()).collect::<Vec<_>>(),
+        body[0].cells.iter().map(|cell| cell_text(&reopened, cell)).collect::<Vec<_>>(),
         vec!["1".to_string(), "2".to_string()]
     );
 }
@@ -258,33 +270,23 @@ fn markdown_table_export_uses_three_hyphen_delimiters() {
 #[test]
 fn markdown_spanning_table_reopens_as_a_flattened_pipe_table() {
     let mut graph = DocumentGraph::new(DocumentId(7));
+    let head_text = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Head".into() }] });
+    let a = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "a".into() }] });
+    let b = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "b".into() }] });
+    let c = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "c".into() }] });
     graph.push_block(Block::Table {
         caption: None,
-        rows: vec![
-            document_ir::TableRow {
-                is_header: true,
-                cells: vec![document_ir::TableCell {
-                    content: vec![Inline::Text { text: "Head".into() }],
-                    colspan: 2,
-                    rowspan: 1,
-                }],
-            },
-            document_ir::TableRow {
-                is_header: false,
+        head: vec![TableRow { cells: vec![TableCell { children: vec![head_text], colspan: 2, rowspan: 1 }] }],
+        body: vec![
+            TableRow {
                 cells: vec![
-                    document_ir::TableCell { content: vec![Inline::Text { text: "a".into() }], colspan: 1, rowspan: 2 },
-                    document_ir::TableCell { content: vec![Inline::Text { text: "b".into() }], colspan: 1, rowspan: 1 },
+                    TableCell { children: vec![a], colspan: 1, rowspan: 2 },
+                    TableCell { children: vec![b], colspan: 1, rowspan: 1 },
                 ],
             },
-            document_ir::TableRow {
-                is_header: false,
-                cells: vec![document_ir::TableCell {
-                    content: vec![Inline::Text { text: "c".into() }],
-                    colspan: 1,
-                    rowspan: 1,
-                }],
-            },
+            TableRow { cells: vec![TableCell { children: vec![c], colspan: 1, rowspan: 1 }] },
         ],
+        foot: Vec::new(),
     });
 
     let markdown = export_markdown(&graph).expect("export spanning table");
@@ -293,17 +295,15 @@ fn markdown_spanning_table_reopens_as_a_flattened_pipe_table() {
     assert!(markdown.contains("rowspan=\"2\""), "{markdown:?}");
 
     let reopened = import_markdown_bytes("span-table-roundtrip.md", &markdown).expect("reopen spanning table");
-    let Block::Table { rows, .. } = &reopened.blocks[0].block
-    else {
-        panic!("reopened table expected: {:#?}", reopened.blocks)
-    };
+    let (head, body) = table(&reopened);
+    let rows: Vec<&TableRow> = head.iter().chain(body).collect();
     // Inline HTML tables are not rendered downstream, so every span collapses
     // into a rectangular grid of single cells and the downgrade is reported.
     assert!(rows.iter().flat_map(|row| &row.cells).all(|cell| cell.colspan == 1 && cell.rowspan == 1));
-    assert!(rows[0].is_header);
+    assert_eq!(head.len(), 1);
     assert_eq!(rows[0].cells.len(), 2);
-    assert_eq!(rows[0].cells[0].content, vec![Inline::Text { text: "Head".into() }]);
-    assert!(rows[1].cells.iter().any(|cell| cell.content == vec![Inline::Text { text: "a".into() }]), "{:?}", rows[1].cells);
+    assert_eq!(cell_text(&reopened, &rows[0].cells[0]), "Head");
+    assert!(body[0].cells.iter().any(|cell| cell_text(&reopened, cell) == "a"), "{:?}", body[0].cells);
     assert!(
         reopened
             .coverage

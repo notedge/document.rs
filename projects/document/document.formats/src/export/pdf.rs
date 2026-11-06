@@ -212,12 +212,13 @@ fn render_block(lines: &mut Vec<RenderLine>, graph: &DocumentGraph, block: &Bloc
                 }
             }
         }
-        Block::Table { rows, .. } => {
-            for row in rows {
-                let prefix = if row.is_header { "H: " } else { "" };
-                let text =
-                    row.cells.iter().map(|cell| inline_text(graph, &cell.content)).collect::<Result<Vec<_>, _>>()?.join(" | ");
-                lines.push(RenderLine::Text(format!("{prefix}{text}")));
+        Block::Table { head, body, foot, .. } => {
+            for (band, prefix) in [(head, "H: "), (body, ""), (foot, "")] {
+                for row in band {
+                    let text =
+                        row.cells.iter().map(|cell| table_cell_text(graph, cell)).collect::<Result<Vec<_>, _>>()?.join(" | ");
+                    lines.push(RenderLine::Text(format!("{prefix}{text}")));
+                }
             }
         }
         Block::Opaque { kind, .. } => return Err(FormatError::unsupported("pdf", format!("opaque block `{kind}`"))),
@@ -239,9 +240,35 @@ fn nested_block_ids(graph: &DocumentGraph) -> HashSet<NodeId> {
     ids
 }
 
+fn table_cell_text(graph: &DocumentGraph, cell: &document_ir::TableCell) -> Result<String, FormatError> {
+    let mut parts = Vec::new();
+    for child_id in &cell.children {
+        let child = graph
+            .block(*child_id)
+            .ok_or_else(|| FormatError::invalid_input(format!("missing PDF table cell child {child_id:?}")))?;
+        let Block::Paragraph { content } = &child.block
+        else {
+            return Err(FormatError::unsupported("pdf", "table cell block other than a paragraph is not representable"));
+        };
+        parts.push(inline_text(graph, content)?);
+    }
+    Ok(parts.join(" "))
+}
+
 fn collect_nested_ids(block: &Block, graph: &DocumentGraph, ids: &mut HashSet<NodeId>) {
     let children = match block {
         Block::Section { children, .. } => children.iter(),
+        Block::Table { head, body, foot, .. } => {
+            return head.iter().chain(body).chain(foot).flat_map(|row| row.cells.iter()).for_each(|cell| {
+                for child in &cell.children {
+                    if ids.insert(*child) {
+                        if let Some(node) = graph.block(*child) {
+                            collect_nested_ids(&node.block, graph, ids);
+                        }
+                    }
+                }
+            });
+        }
         Block::List { items, .. } => {
             return items.iter().flat_map(|item| item.children.iter()).for_each(|child| {
                 if ids.insert(*child) {

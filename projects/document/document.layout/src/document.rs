@@ -1232,7 +1232,21 @@ impl<'a> PageBuilder<'a> {
         self.pad(tokens.code_margin);
     }
 
-    fn emit_table(&mut self, caption: Option<&str>, rows: &[TableRow], indent: f64) {
+    fn emit_table(
+        &mut self,
+        graph: &DocumentGraph,
+        caption: Option<&str>,
+        head: &[TableRow],
+        body: &[TableRow],
+        foot: &[TableRow],
+        indent: f64,
+    ) {
+        let rows: Vec<(&TableRow, bool)> = head
+            .iter()
+            .map(|row| (row, true))
+            .chain(body.iter().map(|row| (row, false)))
+            .chain(foot.iter().map(|row| (row, false)))
+            .collect();
         let tokens = self.hint.style;
         let size = self.body_size();
         let line_box = self.line_box(size);
@@ -1241,7 +1255,7 @@ impl<'a> PageBuilder<'a> {
         let padding = tokens.table_pad_h;
         let columns = rows
             .iter()
-            .map(|row| row.cells.iter().map(|cell| cell.colspan.max(1) as usize).sum::<usize>())
+            .map(|(row, _)| row.cells.iter().map(|cell| cell.colspan.max(1) as usize).sum::<usize>())
             .max()
             .unwrap_or(1)
             .max(1);
@@ -1251,21 +1265,18 @@ impl<'a> PageBuilder<'a> {
             self.emit_wrapped(caption, size * 0.9, SERIF, indent);
         }
         self.pad(size * 0.4);
-        for (row_index, row) in rows.iter().enumerate() {
-            let header_face = if row.is_header && tokens.heading_bold {
-                TextFace { family: SERIF, style: FontStyle::Bold }
-            }
-            else {
-                BODY_FACE
-            };
+        for (row_index, (row, is_header)) in rows.iter().enumerate() {
+            let header_face =
+                if *is_header && tokens.heading_bold { TextFace { family: SERIF, style: FontStyle::Bold } } else { BODY_FACE };
             let cells: Vec<CellLines> = row
                 .cells
                 .iter()
                 .map(|cell| {
                     let span = cell.colspan.max(1) as usize;
                     let available = (column_width * span as f64 - padding * 2.0).max(24.0);
-                    let atoms = self.compose_atoms(&cell.content, size, indent, header_face, ImageMode::AltText);
-                    let numeric = is_numeric_content(&cell.content);
+                    let content = cell_inlines(graph, cell);
+                    let atoms = self.compose_atoms(&content, size, indent, header_face, ImageMode::AltText);
+                    let numeric = is_numeric_content(&content);
                     CellLines { span, available, lines: break_inline_atoms(&self.text, atoms, size, available, 0.0), numeric }
                 })
                 .collect();
@@ -1273,9 +1284,7 @@ impl<'a> PageBuilder<'a> {
             let height = max_lines as f64 * line_box + tokens.table_pad_v * 2.0;
             self.ensure_space(height);
             let top = self.cursor;
-            if row.is_header
-                && let Some(tint) = tokens.table_header_tint
-            {
+            if *is_header && let Some(tint) = tokens.table_header_tint {
                 self.push(LayoutItem::Rect(Rect {
                     x,
                     y: top,
@@ -1287,9 +1296,9 @@ impl<'a> PageBuilder<'a> {
                     stroke_width: 0.0,
                 }));
             }
-            let header_thickness = if row.is_header { tokens.table_header_rule } else { tokens.table_row_rule };
+            let header_thickness = if *is_header { tokens.table_header_rule } else { tokens.table_row_rule };
             if header_thickness > 0.0 {
-                let color = if row.is_header { tokens.table_rule_strong_color } else { tokens.table_rule_color };
+                let color = if *is_header { tokens.table_rule_strong_color } else { tokens.table_rule_color };
                 self.push(LayoutItem::Rule(Rule {
                     x1: x,
                     y1: top,
@@ -1409,17 +1418,19 @@ impl<'a> PageBuilder<'a> {
         match source {
             ChromeHeader::None => None,
             ChromeHeader::Literal(text) => Some(text.to_string()),
-            ChromeHeader::Title => graph.metadata.title.as_deref().map(str::trim).filter(|title| !title.is_empty()).map(str::to_string).or_else(
-                || {
-                    graph.blocks.iter().find_map(|node| match &node.block {
-                        Block::Section { level: 1, title, .. } => {
-                            let text = title.iter().map(Inline::plain_text).collect::<String>();
-                            (!text.trim().is_empty()).then_some(text)
-                        }
-                        _ => None,
-                    })
-                },
-            ),
+            ChromeHeader::Title => {
+                graph.metadata.title.as_deref().map(str::trim).filter(|title| !title.is_empty()).map(str::to_string).or_else(
+                    || {
+                        graph.blocks.iter().find_map(|node| match &node.block {
+                            Block::Section { level: 1, title, .. } => {
+                                let text = title.iter().map(Inline::plain_text).collect::<String>();
+                                (!text.trim().is_empty()).then_some(text)
+                            }
+                            _ => None,
+                        })
+                    },
+                )
+            }
         }
     }
 
@@ -1563,7 +1574,9 @@ impl<'a> PageBuilder<'a> {
                     }
                 }
                 Block::Math { formula } => self.emit_math(formula, indent),
-                Block::Table { caption, rows } => self.emit_table(caption.as_deref(), rows, indent),
+                Block::Table { caption, head, body, foot } => {
+                    self.emit_table(graph, caption.as_deref(), head, body, foot, indent)
+                }
                 Block::Opaque { kind, .. } if kind == "thematic_break" => self.emit_thematic_break(indent),
                 // An imported TeX picture environment carries no geometry
                 // itself; the host-supplied scene is the only source of its
@@ -1791,6 +1804,29 @@ fn break_inline_atoms(
     }
     finish_inline_line(&mut lines, &mut current, &mut width);
     lines
+}
+
+/// Flatten a table cell's child blocks into the inline run the layout composes.
+///
+/// Every paragraph child keeps its inline semantics, and children are separated
+/// by a space so two authored paragraphs never glue their words together.
+fn cell_inlines(graph: &DocumentGraph, cell: &document_ir::TableCell) -> Vec<Inline> {
+    let mut content = Vec::new();
+    for child_id in &cell.children {
+        let Some(child) = graph.block(*child_id)
+        else {
+            continue;
+        };
+        let Block::Paragraph { content: paragraph } = &child.block
+        else {
+            continue;
+        };
+        if !content.is_empty() {
+            content.push(Inline::Text { text: " ".into() });
+        }
+        content.extend(paragraph.iter().cloned());
+    }
+    content
 }
 
 /// Whether a table cell holds a number and should align to the right.
@@ -2131,12 +2167,8 @@ mod kerning_tests {
         graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Body".to_string() }] });
 
         let mut hint = LayoutHint::a4();
-        hint.chrome = ChromeHint {
-            header: ChromeHeader::Literal("ACME REPORT"),
-            folio: false,
-            start_page: 1,
-            sections: [None; 4],
-        };
+        hint.chrome =
+            ChromeHint { header: ChromeHeader::Literal("ACME REPORT"), folio: false, start_page: 1, sections: [None; 4] };
         let (plan, _) = layout_with_metrics(&graph, &hint, &Diagrams::new(), &metrics);
 
         let runs: Vec<&TextRun> = plan.pages[0]
@@ -2167,16 +2199,9 @@ mod kerning_tests {
 
         let mut hint = LayoutHint::a4();
         hint.section_breaks = [true, true, false, false];
-        hint.chrome = ChromeHint {
-            header: ChromeHeader::Literal("TOP"),
-            folio: true,
-            start_page: 1,
-            sections: [None; 4],
-        };
-        hint.chrome.sections[0] =
-            Some(SectionChrome { header: Some(ChromeHeader::Literal("PART ONE")), folio: Some(false) });
-        hint.chrome.sections[1] =
-            Some(SectionChrome { header: Some(ChromeHeader::Literal("SUBSECTION")), folio: Some(true) });
+        hint.chrome = ChromeHint { header: ChromeHeader::Literal("TOP"), folio: true, start_page: 1, sections: [None; 4] };
+        hint.chrome.sections[0] = Some(SectionChrome { header: Some(ChromeHeader::Literal("PART ONE")), folio: Some(false) });
+        hint.chrome.sections[1] = Some(SectionChrome { header: Some(ChromeHeader::Literal("SUBSECTION")), folio: Some(true) });
 
         let (plan, _) = layout_with_metrics(&graph, &hint, &Diagrams::new(), &metrics);
         assert_eq!(plan.pages.len(), 3, "each forced heading opens a page");

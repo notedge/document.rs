@@ -80,27 +80,42 @@ fn notedown_import_lowers_underscore_emphasis() {
 fn notedown_table_cells_preserve_emphasis() {
     let graph = import_notedown_bytes("styled-table.nd", "| Name | Value |\n|------|-------|\n| **Alpha** | *one* |\n")
         .expect("import notedown");
-    let Block::Table { rows, .. } = &graph.blocks[0].block
-    else {
-        panic!("expected table: {:?}", graph.blocks);
+    let (head, body) = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { head, body, .. } => Some((head.as_slice(), body.as_slice())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected table: {:?}", graph.blocks));
+    assert_eq!(head.len(), 1);
+    let cell_inlines = |cell: &document_ir::TableCell| {
+        cell.children
+            .iter()
+            .filter_map(|id| graph.block(*id))
+            .flat_map(|node| match &node.block {
+                Block::Paragraph { content } => content.clone(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>()
     };
     assert!(
-        rows[1].cells[0].content.iter().any(|inline| matches!(
+        cell_inlines(&body[0].cells[0]).iter().any(|inline| matches!(
             inline,
             Inline::Styled { style, children }
                 if style == "bold" && children == &[Inline::Text { text: "Alpha".into() }]
         )),
         "{:?}",
-        rows[1].cells[0]
+        body[0].cells[0]
     );
     assert!(
-        rows[1].cells[1].content.iter().any(|inline| matches!(
+        cell_inlines(&body[0].cells[1]).iter().any(|inline| matches!(
             inline,
             Inline::Styled { style, children }
                 if style == "italic" && children == &[Inline::Text { text: "one".into() }]
         )),
         "{:?}",
-        rows[1].cells[1]
+        body[0].cells[1]
     );
 }
 
@@ -323,7 +338,7 @@ fn notedown_round_trip_preserves_supported_semantics() {
     assert!(
         reopened.blocks.iter().any(|node| matches!(
             &node.block,
-            Block::Table { rows, .. } if rows.len() == 2 && rows[0].is_header
+            Block::Table { head, body, .. } if head.len() == 1 && body.len() == 1
         )),
         "{:?}",
         reopened.blocks

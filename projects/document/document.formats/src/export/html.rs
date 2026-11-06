@@ -252,6 +252,11 @@ fn nested_block_ids(graph: &DocumentGraph) -> std::collections::HashSet<document
                     ids.extend(item.children.iter().copied());
                 }
             }
+            Block::Table { head, body, foot, .. } => {
+                for cell in head.iter().chain(body).chain(foot).flat_map(|row| row.cells.iter()) {
+                    ids.extend(cell.children.iter().copied());
+                }
+            }
             _ => {}
         }
     }
@@ -357,7 +362,7 @@ fn write_block(
             out.push_str("</div>");
         }
         Block::List { ordered, items } => write_list(out, graph, *ordered, items, diagrams, footnote_refs)?,
-        Block::Table { rows, .. } => write_table(out, rows, footnote_refs)?,
+        Block::Table { head, body, foot, .. } => write_table(out, graph, head, body, foot, diagrams, footnote_refs)?,
         Block::Opaque { kind, payload_hint, .. } if kind == "thematic_break" => {
             out.push_str("<hr>");
             if !payload_hint.is_empty() {
@@ -420,32 +425,45 @@ fn write_list(
     Ok(())
 }
 
-pub(crate) fn write_table(out: &mut String, rows: &[TableRow], footnote_refs: &mut FootnoteRefIds) -> Result<(), FormatError> {
+pub(crate) fn write_table(
+    out: &mut String,
+    graph: &DocumentGraph,
+    head: &[TableRow],
+    body: &[TableRow],
+    foot: &[TableRow],
+    diagrams: &HashMap<NodeId, RenderedDiagram>,
+    footnote_refs: &mut FootnoteRefIds,
+) -> Result<(), FormatError> {
     out.push_str("<table>");
-    // `TableRow::is_header` is the only section information the IR keeps, so the
-    // leading run of header rows becomes `<thead>` and everything after it
-    // becomes `<tbody>`. Header rows that appear after body rows are reported
-    // by the HTML importer as `import.html.table_sections`, because no bag of
-    // per-row flags can express two header groups.
-    let header_count = rows.iter().take_while(|row| row.is_header).count();
-    if header_count > 0 {
+    if !head.is_empty() {
         out.push_str("<thead>");
-        write_table_rows(out, &rows[..header_count], footnote_refs)?;
+        write_table_rows(out, graph, head, "th", diagrams, footnote_refs)?;
         out.push_str("</thead>");
     }
-    if header_count < rows.len() {
+    if !body.is_empty() {
         out.push_str("<tbody>");
-        write_table_rows(out, &rows[header_count..], footnote_refs)?;
+        write_table_rows(out, graph, body, "td", diagrams, footnote_refs)?;
         out.push_str("</tbody>");
+    }
+    if !foot.is_empty() {
+        out.push_str("<tfoot>");
+        write_table_rows(out, graph, foot, "td", diagrams, footnote_refs)?;
+        out.push_str("</tfoot>");
     }
     out.push_str("</table>");
     Ok(())
 }
 
-fn write_table_rows(out: &mut String, rows: &[TableRow], footnote_refs: &mut FootnoteRefIds) -> Result<(), FormatError> {
+fn write_table_rows(
+    out: &mut String,
+    graph: &DocumentGraph,
+    rows: &[TableRow],
+    tag: &str,
+    diagrams: &HashMap<NodeId, RenderedDiagram>,
+    footnote_refs: &mut FootnoteRefIds,
+) -> Result<(), FormatError> {
     for row in rows {
         out.push_str("<tr>");
-        let tag = if row.is_header { "th" } else { "td" };
         for cell in &row.cells {
             out.push('<');
             out.push_str(tag);
@@ -460,7 +478,12 @@ fn write_table_rows(out: &mut String, rows: &[TableRow], footnote_refs: &mut Foo
                 out.push('"');
             }
             out.push('>');
-            write_inlines(out, &cell.content, footnote_refs)?;
+            for child_id in &cell.children {
+                let child = graph
+                    .block(*child_id)
+                    .ok_or_else(|| FormatError::invalid_input(format!("table cell child `{child_id:?}` is missing")))?;
+                write_block(out, graph, *child_id, &child.block, diagrams, footnote_refs)?;
+            }
             out.push_str("</");
             out.push_str(tag);
             out.push('>');
@@ -633,13 +656,6 @@ fn collect_export_losses(graph: &DocumentGraph) -> Vec<LossMarker> {
             Block::List { items, .. } => {
                 for item in items {
                     collect_inline_losses(graph, &item.content, &mut losses, &mut seen);
-                }
-            }
-            Block::Table { rows, .. } => {
-                for row in rows {
-                    for cell in &row.cells {
-                        collect_inline_losses(graph, &cell.content, &mut losses, &mut seen);
-                    }
                 }
             }
             Block::Opaque { kind, .. } if kind == "thematic_break" || kind == "footnote_definition" => {}

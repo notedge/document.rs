@@ -236,14 +236,19 @@ fn collect_preserved_math(graph: &DocumentGraph) -> Vec<PreservedItem> {
                     collect_inline_math(&item.content, &mut items);
                 }
             }
-            Block::Table { rows, .. } => {
-                for row in rows {
+            Block::Table { head, body, foot, .. } => {
+                for row in head.iter().chain(body).chain(foot) {
                     for cell in &row.cells {
-                        collect_inline_math(&cell.content, &mut items);
+                        for child in &cell.children {
+                            if let Some(node) = graph.block(*child) {
+                                if let Block::Paragraph { content } = &node.block {
+                                    collect_inline_math(content, &mut items);
+                                }
+                            }
+                        }
                     }
                 }
             }
-            Block::Paragraph { content } => collect_inline_math(content, &mut items),
             Block::Math { formula } => preserve_math(formula, &mut items),
             _ => {}
         }

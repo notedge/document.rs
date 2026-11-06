@@ -13,7 +13,10 @@ use document_ir::{
     MathFormula, RelationEndpoint, SemanticStatus, SourceKind, SourceRef, TableCell, TableRow,
 };
 
-use crate::{FormatError, import::register_image_assets};
+use crate::{
+    FormatError,
+    import::{cell_children, register_image_assets},
+};
 
 use super::{
     codec::{self, FORMAT_ID, PandocBudget},
@@ -550,34 +553,35 @@ impl Importer {
             || !table.foot.attr.is_empty()
             || table.bodies.iter().any(|body| !body.attr.is_empty())
             || table.bodies.len() > 1
-            || table.bodies.iter().any(|body| body.row_head_columns != 0 || !body.head.is_empty())
-            || !table.foot.rows.is_empty()
+            || table.bodies.iter().any(|body| body.row_head_columns != 0)
         {
             self.structural_loss(
                 pointer,
                 "import.pandoc-json.table_structure",
-                "table head/body/foot section attributes or split sections have no IR field and were flattened into rows",
+                "table section attributes, split bodies, or row-head columns have no IR field",
                 SemanticStatus::Partial,
             )?;
         }
         let caption = self.caption_text(&table.caption, &format!("{pointer}/c/1"))?;
-        let mut rows = Vec::new();
+        let mut head = Vec::new();
         for (index, row) in table.head.rows.iter().enumerate() {
-            rows.push(self.lower_row(row, true, &format!("{pointer}/c/3/1/{index}"))?);
+            head.push(self.lower_row(row, &format!("{pointer}/c/3/1/{index}"))?);
         }
-        for (body_index, body) in table.bodies.iter().enumerate() {
+        let mut body = Vec::new();
+        for (body_index, body_section) in table.bodies.iter().enumerate() {
             let body_pointer = format!("{pointer}/c/4/{body_index}");
-            for (index, row) in body.head.iter().enumerate() {
-                rows.push(self.lower_row(row, true, &format!("{body_pointer}/2/{index}"))?);
+            for (index, row) in body_section.head.iter().enumerate() {
+                head.push(self.lower_row(row, &format!("{body_pointer}/2/{index}"))?);
             }
-            for (index, row) in body.body.iter().enumerate() {
-                rows.push(self.lower_row(row, false, &format!("{body_pointer}/3/{index}"))?);
+            for (index, row) in body_section.body.iter().enumerate() {
+                body.push(self.lower_row(row, &format!("{body_pointer}/3/{index}"))?);
             }
         }
+        let mut foot = Vec::new();
         for (index, row) in table.foot.rows.iter().enumerate() {
-            rows.push(self.lower_row(row, false, &format!("{pointer}/c/5/1/{index}"))?);
+            foot.push(self.lower_row(row, &format!("{pointer}/c/5/1/{index}"))?);
         }
-        Ok(IrBlock::Table { caption, rows })
+        Ok(IrBlock::Table { caption, head, body, foot })
     }
 
     fn caption_text(&mut self, caption: &Caption, pointer: &str) -> Result<Option<String>, FormatError> {
@@ -595,12 +599,12 @@ impl Importer {
         Ok(Some(blocks_text(&caption.blocks)))
     }
 
-    fn lower_row(&mut self, row: &super::model::Row, is_header: bool, pointer: &str) -> Result<TableRow, FormatError> {
+    fn lower_row(&mut self, row: &super::model::Row, pointer: &str) -> Result<TableRow, FormatError> {
         let mut cells = Vec::with_capacity(row.cells.len());
         for (index, cell) in row.cells.iter().enumerate() {
             cells.push(self.lower_cell(cell, &format!("{pointer}/1/{index}"))?);
         }
-        Ok(TableRow { is_header, cells })
+        Ok(TableRow { cells })
     }
 
     fn lower_cell(&mut self, cell: &Cell, pointer: &str) -> Result<TableCell, FormatError> {
@@ -647,7 +651,7 @@ impl Importer {
             self.flatten_blocks(&cell.blocks, &format!("{pointer}/4"))?
         };
         Ok(TableCell {
-            content,
+            children: cell_children(&mut self.graph, content),
             colspan: u32::try_from(cell.col_span.max(1)).unwrap_or(1),
             rowspan: u32::try_from(cell.row_span.max(1)).unwrap_or(1),
         })

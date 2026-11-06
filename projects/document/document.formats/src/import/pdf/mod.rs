@@ -22,7 +22,7 @@ use document_ir::{
     Block, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, NodeId, SemanticStatus, TableCell, TableRow,
 };
 
-use crate::FormatError;
+use crate::{FormatError, import::common::cell_children};
 
 use self::{
     content::{PageSink, extract_text_operators},
@@ -198,17 +198,20 @@ fn emit_flow_block(
         }
         FlowBlock::Table { rows } => {
             inferred.tables = true;
-            let rows = rows
+            let body = rows
                 .into_iter()
                 .map(|cells| TableRow {
-                    is_header: false,
                     cells: cells
                         .into_iter()
-                        .map(|text| TableCell { content: vec![Inline::Text { text }], colspan: 1, rowspan: 1 })
+                        .map(|text| TableCell {
+                            children: cell_children(graph, vec![Inline::Text { text }]),
+                            colspan: 1,
+                            rowspan: 1,
+                        })
                         .collect(),
                 })
                 .collect();
-            graph.push_block(Block::Table { caption: None, rows });
+            graph.push_block(Block::Table { caption: None, head: Vec::new(), body, foot: Vec::new() });
         }
         FlowBlock::NamedImage(name) => match images.get(&name) {
             Some(image) => append_image_asset(graph, image),

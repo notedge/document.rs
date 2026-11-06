@@ -56,7 +56,7 @@ use oak_tex::{
 };
 
 use super::{
-    common::register_image_assets,
+    common::{cell_children, register_image_assets},
     tex_math::{environment_rows_of, lower_tex_environment, lower_tex_math, row_metadata},
 };
 use crate::FormatError;
@@ -1116,18 +1116,19 @@ impl<'a> TexLowerer<'a> {
                 SemanticStatus::Partial,
             );
         }
-        let mut rows = Vec::new();
+        let mut body = Vec::new();
         for row in split_table_rows(interior) {
-            let cells = split_table_cells(row)
-                .into_iter()
-                .map(|cell| TableCell { content: self.lower_inline_fragment(cell), colspan: 1, rowspan: 1 })
-                .collect();
-            rows.push(TableRow { is_header: false, cells });
+            let mut cells = Vec::new();
+            for cell in split_table_cells(row) {
+                let content = self.lower_inline_fragment(cell);
+                cells.push(TableCell { children: cell_children(&mut self.graph, content), colspan: 1, rowspan: 1 });
+            }
+            body.push(TableRow { cells });
         }
-        if rows.is_empty() {
+        if body.is_empty() {
             self.loss("import.tex.empty_table", "tabular environment produced no table rows", SemanticStatus::Partial);
         }
-        self.push_block(sink, Block::Table { caption: None, rows });
+        self.push_block(sink, Block::Table { caption: None, head: Vec::new(), body, foot: Vec::new() });
     }
 
     /// Emit the authored whitespace that sits between two lowered items.
@@ -1549,13 +1550,8 @@ fn resolve_pending_references(graph: &mut DocumentGraph, labels: &HashMap<String
                     fix_pending_refs(&mut item.content, labels, &mut unresolved);
                 }
             }
-            Block::Table { rows, .. } => {
-                for row in rows {
-                    for cell in &mut row.cells {
-                        fix_pending_refs(&mut cell.content, labels, &mut unresolved);
-                    }
-                }
-            }
+            // Table cell bodies are their own paragraph blocks, so the
+            // paragraph arm above already rewrites every reference they carry.
             _ => {}
         }
     }

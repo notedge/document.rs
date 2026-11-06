@@ -5,7 +5,10 @@ use document_ir::{
 };
 use oak_html::ast::{Element, HtmlDocument, HtmlNode};
 
-use crate::import::math_ml::{lower_math_element, math_display, single_display_math_child};
+use crate::import::{
+    common::cell_children,
+    math_ml::{lower_math_element, math_display, single_display_math_child},
+};
 
 use super::{
     assets::register_image_from_src,
@@ -200,8 +203,13 @@ fn lower_semantic_block(
             }),
         "aside" if is_footnote_aside(element) => lower_footnote_definition(element, losses),
         "table" => {
-            let rows = collect_table_rows(element, graph, member_path, losses);
-            if rows.is_empty() { None } else { Some(Block::Table { caption: None, rows }) }
+            let (head, body) = collect_table_rows(element, graph, member_path, losses);
+            if head.is_empty() && body.is_empty() {
+                None
+            }
+            else {
+                Some(Block::Table { caption: None, head, body, foot: Vec::new() })
+            }
         }
         _ => {
             losses.push(LossMarker {
@@ -585,10 +593,22 @@ fn collect_table_rows(
     graph: &mut DocumentGraph,
     member_path: Option<&str>,
     losses: &mut Vec<LossMarker>,
-) -> Vec<TableRow> {
+) -> (Vec<TableRow>, Vec<TableRow>) {
     let mut rows = Vec::new();
     walk_table_rows(element, graph, member_path, losses, &mut rows);
-    rows
+    let mut head = Vec::new();
+    let mut body = Vec::new();
+    let mut leading_header = true;
+    for (is_header, row) in rows {
+        if leading_header && is_header {
+            head.push(row);
+        }
+        else {
+            leading_header = false;
+            body.push(row);
+        }
+    }
+    (head, body)
 }
 
 fn walk_table_rows(
@@ -596,7 +616,7 @@ fn walk_table_rows(
     graph: &mut DocumentGraph,
     member_path: Option<&str>,
     losses: &mut Vec<LossMarker>,
-    rows: &mut Vec<TableRow>,
+    rows: &mut Vec<(bool, TableRow)>,
 ) {
     if element_is(element, "tr") {
         rows.push(collect_table_row(element, graph, member_path, losses));
@@ -612,7 +632,7 @@ fn collect_table_row(
     graph: &mut DocumentGraph,
     member_path: Option<&str>,
     losses: &mut Vec<LossMarker>,
-) -> TableRow {
+) -> (bool, TableRow) {
     let mut is_header = false;
     let mut cells = Vec::new();
     for child in direct_child_elements(row) {
@@ -621,18 +641,12 @@ fn collect_table_row(
             if tag == "th" {
                 is_header = true;
             }
-            cells.push(TableCell {
-                content: {
-                    let mut content = collect_inlines_from_element(child, graph, member_path, losses);
-                    trim_inline_edges(&mut content);
-                    content
-                },
-                colspan: 1,
-                rowspan: 1,
-            });
+            let mut content = collect_inlines_from_element(child, graph, member_path, losses);
+            trim_inline_edges(&mut content);
+            cells.push(TableCell { children: cell_children(graph, content), colspan: 1, rowspan: 1 });
         }
     }
-    TableRow { is_header, cells }
+    (is_header, TableRow { cells })
 }
 
 fn lower_math(element: &Element, display: MathDisplay, losses: &mut Vec<LossMarker>) -> document_ir::MathFormula {

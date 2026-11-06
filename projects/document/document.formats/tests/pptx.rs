@@ -10,7 +10,7 @@ use document_formats::import::pptx::{
     EstimatedMetrics, Fill, GraphOptions, PlaceholderKind, RenderOptions, ShapeKind, TextMeasurer, import_pptx_bytes,
     presentation_to_graph, render_presentation, render_presentation_with, text_wrap_probe,
 };
-use document_ir::{Block, Inline, TableCell};
+use document_ir::{Block, DocumentGraph, Inline, TableCell};
 
 fn presentation() -> document_formats::import::pptx::PptxPresentation {
     let bytes = sample_package();
@@ -148,12 +148,18 @@ fn ir_projection_keeps_slide_sections_tables_and_refusals() {
     };
     assert!(matches!(&title[0], Inline::Text { text } if text == "Office line review"), "{title:?}");
     let table = graph.blocks.iter().find_map(|node| match &node.block {
-        Block::Table { rows, caption } => Some((caption, rows)),
+        Block::Table { head, body, foot, caption } => Some((caption, head, body, foot)),
         _ => None,
     });
-    let (caption, rows) = table.expect("table block");
+    let (caption, head, body, foot) = table.expect("table block");
     assert_eq!(caption.as_deref(), Some("Revenue table"));
-    let flat: String = rows.iter().flat_map(|row| row.cells.iter().flat_map(cell_text)).collect::<Vec<_>>().join(" ");
+    let flat: String = head
+        .iter()
+        .chain(body)
+        .chain(foot)
+        .flat_map(|row| row.cells.iter().flat_map(|cell| cell_text(&graph, cell)))
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(flat.contains("Region"), "{flat}");
 
     let body: String = graph
@@ -243,12 +249,17 @@ fn flattened_text(inline: &Inline, output: &mut String) {
     }
 }
 
-fn cell_text(cell: &TableCell) -> Vec<String> {
-    cell.content
+fn cell_text(graph: &DocumentGraph, cell: &TableCell) -> Vec<String> {
+    cell.children
         .iter()
+        .filter_map(|id| graph.block(*id))
+        .flat_map(|node| match &node.block {
+            Block::Paragraph { content } => content.clone(),
+            _ => Vec::new(),
+        })
         .map(|inline| {
             let mut text = String::new();
-            flattened_text(inline, &mut text);
+            flattened_text(&inline, &mut text);
             text
         })
         .collect()

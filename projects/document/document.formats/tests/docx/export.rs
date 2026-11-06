@@ -399,25 +399,23 @@ fn docx_export_round_trips_tables() {
 #[test]
 fn docx_export_writes_grid_span_and_vertical_merge() {
     let mut graph = DocumentGraph::new(DocumentId(51));
+    let wide = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Wide".into() }] });
+    let tall = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Tall".into() }] });
+    let r1c2 = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "R1C2".into() }] });
+    let r2c2 = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "R2C2".into() }] });
     graph.push_block(Block::Table {
         caption: None,
-        rows: vec![
+        head: vec![TableRow { cells: vec![TableCell { children: vec![wide], colspan: 2, rowspan: 1 }] }],
+        body: vec![
             TableRow {
-                is_header: true,
-                cells: vec![TableCell { content: vec![Inline::Text { text: "Wide".into() }], colspan: 2, rowspan: 1 }],
-            },
-            TableRow {
-                is_header: false,
                 cells: vec![
-                    TableCell { content: vec![Inline::Text { text: "Tall".into() }], colspan: 1, rowspan: 2 },
-                    TableCell { content: vec![Inline::Text { text: "R1C2".into() }], colspan: 1, rowspan: 1 },
+                    TableCell { children: vec![tall], colspan: 1, rowspan: 2 },
+                    TableCell { children: vec![r1c2], colspan: 1, rowspan: 1 },
                 ],
             },
-            TableRow {
-                is_header: false,
-                cells: vec![TableCell { content: vec![Inline::Text { text: "R2C2".into() }], colspan: 1, rowspan: 1 }],
-            },
+            TableRow { cells: vec![TableCell { children: vec![r2c2], colspan: 1, rowspan: 1 }] },
         ],
+        foot: Vec::new(),
     });
     let exported = export_docx_bytes(&graph).expect("export docx");
     let exported_xml = String::from_utf8_lossy(&exported);
@@ -448,16 +446,21 @@ fn docx_export_writes_grid_span_and_vertical_merge() {
     // continuation cell extends the origin cell's `rowspan` instead of adding a
     // fifth cell to the table.
     let round = import_docx_bytes("spans.docx", &exported).expect("re-import spanned docx");
-    let Block::Table { rows, .. } = &round.blocks[0].block
-    else {
-        panic!("expected a table, got {:#?}", round.blocks[0].block);
-    };
-    assert_eq!(rows.len(), 3, "{rows:#?}");
-    assert_eq!(rows[0].cells.len(), 1, "{rows:#?}");
-    assert_eq!((rows[0].cells[0].colspan, rows[0].cells[0].rowspan), (2, 1));
-    assert_eq!(rows[1].cells.len(), 2, "{rows:#?}");
-    assert_eq!((rows[1].cells[0].colspan, rows[1].cells[0].rowspan), (1, 2));
-    assert_eq!(rows[2].cells.len(), 1, "{rows:#?}");
+    let (head, body) = round
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { head, body, .. } => Some((head.as_slice(), body.as_slice())),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("expected a table, got {:#?}", round.blocks));
+    assert_eq!(head.len(), 1, "{head:#?}");
+    assert_eq!(body.len(), 2, "{body:#?}");
+    assert_eq!(head[0].cells.len(), 1, "{head:#?}");
+    assert_eq!((head[0].cells[0].colspan, head[0].cells[0].rowspan), (2, 1));
+    assert_eq!(body[0].cells.len(), 2, "{body:#?}");
+    assert_eq!((body[0].cells[0].colspan, body[0].cells[0].rowspan), (1, 2));
+    assert_eq!(body[1].cells.len(), 1, "{body:#?}");
 }
 
 #[test]

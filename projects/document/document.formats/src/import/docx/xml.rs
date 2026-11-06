@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use document_ir::{
-    Asset, AssetId, AssetKind, Block, BreakKind, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, MathDisplay,
+    Asset, AssetId, AssetKind, Block, BreakKind, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, MathDisplay, NodeId,
     PageSetup, RelationEndpoint, SemanticStatus, TableCell,
 };
 use oak_xml::ast::{XmlElement, XmlValue};
@@ -11,7 +11,7 @@ use super::{
     math::{lower_omml, omath_children},
     numbering::{NumberingCatalog, marker_format_is_representable},
     styles::StyleDefaults,
-    table::{TableState, append_cell_paragraph, push_table_block},
+    table::{TableState, push_table_block},
     xml_extensions::{
         attribute_value, bool_from_element, child_element, document_root, element_is, element_text, elements_by_local_name,
         parse_xml_bytes, u32_attribute,
@@ -272,17 +272,17 @@ fn parse_table_element(
                 mark_open(&mut next_open, column, colspan, Some((origin_row, origin_cell)));
             }
             else {
-                let mut current_cell = Vec::new();
+                let mut current_cell: Vec<NodeId> = Vec::new();
                 for paragraph in cell.children.iter().filter_map(XmlValue::as_element).filter(|child| element_is(child, "p")) {
                     let paragraph = parse_paragraph_element(paragraph, rels, graph, footnotes, referenced_footnotes)?;
                     let mut content = paragraph_inlines(&paragraph).unwrap_or_default();
                     content.extend(math_block_inlines(&paragraph));
                     if !content.is_empty() {
-                        append_cell_paragraph(&mut current_cell, &content);
+                        current_cell.push(graph.push_block(Block::Paragraph { content }));
                     }
                 }
                 let cell_index = current_row.len();
-                current_row.push(TableCell { content: current_cell, colspan: colspan as u32, rowspan: 1 });
+                current_row.push(TableCell { children: current_cell, colspan: colspan as u32, rowspan: 1 });
                 let origin = (merge == VerticalMerge::Restart).then_some((table.rows.len(), cell_index));
                 mark_open(&mut next_open, column, colspan, origin);
             }

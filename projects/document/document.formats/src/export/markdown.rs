@@ -3,7 +3,9 @@ use std::{
     fmt::Write as _,
 };
 
-use document_ir::{Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
+use document_ir::{
+    Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableCell, TableRow,
+};
 
 use crate::FormatError;
 
@@ -69,6 +71,11 @@ fn nested_block_ids(graph: &DocumentGraph) -> HashSet<NodeId> {
             Block::List { items, .. } => {
                 for item in items {
                     ids.extend(item.children.iter().copied());
+                }
+            }
+            Block::Table { head, body, foot, .. } => {
+                for cell in head.iter().chain(body).chain(foot).flat_map(|row| row.cells.iter()) {
+                    ids.extend(cell.children.iter().copied());
                 }
             }
             _ => {}
@@ -144,8 +151,8 @@ fn write_block(
             write_list(out, graph, *ordered, items, 0, image_urls)?;
             out.push('\n');
         }
-        Block::Table { rows, .. } => {
-            write_table(out, rows, image_urls)?;
+        Block::Table { head, body, foot, .. } => {
+            write_table(out, graph, head, body, foot, image_urls)?;
             out.push('\n');
         }
         Block::Math { formula } => {
@@ -216,51 +223,77 @@ fn write_list(
     Ok(())
 }
 
-fn write_table(out: &mut String, rows: &[TableRow], image_urls: Option<&HashMap<String, String>>) -> Result<(), FormatError> {
-    if rows.is_empty() {
+fn write_table(
+    out: &mut String,
+    graph: &DocumentGraph,
+    head: &[TableRow],
+    body: &[TableRow],
+    foot: &[TableRow],
+    image_urls: Option<&HashMap<String, String>>,
+) -> Result<(), FormatError> {
+    if head.is_empty() && body.is_empty() && foot.is_empty() {
         return Ok(());
     }
-    if rows.iter().any(|row| row.cells.iter().any(|cell| cell.colspan > 1 || cell.rowspan > 1)) {
+    if head.iter().chain(body).chain(foot).any(|row| row.cells.iter().any(|cell| cell.colspan > 1 || cell.rowspan > 1)) {
         // GFM tables cannot express merged cells, so a spanning table is written
         // as an inline HTML table instead of silently dropping the spans.
-        super::html::write_table(out, rows, &mut super::html::FootnoteRefIds::default())?;
+        super::html::write_table(out, graph, head, body, foot, &HashMap::new(), &mut super::html::FootnoteRefIds::default())?;
         out.push('\n');
         return Ok(());
     }
-    for (index, row) in rows.iter().enumerate() {
+    // GFM carries exactly one header row. The first row of the table becomes
+    // that header, and every later row, including extra head and foot rows,
+    // follows as body content so no authored row disappears.
+    let mut first = true;
+    for row in head.iter().chain(body).chain(foot) {
         out.push('|');
         for cell in &row.cells {
             out.push(' ');
-            write_table_cell(out, &cell.content, image_urls)?;
+            write_table_cell(out, graph, cell, image_urls)?;
             out.push_str(" |");
         }
         out.push('\n');
-        if row.is_header {
+        if first {
             out.push('|');
             for _ in &row.cells {
                 out.push_str(" --- |");
             }
             out.push('\n');
-        }
-        else if index == 0 {
-            out.push('|');
-            for _ in &row.cells {
-                out.push_str(" --- |");
-            }
-            out.push('\n');
+            first = false;
         }
     }
     Ok(())
 }
 
-/// Table cells carry the full inline IR, so emphasis, code spans, links, and
-/// images must be written as Markdown rather than flattened to plain text.
+/// Table cells carry full child blocks, so emphasis, code spans, links, and
+/// images are written as Markdown instead of flattened to plain text. A cell
+/// with more than one paragraph joins them with `<br>` because a GFM pipe
+/// cell cannot hold block separators.
 fn write_table_cell(
     out: &mut String,
-    inlines: &[Inline],
+    graph: &DocumentGraph,
+    cell: &TableCell,
     image_urls: Option<&HashMap<String, String>>,
 ) -> Result<(), FormatError> {
-    write_inlines_in_table_cell(out, inlines, image_urls, true)
+    let mut wrote = false;
+    for child_id in &cell.children {
+        let child = graph
+            .block(*child_id)
+            .ok_or_else(|| FormatError::invalid_input(format!("table cell child `{child_id:?}` is missing")))?;
+        let Block::Paragraph { content } = &child.block
+        else {
+            return Err(FormatError::unsupported(
+                "markdown",
+                format!("table cell child `{child_id:?}` is not representable in a GFM pipe cell"),
+            ));
+        };
+        if wrote {
+            out.push_str("<br>");
+        }
+        write_inlines_in_table_cell(out, content, image_urls, true)?;
+        wrote = true;
+    }
+    Ok(())
 }
 
 fn inline_plain_text(inline: &Inline) -> String {

@@ -97,10 +97,11 @@ fn ir_projection_keeps_tables_and_reports_hidden_sheet_loss() {
         graph.blocks.iter().map(|node| &node.block).filter(|block| matches!(block, Block::Table { .. })).collect();
     assert_eq!(tables.len(), 2, "visible sheets become tables");
     let data = tables[0];
-    let Block::Table { caption, rows } = data
+    let Block::Table { caption, head, body, .. } = data
     else {
         unreachable!()
     };
+    let rows: Vec<&document_ir::TableRow> = head.iter().chain(body).collect();
     assert_eq!(caption.as_deref(), Some("Data"));
     let first = &rows[0].cells[0];
     assert_eq!(first.colspan, 6);
@@ -109,7 +110,12 @@ fn ir_projection_keeps_tables_and_reports_hidden_sheet_loss() {
     assert!(loss_codes.iter().any(|code| *code == "import.xlsx.chart"));
     assert!(graph.coverage.loss.iter().any(|loss| loss.status == SemanticStatus::Unsupported));
     let formula_cell = rows.iter().flat_map(|row| row.cells.iter()).find(|cell| {
-        cell.content.iter().any(|inline| matches!(inline, Inline::Attributed { attributes, .. } if attributes.pairs.iter().any(|pair| pair.key == "xlsx.formula")))
+        cell.children.iter().filter_map(|id| graph.block(*id)).any(|node| match &node.block {
+            Block::Paragraph { content } => content
+                .iter()
+                .any(|inline| matches!(inline, Inline::Attributed { attributes, .. } if attributes.pairs.iter().any(|pair| pair.key == "xlsx.formula"))),
+            _ => false,
+        })
     });
     assert!(formula_cell.is_some(), "formula attribute survives the projection");
 }
