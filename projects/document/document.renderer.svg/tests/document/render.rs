@@ -73,6 +73,9 @@ fn titled_link_presentation(href: &str, title: Option<&str>) -> DisplayPresentat
                 text: "example link".to_string(),
                 href: Some(href.to_string()),
                 title: title.map(str::to_string),
+                color: None,
+                numeric: false,
+                artifact: false,
             })],
         }],
     }

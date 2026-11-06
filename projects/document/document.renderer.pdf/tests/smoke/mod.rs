@@ -21,6 +21,7 @@ fn pdf_writer_emits_a_parseable_document() {
                 title: None,
                 color: None,
                 numeric: false,
+                artifact: false,
             })],
         }],
     };

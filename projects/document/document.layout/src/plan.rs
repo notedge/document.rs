@@ -42,6 +42,14 @@ pub struct TextRun {
     pub color: Option<&'static str>,
     /// Whether the digits in this run should use tabular figures.
     pub numeric: bool,
+    /// Whether this run is page furniture rather than authored content.
+    ///
+    /// The running header and folio live inside the page margins, so text
+    /// extraction over the painted page would otherwise read them as body
+    /// paragraphs. Renderers that write a text layer mark these runs as PDF
+    /// `Artifact` content, which the reader drops by specification instead of
+    /// guessing from geometry.
+    pub artifact: bool,
 }
 
 /// A straight stroked line, used for thematic breaks and table rules.

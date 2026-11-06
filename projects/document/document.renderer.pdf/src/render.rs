@@ -1035,6 +1035,14 @@ fn write_item<'d>(
     painter: &mut crate::scene::ScenePaint<'_, 'd>,
 ) {
     match item {
+        DisplayItem::TextRun(run) if run.artifact => {
+            // Page furniture is not authored content, so mark it as a pagination
+            // artifact (PDF 1.7 §14.8.2.2). Text extraction consumers drop it
+            // instead of reopening a running header or folio as body text.
+            out.push_str("/Artifact BMC\n");
+            write_text(out, page_height, run, fonts, embedded, painter.diagnostics.as_deref_mut());
+            out.push_str("EMC\n");
+        }
         DisplayItem::TextRun(run) => write_text(out, page_height, run, fonts, embedded, painter.diagnostics.as_deref_mut()),
         DisplayItem::Rule(rule) => write_rule(out, page_height, rule),
         DisplayItem::Rect(rect) => write_rect(out, page_height, rect),

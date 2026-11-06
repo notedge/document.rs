@@ -45,6 +45,27 @@ fn pdf_without_host_faces_reports_missing_fonts() {
 }
 
 #[test]
+fn pdf_self_reopen_drops_page_furniture() {
+    let faces = pdf_body_faces();
+    let mut markdown = String::from("# Document Title\n\n");
+    for index in 0..80 {
+        markdown.push_str(&format!("Body line {index} of a multi page document.\n\n"));
+    }
+    let first = convert_bytes_with_body_faces("markdown", "pdf", "self.md", markdown.into_bytes(), None, &faces)
+        .expect("write first PDF");
+    let first_pdf = first.binary.expect("PDF bytes");
+    let second = convert_bytes_with_body_faces("pdf", "pdf", "self.pdf", first_pdf, None, &faces).expect("rewrite PDF");
+    let reopened = convert_bytes("pdf", "markdown", "round.pdf", second.binary.expect("PDF bytes"), None).expect("read PDF");
+    // The writer paints chrome from page two onward. Each artefact section is
+    // dropped on extraction, so the running header and folio never reopen as
+    // body text.
+    assert_eq!(reopened.markdown.matches("Document Title").count(), 1, "{}", reopened.markdown);
+    assert!(reopened.markdown.trim_start().starts_with("# Document Title"), "{}", reopened.markdown);
+    assert!(!reopened.markdown.lines().any(|line| line.trim() == "2"), "{}", reopened.markdown);
+    assert!(reopened.markdown.contains("Body line 79"), "{}", reopened.markdown);
+}
+
+#[test]
 fn markdown_to_pdf_and_back_reopens_text() {
     let faces = pdf_body_faces();
     let output =

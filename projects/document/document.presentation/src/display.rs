@@ -39,6 +39,11 @@ pub struct DisplayTextRun {
     pub color: Option<&'static str>,
     /// Whether the digits in this run should use tabular figures.
     pub numeric: bool,
+    /// Whether this run is page furniture such as a running header or folio.
+    ///
+    /// Renderers with a text layer mark these runs as PDF `Artifact` content so
+    /// a reader drops them instead of reading them as body paragraphs.
+    pub artifact: bool,
 }
 
 /// One stroked line in display coordinates.

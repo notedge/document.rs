@@ -31,7 +31,7 @@ pub fn build_display_presentation(plan: &LayoutPlan) -> DisplayPresentation {
 
 fn lower_item(item: &LayoutItem) -> DisplayItem {
     match item {
-        LayoutItem::TextRun(TextRun { x, y, size, width, font_family, style, text, href, title, color, numeric }) => {
+        LayoutItem::TextRun(TextRun { x, y, size, width, font_family, style, text, href, title, color, numeric, artifact }) => {
             DisplayItem::TextRun(DisplayTextRun {
                 x: *x,
                 y: *y,
@@ -44,6 +44,7 @@ fn lower_item(item: &LayoutItem) -> DisplayItem {
                 title: title.clone(),
                 color: *color,
                 numeric: *numeric,
+                artifact: *artifact,
             })
         }
         LayoutItem::Rule(Rule { x1, y1, x2, y2, thickness, color }) => {

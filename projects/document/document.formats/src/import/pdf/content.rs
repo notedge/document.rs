@@ -119,11 +119,12 @@ pub(crate) struct PageSink {
     items: Vec<PageItem>,
     current: Option<ExtractedLine>,
     transform: TextTransform,
+    artifact: bool,
 }
 
 impl PageSink {
     pub(crate) fn new() -> Self {
-        Self { items: Vec::new(), current: None, transform: TextTransform::identity() }
+        Self { items: Vec::new(), current: None, transform: TextTransform::identity(), artifact: false }
     }
 
     /// Sets the text transform currently in effect in the content stream.
@@ -131,7 +132,22 @@ impl PageSink {
         self.transform = transform;
     }
 
+    /// Drops page furniture inside a `/Artifact` marked-content section.
+    ///
+    /// A running header or folio is painted on the page but is not authored
+    /// content. PDF 1.7 §14.8.2.2 lets a producer wrap it in `/Artifact BMC`,
+    /// so the reader ignores those runs instead of guessing from geometry.
+    pub(crate) fn set_artifact(&mut self, artifact: bool) {
+        if artifact && !self.artifact {
+            self.flush_line();
+        }
+        self.artifact = artifact;
+    }
+
     fn text(&mut self, text: String, geometry: RunGeometry) {
+        if self.artifact {
+            return;
+        }
         let geometry = self.transform.geometry(geometry);
         for (index, segment) in text.split('\n').enumerate() {
             if index > 0 {
@@ -208,6 +224,9 @@ pub(crate) fn extract_text_operators(
     let mut last_char: Option<char> = None;
     let mut transform = TextTransform::identity();
     let mut transform_stack: Vec<TextTransform> = Vec::new();
+    // Depth of `/Artifact` marked-content sections. Text inside them is page
+    // furniture, not authored content, so it never reaches the line sink.
+    let mut artifact_depth = 0usize;
     sink.set_transform(transform);
     while cursor < stream.len() {
         if stream[cursor..].starts_with(b"BI")
@@ -225,6 +244,13 @@ pub(crate) fn extract_text_operators(
                 if let Some((font, size, end)) = text_font_operator(stream, cursor) {
                     current_font = Some(font);
                     font_size = size;
+                    cursor = end;
+                }
+                else if let Some((name, end)) = resource_operator(stream, cursor, "BMC") {
+                    if name == "Artifact" {
+                        artifact_depth += 1;
+                        sink.set_artifact(true);
+                    }
                     cursor = end;
                 }
                 else if let Some((name, end)) = resource_operator(stream, cursor, "Do") {
@@ -406,6 +432,11 @@ pub(crate) fn extract_text_operators(
                     positioned = false;
                 }
                 cursor = position.saturating_add(1);
+            }
+            b'E' if (cursor == 0 || pdf_delimiter(stream[cursor - 1])) && pdf_operator_at(stream, cursor, b"EMC") => {
+                artifact_depth = artifact_depth.saturating_sub(1);
+                sink.set_artifact(artifact_depth > 0);
+                cursor += 3;
             }
             b'B' if (cursor == 0 || pdf_delimiter(stream[cursor - 1])) && pdf_operator_at(stream, cursor, b"BT") => {
                 text_block_start = true;

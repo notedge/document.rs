@@ -639,6 +639,7 @@ impl<'a> PageBuilder<'a> {
             title: None,
             color: Some(self.hint.style.ink),
             numeric: false,
+            artifact: false,
         }));
     }
 
@@ -973,6 +974,7 @@ impl<'a> PageBuilder<'a> {
             title: run.title.clone(),
             color: ink,
             numeric: run.numeric,
+            artifact: false,
         }));
         if struck {
             let y = baseline - STRIKE_OFFSET * size;
@@ -1176,6 +1178,7 @@ impl<'a> PageBuilder<'a> {
                 title: None,
                 color: Some(tokens.ink),
                 numeric: false,
+                artifact: false,
             }));
             self.cursor += line_box;
         }
@@ -1397,6 +1400,7 @@ impl<'a> PageBuilder<'a> {
                     title: None,
                     color: Some(tokens.header_color),
                     numeric: false,
+                    artifact: true,
                 }));
             }
             let folio = format!("{}", index + 1);
@@ -1414,6 +1418,7 @@ impl<'a> PageBuilder<'a> {
                 title: None,
                 color: Some(tokens.folio_color),
                 numeric: true,
+                artifact: true,
             }));
         }
     }
@@ -1764,6 +1769,7 @@ fn clamp_inline_item(item: LayoutItem, origin_x: f64, baseline: f64, scale: f64)
             title: run.title,
             color: run.color,
             numeric: run.numeric,
+            artifact: run.artifact,
         }),
         LayoutItem::Rule(rule) => LayoutItem::Rule(Rule {
             x1: origin_x + (rule.x1 - origin_x) * scale,
