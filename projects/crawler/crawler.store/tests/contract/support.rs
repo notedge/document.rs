@@ -25,14 +25,66 @@ pub fn item(path: &str) -> crawler_types::FrontierItem {
 pub fn temp_db_path(label: &str) -> PathBuf {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
     let pid = std::process::id();
-    std::env::temp_dir().join(format!("crawler-store-{label}-{pid}-{nonce}.yydb"))
+    std::env::temp_dir().join(format!("crawler-store-{label}-{pid}-{nonce}.yydx"))
 }
 
-/// Remove the single-file database and its journal siblings.
+/// Remove the database, sidecars and the sibling `<stem>-objects/` CAS root.
+///
+/// The blob root is drained file-by-file so cleanup never deletes a whole
+/// directory tree recursively. Both the file and the root must stay inside the
+/// OS temp directory.
 pub fn cleanup_db(path: &Path) {
     let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(format!("{}-wal", path.display()));
-    let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    for sidecar in ["-wal", "-shm", "-lock"] {
+        let _ = std::fs::remove_file(format!("{}{sidecar}", path.display()));
+    }
+    let root = object_root(path);
+    if !root.starts_with(std::env::temp_dir()) {
+        return;
+    }
+    let Some(name) = root.file_name().and_then(|name| name.to_str())
+    else {
+        return;
+    };
+    if !name.ends_with("-objects") {
+        return;
+    }
+    remove_temp_tree(&root);
+}
+
+/// `<stem>-objects/` beside a `.yydx` main file.
+fn object_root(path: &Path) -> PathBuf {
+    let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("crawler");
+    path.with_file_name(format!("{stem}-objects"))
+}
+
+/// Delete a verified temp tree file-by-file, deepest directory last.
+fn remove_temp_tree(root: &Path) {
+    let mut pending = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+    let mut dirs = Vec::new();
+    while let Some(dir) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir)
+        else {
+            continue;
+        };
+        dirs.push(dir);
+        for entry in entries.flatten() {
+            let entry_path = entry.path();
+            if entry_path.is_dir() {
+                pending.push(entry_path);
+            }
+            else {
+                files.push(entry_path);
+            }
+        }
+    }
+    for file in files {
+        let _ = std::fs::remove_file(file);
+    }
+    for dir in dirs.into_iter().rev() {
+        let _ = std::fs::remove_dir(dir);
+    }
 }
 
 /// Run the same assertion block against `MemoryStore` and, when enabled, `YydbStore`.

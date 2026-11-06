@@ -35,7 +35,7 @@ fn yydb_store_opens_and_caches_a_response() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let path = std::env::temp_dir().join(format!(
-        "crawler-store-smoke-{}.yydb",
+        "crawler-store-smoke-{}.yydx",
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos()
     ));
     let mut store = YydbStore::open(StoreConfig::yydb(&path)).expect("open");
@@ -44,4 +44,7 @@ fn yydb_store_opens_and_caches_a_response() {
     let hit = store.get_response_cache(&artifact.cache_key).expect("get").expect("hit");
     assert_eq!(hit.body_bytes(), Some(b"ok".as_slice()));
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{}-lock", path.display()));
+    let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("crawler-store-smoke");
+    let _ = std::fs::remove_dir(path.with_file_name(format!("{stem}-objects")));
 }

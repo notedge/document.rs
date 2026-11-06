@@ -4,6 +4,7 @@
 mod g4_doctor_quota_lag;
 mod g5_page_tx;
 mod g6_checkpoint_view;
+mod g7_object_store;
 mod support;
 mod y1_batch_transaction;
 mod y2_single_winner;

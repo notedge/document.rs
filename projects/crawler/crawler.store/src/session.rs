@@ -10,8 +10,8 @@ use crate::{
     error::{Result, StoreError},
     keyspace::{item_id_from_url, run_id_from_seed},
     types::{
-        CheckpointClaim, CheckpointView, ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle,
-        RunSpec,
+        CheckpointClaim, CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle,
+        ReleaseOutcome, RunHandle, RunSpec,
     },
 };
 
@@ -31,11 +31,22 @@ pub(crate) struct PageRecord {
     fetch_fixture: Option<String>,
     ir_fixture: Option<String>,
     #[serde(default)]
-    asset_fingerprints: Vec<String>,
+    fetch_ref: Option<ObjectRef>,
+    #[serde(default)]
+    ir_ref: Option<ObjectRef>,
+    #[serde(default)]
+    asset_refs: Vec<ObjectRef>,
     #[serde(default)]
     admitted_links: Vec<FrontierItem>,
     #[serde(default)]
     events: Vec<CrawlEvent>,
+}
+
+/// One content-addressed object retained by the memory backend.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct StoredObject {
+    pub(crate) reference: ObjectRef,
+    pub(crate) bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +77,8 @@ struct SessionSnapshot {
     response_cache: BTreeMap<String, Vec<u8>>,
     #[serde(default)]
     robots_cache: BTreeMap<String, RobotsCacheEntry>,
+    #[serde(default)]
+    objects: BTreeMap<String, StoredObject>,
 }
 
 /// One committed page exposed by the legacy session migration path.
@@ -100,6 +113,8 @@ pub(crate) struct StoreSession {
     #[serde(default)]
     robots_cache: BTreeMap<String, RobotsCacheEntry>,
     #[serde(default)]
+    objects: BTreeMap<String, StoredObject>,
+    #[serde(default)]
     claim_lease: Duration,
     snapshot: SessionSnapshot,
     last_claim: Option<ClaimToken>,
@@ -113,12 +128,14 @@ impl StoreSession {
             active_run_id: None,
             response_cache: BTreeMap::new(),
             robots_cache: BTreeMap::new(),
+            objects: BTreeMap::new(),
             claim_lease,
             snapshot: SessionSnapshot {
                 runs: BTreeMap::new(),
                 active_run_id: None,
                 response_cache: BTreeMap::new(),
                 robots_cache: BTreeMap::new(),
+                objects: BTreeMap::new(),
             },
             last_claim: None,
             active_page_tx: None,
@@ -139,6 +156,7 @@ impl StoreSession {
             active_run_id: self.active_run_id.clone(),
             response_cache: self.response_cache.clone(),
             robots_cache: self.robots_cache.clone(),
+            objects: self.objects.clone(),
         };
     }
 
@@ -147,6 +165,7 @@ impl StoreSession {
         self.active_run_id = self.snapshot.active_run_id.clone();
         self.response_cache = self.snapshot.response_cache.clone();
         self.robots_cache = self.snapshot.robots_cache.clone();
+        self.objects = self.snapshot.objects.clone();
         self.last_claim = None;
         self.active_page_tx = None;
         if let Some(run_id) = &self.active_run_id {
@@ -312,7 +331,9 @@ impl StoreSession {
                 phase: PagePhase::Claimed,
                 fetch_fixture: None,
                 ir_fixture: None,
-                asset_fingerprints: Vec::new(),
+                fetch_ref: None,
+                ir_ref: None,
+                asset_refs: Vec::new(),
                 admitted_links: Vec::new(),
                 events: Vec::new(),
             },
@@ -324,35 +345,38 @@ impl StoreSession {
     }
 
     pub(crate) fn page_tx_put_fetch(&mut self, fixture: &str, bytes: &[u8]) -> Result<()> {
-        let _ = bytes;
+        let reference = self.insert_object(ObjectKind::ResponseBody, None, bytes)?;
         let page_id =
             self.active_page_tx.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?.page_id.clone();
         let run = self.active_run_mut()?;
         let page = run.pages.get_mut(&page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.clone()))?;
         page.fetch_fixture = Some(fixture.to_owned());
+        page.fetch_ref = Some(reference);
         page.phase = PagePhase::Fetched;
         self.persist_snapshot();
         Ok(())
     }
 
     pub(crate) fn page_tx_put_ir(&mut self, fixture: &str, bytes: &[u8]) -> Result<()> {
-        let _ = bytes;
+        let reference = self.insert_object(ObjectKind::IrPackage, None, bytes)?;
         let page_id =
             self.active_page_tx.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?.page_id.clone();
         let run = self.active_run_mut()?;
         let page = run.pages.get_mut(&page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.clone()))?;
         page.ir_fixture = Some(fixture.to_owned());
+        page.ir_ref = Some(reference);
         page.phase = PagePhase::IrValidated;
         self.persist_snapshot();
         Ok(())
     }
 
     pub(crate) fn page_tx_bind_asset(&mut self, binding: &PageAssetBinding) -> Result<()> {
+        let reference = self.insert_object(ObjectKind::AssetBytes, binding.media_type.as_deref(), &binding.bytes)?;
         let page_id =
             self.active_page_tx.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?.page_id.clone();
         let run = self.active_run_mut()?;
         let page = run.pages.get_mut(&page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.clone()))?;
-        page.asset_fingerprints.push(binding.fingerprint.clone());
+        page.asset_refs.push(reference);
         page.phase = PagePhase::AssetsBound;
         self.persist_snapshot();
         Ok(())
@@ -469,8 +493,43 @@ impl StoreSession {
         let run = self.active_run()?;
         run.pages
             .get(page_id)
-            .map(|page| page.asset_fingerprints.clone())
+            .map(|page| page.asset_refs.iter().map(|reference| reference.fingerprint.clone()).collect())
             .ok_or_else(|| StoreError::StoreNotFound(page_id.to_owned()))
+    }
+
+    pub(crate) fn page_object_refs(&self, page_id: &str) -> Result<Vec<ObjectRef>> {
+        let run = self.active_run()?;
+        let page = run.pages.get(page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.to_owned()))?;
+        let mut refs = Vec::with_capacity(2 + page.asset_refs.len());
+        refs.extend(page.fetch_ref.clone());
+        refs.extend(page.ir_ref.clone());
+        refs.extend(page.asset_refs.iter().cloned());
+        Ok(refs)
+    }
+
+    /// Store one object, returning the existing reference when the bytes are already present.
+    pub(crate) fn insert_object(&mut self, kind: ObjectKind, media_type: Option<&str>, bytes: &[u8]) -> Result<ObjectRef> {
+        let fingerprint = blake3::hash(bytes).to_hex().to_string();
+        if let Some(existing) = self.objects.get(&fingerprint) {
+            return Ok(existing.reference.clone());
+        }
+        let reference = ObjectRef {
+            fingerprint: fingerprint.clone(),
+            size: bytes.len() as u64,
+            media_type: media_type.map(str::to_owned),
+            kind,
+        };
+        self.objects.insert(fingerprint, StoredObject { reference: reference.clone(), bytes: bytes.to_vec() });
+        self.persist_snapshot();
+        Ok(reference)
+    }
+
+    pub(crate) fn get_object(&self, fingerprint: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.objects.get(fingerprint).map(|object| object.bytes.clone()))
+    }
+
+    pub(crate) fn object_ref(&self, fingerprint: &str) -> Result<Option<ObjectRef>> {
+        Ok(self.objects.get(fingerprint).map(|object| object.reference.clone()))
     }
 
     pub(crate) fn page_phase(&self, page_id: &str) -> Result<PagePhase> {

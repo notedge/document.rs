@@ -6,8 +6,8 @@ use crate::{
     error::{Result, StoreError},
     session::StoreSession,
     types::{
-        CheckpointView, ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
-        StoreDiagnosticReport,
+        CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome,
+        RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport,
     },
 };
 
@@ -115,6 +115,22 @@ impl Store for MemoryStore {
 
     fn page_asset_refs(&self, page_id: &str) -> Result<Vec<String>> {
         self.session.page_asset_refs(page_id)
+    }
+
+    fn put_object(&mut self, kind: ObjectKind, media_type: Option<&str>, bytes: &[u8]) -> Result<ObjectRef> {
+        self.session.insert_object(kind, media_type, bytes)
+    }
+
+    fn get_object(&self, fingerprint: &str) -> Result<Option<Vec<u8>>> {
+        self.session.get_object(fingerprint)
+    }
+
+    fn object_ref(&self, fingerprint: &str) -> Result<Option<ObjectRef>> {
+        self.session.object_ref(fingerprint)
+    }
+
+    fn page_object_refs(&self, page_id: &str) -> Result<Vec<ObjectRef>> {
+        self.session.page_object_refs(page_id)
     }
 
     fn put_orphan_object(&mut self, _bytes: &[u8]) -> Result<()> {

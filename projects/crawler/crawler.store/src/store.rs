@@ -3,8 +3,8 @@ use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem};
 use crate::{
     error::Result,
     types::{
-        CheckpointView, ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
-        StoreDiagnosticReport,
+        CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome,
+        RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport,
     },
 };
 
@@ -83,6 +83,18 @@ pub trait Store {
 
     /// Read the asset fingerprints bound to a committed page.
     fn page_asset_refs(&self, page_id: &str) -> Result<Vec<String>>;
+
+    /// Store large bytes in the content-addressed object store, deduplicating by fingerprint.
+    fn put_object(&mut self, kind: ObjectKind, media_type: Option<&str>, bytes: &[u8]) -> Result<ObjectRef>;
+
+    /// Read object bytes back by fingerprint.
+    fn get_object(&self, fingerprint: &str) -> Result<Option<Vec<u8>>>;
+
+    /// Read object metadata by fingerprint.
+    fn object_ref(&self, fingerprint: &str) -> Result<Option<ObjectRef>>;
+
+    /// Read the object refs attached to a page in fetch, IR, then asset order.
+    fn page_object_refs(&self, page_id: &str) -> Result<Vec<ObjectRef>>;
 
     /// Store an unreferenced CAS object for orphan reclamation tests.
     fn put_orphan_object(&mut self, bytes: &[u8]) -> Result<()>;

@@ -106,12 +106,14 @@ fn yydb_expired_claim_is_reclaimed_after_reopen() {
 #[cfg(feature = "yydb")]
 fn temp_db_path(label: &str) -> std::path::PathBuf {
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-    std::env::temp_dir().join(format!("crawler-scheduler-{label}-{}-{nonce}.yydb", std::process::id()))
+    std::env::temp_dir().join(format!("crawler-scheduler-{label}-{}-{nonce}.yydx", std::process::id()))
 }
 
 #[cfg(feature = "yydb")]
 fn cleanup_db(path: &std::path::Path) {
-    let _ = std::fs::remove_file(path);
-    let _ = std::fs::remove_file(format!("{}-wal", path.display()));
-    let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    for suffix in ["", "-wal", "-shm", "-lock"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
+    let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("crawler-scheduler");
+    let _ = std::fs::remove_dir(path.with_file_name(format!("{stem}-objects")));
 }

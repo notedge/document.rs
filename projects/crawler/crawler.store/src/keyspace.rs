@@ -70,6 +70,16 @@ pub fn checkpoint_entry(run_id: &str, sequence: u64) -> String {
     format!("run/{run_id}/checkpoint/{sequence}")
 }
 
+/// Metadata record key for one content-addressed object.
+pub fn object_meta(fingerprint: &str) -> String {
+    format!("object/{fingerprint}")
+}
+
+/// CAS attachment key that keeps one object alive in the upstream object store.
+pub fn object_blob(fingerprint: &str) -> String {
+    format!("object/{fingerprint}/blob")
+}
+
 /// Response cache record key.
 pub fn response_cache(cache_key: &str) -> String {
     format!("cache/response/{cache_key}")

@@ -14,8 +14,8 @@ use std::{
 use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use yydb::{
-    Batch, Connection, Error as YydbError, EvictionPolicy, LeaseExpectation, LeaseToken, NamespaceQuota, ObjectKind, ObjectRef,
-    ReleaseOutcome as YydbReleaseOutcome,
+    Batch, Connection, Error as YydbError, EvictionPolicy, LeaseExpectation, LeaseToken, NamespaceQuota,
+    ObjectKind as YydbObjectKind, ObjectRef as YydbObjectRef, ReleaseOutcome as YydbReleaseOutcome,
 };
 
 use crate::{
@@ -24,8 +24,9 @@ use crate::{
     keyspace,
     session::StoreSession,
     types::{
-        CheckpointClaim, CheckpointView, ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle,
-        RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue, StoreDoctorSeverity, StoreNamespaceStats,
+        CheckpointClaim, CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle,
+        ReleaseOutcome, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue, StoreDoctorSeverity,
+        StoreNamespaceStats,
     },
 };
 
@@ -69,7 +70,11 @@ struct PageRecord {
     fetch_fixture: Option<String>,
     ir_fixture: Option<String>,
     #[serde(default)]
-    asset_fingerprints: Vec<String>,
+    fetch_ref: Option<ObjectRef>,
+    #[serde(default)]
+    ir_ref: Option<ObjectRef>,
+    #[serde(default)]
+    asset_refs: Vec<ObjectRef>,
     #[serde(default)]
     admitted_links: Vec<String>,
 }
@@ -339,6 +344,7 @@ impl YydbStore {
 impl Store for YydbStore {
     fn open(config: StoreConfig) -> Result<Self> {
         let path = config.db_path.clone().ok_or_else(|| StoreError::StoreInvalidState("YydbStore requires db_path".into()))?;
+        ensure_yydx_layout(&path)?;
         let conn = Connection::open(&path).map_err(map_yydb_error)?;
         prepare_store(&conn)?;
         let mut store = Self {
@@ -451,7 +457,14 @@ impl Store for YydbStore {
             ReleaseOutcome::Requeue => YydbReleaseOutcome::Requeue,
             ReleaseOutcome::Pending => YydbReleaseOutcome::Requeue,
         };
-        self.connection()?.release_lease(&lease, release).map_err(map_yydb_error)?;
+        // A page commit already released the upstream lease through
+        // `commit_with_lease`, so a later release is a local no-op rather than
+        // a fencing failure. The claim record stays the fencing authority.
+        match self.connection()?.release_lease(&lease, release) {
+            Ok(()) => {}
+            Err(YydbError::FencingMismatch { .. } | YydbError::LeaseUnavailable { .. } | YydbError::LeaseExpired { .. }) => {}
+            Err(error) => return Err(map_yydb_error(error)),
+        }
         let item_key = keyspace::frontier_item(&run_id, &token.item_id);
         let mut batch = Batch::new();
         batch.delete(claim_key);
@@ -551,20 +564,19 @@ impl Store for YydbStore {
         let staging = self.page_tx.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?;
         let run_id = self.active_run_id.clone().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
         let conn = self.connection()?;
-        let fetch_ref = staging
-            .fetch
-            .as_ref()
-            .map(|(_, bytes)| conn.put_chunk(ObjectKind::Blob, bytes).map_err(map_yydb_error))
-            .transpose()?;
-        let ir_ref = staging
-            .ir
-            .as_ref()
-            .map(|(_, bytes)| conn.put_chunk(ObjectKind::Blob, bytes).map_err(map_yydb_error))
-            .transpose()?;
-        let mut asset_refs = Vec::with_capacity(staging.assets.len());
+        let mut batch = Batch::new();
+        let fetch = match &staging.fetch {
+            Some((_, bytes)) => Some(stage_object(conn, &mut batch, ObjectKind::ResponseBody, None, bytes)?),
+            None => None,
+        };
+        let ir = match &staging.ir {
+            Some((_, bytes)) => Some(stage_object(conn, &mut batch, ObjectKind::IrPackage, None, bytes)?),
+            None => None,
+        };
+        let mut assets = Vec::with_capacity(staging.assets.len());
         for binding in &staging.assets {
-            let object = conn.put_chunk(ObjectKind::Blob, &binding.bytes).map_err(map_yydb_error)?;
-            asset_refs.push((binding, object));
+            let object = stage_object(conn, &mut batch, ObjectKind::AssetBytes, binding.media_type.as_deref(), &binding.bytes)?;
+            assets.push((binding, object));
         }
         let meta = self.read_run_meta(&run_id)?;
         let base = meta.event_count;
@@ -576,14 +588,23 @@ impl Store for YydbStore {
             phase: PagePhase::Committed,
             fetch_fixture: staging.fetch.as_ref().map(|(fixture, _)| fixture.clone()),
             ir_fixture: staging.ir.as_ref().map(|(fixture, _)| fixture.clone()),
-            asset_fingerprints: staging.assets.iter().map(|binding| binding.fingerprint.clone()).collect(),
+            fetch_ref: fetch.as_ref().map(|(reference, _)| reference.clone()),
+            ir_ref: ir.as_ref().map(|(reference, _)| reference.clone()),
+            asset_refs: assets.iter().map(|(_, (reference, _))| reference.clone()).collect(),
             admitted_links: staging.links.iter().map(|item| keyspace::item_id_from_url(item.request_url.as_str())).collect(),
         };
-        let mut batch = Batch::new();
         batch.put(keyspace::page_state(&run_id, &staging.handle.page_id), encode(&record)?);
-        attach_object(&mut batch, keyspace::page_object(&run_id, &staging.handle.page_id, "fetch"), fetch_ref.as_ref());
-        attach_object(&mut batch, keyspace::page_object(&run_id, &staging.handle.page_id, "ir"), ir_ref.as_ref());
-        for (binding, object) in &asset_refs {
+        attach_object(
+            &mut batch,
+            keyspace::page_object(&run_id, &staging.handle.page_id, "fetch"),
+            fetch.as_ref().map(|(_, object)| object),
+        );
+        attach_object(
+            &mut batch,
+            keyspace::page_object(&run_id, &staging.handle.page_id, "ir"),
+            ir.as_ref().map(|(_, object)| object),
+        );
+        for (binding, (_, object)) in &assets {
             let slot = format!("asset-{}", binding.asset_id);
             attach_object(&mut batch, keyspace::page_object(&run_id, &staging.handle.page_id, &slot), Some(object));
         }
@@ -662,12 +683,52 @@ impl Store for YydbStore {
     fn page_asset_refs(&self, page_id: &str) -> Result<Vec<String>> {
         let run_id = self.active_run_id.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
         self.read_page(run_id, page_id)?
-            .map(|page| page.asset_fingerprints)
+            .map(|page| page.asset_refs.iter().map(|reference| reference.fingerprint.clone()).collect())
             .ok_or_else(|| StoreError::StoreNotFound(page_id.to_owned()))
     }
 
+    fn page_object_refs(&self, page_id: &str) -> Result<Vec<ObjectRef>> {
+        let run_id = self.active_run_id.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        let page = self.read_page(run_id, page_id)?.ok_or_else(|| StoreError::StoreNotFound(page_id.to_owned()))?;
+        let mut refs = Vec::with_capacity(2 + page.asset_refs.len());
+        refs.extend(page.fetch_ref);
+        refs.extend(page.ir_ref);
+        refs.extend(page.asset_refs);
+        Ok(refs)
+    }
+
+    fn put_object(&mut self, kind: ObjectKind, media_type: Option<&str>, bytes: &[u8]) -> Result<ObjectRef> {
+        let conn = self.connection()?;
+        let mut batch = Batch::new();
+        let (reference, _) = stage_object(conn, &mut batch, kind, media_type, bytes)?;
+        batch.commit(conn).map_err(map_yydb_error)?;
+        Ok(reference)
+    }
+
+    fn get_object(&self, fingerprint: &str) -> Result<Option<Vec<u8>>> {
+        let Some(reference) = self.object_ref(fingerprint)?
+        else {
+            return Ok(None);
+        };
+        let object = YydbObjectRef {
+            algo: yydb::HashAlgo::Blake3,
+            hash: decode_hash_hex(&reference.fingerprint)?,
+            size: reference.size,
+            kind: YydbObjectKind::Blob,
+        };
+        let bytes = self.connection()?.get_object(&object).map_err(map_yydb_error)?;
+        Ok(Some(bytes.to_vec()))
+    }
+
+    fn object_ref(&self, fingerprint: &str) -> Result<Option<ObjectRef>> {
+        match self.connection()?.get(&keyspace::object_meta(fingerprint)).map_err(map_yydb_error)? {
+            Some(bytes) => Ok(Some(decode(&bytes, "object metadata")?)),
+            None => Ok(None),
+        }
+    }
+
     fn put_orphan_object(&mut self, bytes: &[u8]) -> Result<()> {
-        self.connection()?.put_chunk(ObjectKind::Blob, bytes).map_err(map_yydb_error)?;
+        self.connection()?.put_chunk(YydbObjectKind::Blob, bytes).map_err(map_yydb_error)?;
         Ok(())
     }
 
@@ -845,9 +906,81 @@ impl YydbStore {
     }
 }
 
-fn attach_object(batch: &mut Batch, key: String, object: Option<&ObjectRef>) {
+/// Write one payload into the CAS and stage its metadata record when it is new.
+///
+/// The CAS write itself already deduplicates on the blake3 digest, so the
+/// metadata record and its attachment are only queued for a fingerprint the
+/// store has not seen before.
+fn stage_object(
+    conn: &Connection,
+    batch: &mut Batch,
+    kind: ObjectKind,
+    media_type: Option<&str>,
+    bytes: &[u8],
+) -> Result<(ObjectRef, YydbObjectRef)> {
+    let object = conn.put_chunk(YydbObjectKind::Blob, bytes).map_err(map_yydb_error)?;
+    let fingerprint = object.hash_hex();
+    let meta_key = keyspace::object_meta(&fingerprint);
+    let reference = match conn.get(&meta_key).map_err(map_yydb_error)? {
+        Some(bytes) => decode(&bytes, "object metadata")?,
+        None => {
+            let reference = ObjectRef {
+                fingerprint: fingerprint.clone(),
+                size: object.size,
+                media_type: media_type.map(str::to_owned),
+                kind,
+            };
+            batch.put(meta_key, encode(&reference)?);
+            batch.attach_object(&object, keyspace::object_blob(&fingerprint));
+            reference
+        }
+    };
+    Ok((reference, object))
+}
+
+/// Decode a 32-byte blake3 hex digest back into raw bytes.
+fn decode_hash_hex(fingerprint: &str) -> Result<[u8; 32]> {
+    if fingerprint.len() != 64 {
+        return Err(StoreError::StoreCorrupt(format!("object fingerprint is not 64 hex chars: {fingerprint}")));
+    }
+    let mut hash = [0u8; 32];
+    for (index, chunk) in fingerprint.as_bytes().chunks(2).enumerate() {
+        let text = std::str::from_utf8(chunk).map_err(|error| StoreError::StoreCorrupt(error.to_string()))?;
+        hash[index] =
+            u8::from_str_radix(text, 16).map_err(|error| StoreError::StoreCorrupt(format!("object fingerprint: {error}")))?;
+    }
+    Ok(hash)
+}
+
+fn attach_object(batch: &mut Batch, key: String, object: Option<&YydbObjectRef>) {
     if let Some(object) = object {
         batch.attach_object(object, key);
+    }
+}
+
+/// Object payloads persist only in the `.yydx` layout.
+///
+/// A `.yydb` single-file store keeps response bodies in a process-local CAS that
+/// is gone after the process exits, so opening one for writes would look
+/// healthy while silently losing every object written by a previous run.
+/// Reject it with an explicit migration path instead of degrading quietly.
+fn ensure_yydx_layout(path: &Path) -> Result<()> {
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("yydx") => Ok(()),
+        Some("yydb") => {
+            let stem = path.file_stem().and_then(|name| name.to_str()).unwrap_or("crawler");
+            let target = path.with_file_name(format!("{stem}.yydx"));
+            Err(StoreError::StoreInvalidState(format!(
+                "legacy single-file store {} is read-only and cannot be opened for writes. Object payloads in a `.yydb` file \
+                 were process-local and cannot be recovered. Export records with the previous build, then run against {}",
+                path.display(),
+                target.display()
+            )))
+        }
+        _ => Err(StoreError::StoreInvalidState(format!(
+            "crawler store path must end with `.yydx` so object payloads get a persistent `<stem>-objects/` root: {}",
+            path.display()
+        ))),
     }
 }
 
@@ -902,7 +1035,9 @@ fn migrate_legacy_session(conn: &Connection) -> Result<()> {
                     phase: page.phase,
                     fetch_fixture: page.fetch_fixture,
                     ir_fixture: page.ir_fixture,
-                    asset_fingerprints: Vec::new(),
+                    fetch_ref: None,
+                    ir_ref: None,
+                    asset_refs: Vec::new(),
                     admitted_links: Vec::new(),
                 };
                 changes.push((keyspace::page_state(&run.run_id, &page.page_id), Some(encode(&record)?)));

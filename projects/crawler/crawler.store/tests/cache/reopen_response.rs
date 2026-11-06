@@ -45,13 +45,16 @@ mod yydb_helpers {
 
     pub fn temp_db_path(label: &str) -> PathBuf {
         let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-        std::env::temp_dir().join(format!("crawler-store-{label}-{nonce}.yydb"))
+        std::env::temp_dir().join(format!("crawler-store-{label}-{nonce}.yydx"))
     }
 
     pub fn cleanup_db(path: &Path) {
         let _ = std::fs::remove_file(path);
-        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
-        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+        for sidecar in ["-wal", "-shm", "-lock"] {
+            let _ = std::fs::remove_file(format!("{}{sidecar}", path.display()));
+        }
+        let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("crawler-store");
+        let _ = std::fs::remove_dir(path.with_file_name(format!("{stem}-objects")));
     }
 }
 

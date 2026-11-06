@@ -47,7 +47,10 @@ fn g5_page_tx_assets_links_and_events_are_atomic() {
         store.page_tx_put_event(&CrawlEvent::Committed { page_identity: "https://example.com/a".into() }).expect("stage event");
         store.commit_page_tx().expect("commit");
         assert_eq!(store.page_phase(&claim.item_id).expect("page"), PagePhase::Committed);
-        assert_eq!(store.page_asset_refs(&claim.item_id).expect("assets"), vec!["fp-7".to_string()]);
+        let asset_refs = store.page_asset_refs(&claim.item_id).expect("assets");
+        assert_eq!(asset_refs.len(), 1, "one asset object is bound to the page");
+        assert_eq!(store.get_object(&asset_refs[0]).expect("asset bytes"), Some(binding().bytes));
+        assert_eq!(store.page_object_refs(&claim.item_id).expect("page objects").len(), 3);
         assert_eq!(store.pending_frontier_count().expect("frontier"), 2, "the committed page admits its link");
         assert_eq!(store.event_count().expect("events"), 1);
 

@@ -9,6 +9,10 @@ pub const DEFAULT_CLAIM_LEASE: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreConfig {
     /// File path for file-backed backends such as `YydbStore`.
+    ///
+    /// `YydbStore` requires a `*.yydx` path: object payloads live in the sibling
+    /// `<stem>-objects/` CAS root, which a single-file `.yydb` store cannot keep
+    /// across restarts.
     pub db_path: Option<std::path::PathBuf>,
     /// Lease duration granted when a worker claims a frontier item.
     pub claim_lease: Duration,
@@ -20,7 +24,7 @@ impl StoreConfig {
         Self { db_path: None, claim_lease: DEFAULT_CLAIM_LEASE }
     }
 
-    /// YYDB file path for integration tests and production.
+    /// YYDB `.yydx` path for integration tests and production.
     pub fn yydb(path: impl Into<std::path::PathBuf>) -> Self {
         Self { db_path: Some(path.into()), claim_lease: DEFAULT_CLAIM_LEASE }
     }
@@ -144,12 +148,50 @@ impl PagePhase {
     }
 }
 
+/// Semantic kind of one content-addressed object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectKind {
+    /// Raw HTTP response body.
+    ResponseBody,
+    /// Robots document bytes.
+    RobotsBody,
+    /// Browser archive such as MHTML, HAR or a screenshot bundle.
+    BrowserArchive,
+    /// Downloaded asset bytes.
+    AssetBytes,
+    /// Serialized IR package.
+    IrPackage,
+    /// Attachment bytes outside a page asset.
+    Attachment,
+}
+
+/// Content-addressed object handle stored in the ObjectStore.
+///
+/// The fingerprint is the blake3 hex digest of the payload and is used for
+/// cross-page and cross-run deduplication.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObjectRef {
+    /// Blake3 hex digest of the payload.
+    pub fingerprint: String,
+    /// Payload size in bytes.
+    pub size: u64,
+    /// Media type when the caller recorded one.
+    #[serde(default)]
+    pub media_type: Option<String>,
+    /// Semantic kind of the payload.
+    pub kind: ObjectKind,
+}
+
 /// One document asset staged inside a page transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageAssetBinding {
     /// Asset identity inside the document graph.
     pub asset_id: String,
-    /// Content fingerprint used for ObjectStore deduplication.
+    /// Logical asset fingerprint declared by the extractor.
+    ///
+    /// Storage content-addresses the payload separately, so equal bytes dedupe
+    /// even when the extractor declares different logical identities.
     pub fingerprint: String,
     /// Media type when the extractor recorded one.
     pub media_type: Option<String>,

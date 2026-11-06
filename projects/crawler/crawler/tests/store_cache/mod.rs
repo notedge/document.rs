@@ -71,16 +71,18 @@ fn cache_second_seed(store: &mut dyn Store) {
 #[cfg(feature = "yydb")]
 fn temp_db_path(label: &str) -> std::path::PathBuf {
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-    std::env::temp_dir().join(format!("crawler-{label}-{}-{nanos}.yydb", std::process::id()))
+    std::env::temp_dir().join(format!("crawler-{label}-{}-{nanos}.yydx", std::process::id()))
 }
 
 #[cfg(feature = "yydb")]
 fn cleanup_db(path: &std::path::Path) {
-    for suffix in ["", "-wal", "-shm"] {
+    for suffix in ["", "-wal", "-shm", "-lock"] {
         let mut target = path.to_path_buf().into_os_string();
         target.push(suffix);
         let _ = std::fs::remove_file(std::path::PathBuf::from(target));
     }
+    let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("crawler");
+    let _ = std::fs::remove_dir(path.with_file_name(format!("{stem}-objects")));
 }
 
 #[cfg(feature = "yydb")]
