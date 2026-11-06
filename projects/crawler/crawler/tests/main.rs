@@ -14,3 +14,4 @@ mod markdown;
 mod seed_input;
 mod sitemap;
 mod snapshot;
+mod store_cache;

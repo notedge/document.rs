@@ -92,12 +92,19 @@ pub struct FetchClient<T: Transport> {
     cache: LayeredResponseCache,
     robots: RobotsPolicy,
     last_site_requests: BTreeMap<String, Instant>,
+    robots_updates: Vec<(String, String)>,
 }
 
 impl<T: Transport> FetchClient<T> {
     /// Build a client around a transport and robots policy.
     pub fn new(transport: T, robots: RobotsPolicy) -> Self {
-        Self { transport, cache: LayeredResponseCache::memory_only(), robots, last_site_requests: BTreeMap::new() }
+        Self {
+            transport,
+            cache: LayeredResponseCache::memory_only(),
+            robots,
+            last_site_requests: BTreeMap::new(),
+            robots_updates: Vec::new(),
+        }
     }
 
     /// Persist responses under the given cache directory.
@@ -119,6 +126,16 @@ impl<T: Transport> FetchClient<T> {
     /// Robots policy used for admission checks.
     pub fn robots(&self) -> &RobotsPolicy {
         &self.robots
+    }
+
+    /// Seed robots rules from a persistent cache instead of re-fetching them.
+    pub fn load_site_robots(&mut self, site_key: &str, body: &str) {
+        self.robots.load_site_rules(site_key, body);
+    }
+
+    /// Drain robots bodies fetched during this client's lifetime for persistence.
+    pub fn take_robots_updates(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.robots_updates)
     }
 
     /// Whether a site key was recorded after a fetch attempt.
@@ -237,8 +254,9 @@ impl<T: Transport> FetchClient<T> {
         match self.transport.fetch(&robots_request) {
             Ok(artifact) if artifact.status == 200 => {
                 if let Some(body) = artifact.body_bytes() {
-                    let text = String::from_utf8_lossy(body);
+                    let text = String::from_utf8_lossy(body).into_owned();
                     self.robots.load_site_rules(&site_key, &text);
+                    self.robots_updates.push((site_key.clone(), text));
                 }
                 else {
                     self.robots.mark_site_unavailable(&site_key);

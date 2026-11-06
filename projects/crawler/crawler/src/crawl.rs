@@ -4,6 +4,7 @@ use boost_diagnostic::{DiagnosticSeverity, Message, MessageArg};
 use crawler_browser::{BrowserProvider, snapshot_to_fetch_artifact};
 use crawler_fetch::{FetchClient, FetchRequest, RobotsPolicy, Transport, site_key_for_url};
 use crawler_frontier::{FrontierQueue, frontier_from_links};
+use crawler_store::Store;
 use crawler_types::{
     AdmissionDecision, BrowserFallbackPolicy, BrowserFallbackTrigger, ChallengeOutcome, ChallengePolicy, CrawlBudgetStatus,
     CrawlCheckpoint, CrawlError, CrawlEvent, CrawlReport, CrawlRequest, ExtractBudget, ExtractContext, ExtractResult,
@@ -18,6 +19,9 @@ use crate::{
     transaction::commit_page,
 };
 use crawler_types::PageTransaction;
+
+/// Robots rules persisted through the store expire after this window.
+pub const ROBOTS_STORE_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Minimum plain-text characters an HTTP extraction must yield before the crawl
 /// accepts the fetched page as real content.
@@ -137,20 +141,35 @@ pub fn run_crawl_with_options<T: Transport>(
     extractors: &[&dyn Extractor],
     options: CrawlOptions<'_>,
 ) -> Result<CrawlOutput> {
+    let state = seeded_state(&request)?;
+    run_crawl_loop(state, transport, extractors, options, None)
+}
+
+/// Run a bounded crawl whose response and robots caches live in the given store.
+pub fn run_crawl_with_store<T: Transport>(
+    request: CrawlRequest,
+    transport: T,
+    extractors: &[&dyn Extractor],
+    options: CrawlOptions<'_>,
+    store: &mut dyn Store,
+) -> Result<CrawlOutput> {
+    let state = seeded_state(&request)?;
+    run_crawl_loop(state, transport, extractors, options, Some(store))
+}
+
+fn seeded_state(request: &CrawlRequest) -> Result<CrawlState> {
     let mut state = CrawlState {
         request: request.clone(),
         queue: FrontierQueue::new(),
         requests_used: 0,
-        report: initial_report(&request)?,
+        report: initial_report(request)?,
         last_paused_item: None,
     };
-
-    for item in seed_frontier(&request)? {
+    for item in seed_frontier(request)? {
         state.report.events.push(CrawlEvent::Discovered { url: item.request_url.clone(), depth: item.depth });
         state.queue.push(item);
     }
-
-    run_crawl_loop(state, transport, extractors, options)
+    Ok(state)
 }
 
 /// Resume a crawl from a saved checkpoint.
@@ -159,6 +178,27 @@ pub fn resume_crawl_from_checkpoint<T: Transport>(
     transport: T,
     extractors: &[&dyn Extractor],
     options: CrawlOptions<'_>,
+) -> Result<CrawlOutput> {
+    resume_crawl_with_store(checkpoint, transport, extractors, options, None)
+}
+
+/// Resume a crawl from checkpoint while reusing the store-backed caches.
+pub fn resume_crawl_from_checkpoint_with_store<T: Transport>(
+    checkpoint: CrawlCheckpoint,
+    transport: T,
+    extractors: &[&dyn Extractor],
+    options: CrawlOptions<'_>,
+    store: &mut dyn Store,
+) -> Result<CrawlOutput> {
+    resume_crawl_with_store(checkpoint, transport, extractors, options, Some(store))
+}
+
+fn resume_crawl_with_store<T: Transport>(
+    checkpoint: CrawlCheckpoint,
+    transport: T,
+    extractors: &[&dyn Extractor],
+    options: CrawlOptions<'_>,
+    store: Option<&mut dyn Store>,
 ) -> Result<CrawlOutput> {
     validate_resume_strategy(&checkpoint, options)?;
     let mut state = CrawlState {
@@ -173,7 +213,7 @@ pub fn resume_crawl_from_checkpoint<T: Transport>(
         state.queue.requeue(item);
     }
     let resume_options = CrawlOptions { attempt_identity: checkpoint.attempt_identity.saturating_add(1), ..options };
-    run_crawl_loop(state, transport, extractors, resume_options)
+    run_crawl_loop(state, transport, extractors, resume_options, store)
 }
 
 fn run_crawl_loop<T: Transport>(
@@ -181,13 +221,16 @@ fn run_crawl_loop<T: Transport>(
     transport: T,
     extractors: &[&dyn Extractor],
     options: CrawlOptions<'_>,
+    mut store: Option<&mut dyn Store>,
 ) -> Result<CrawlOutput> {
     let request = state.request.clone();
     state.report.budget_status = CrawlBudgetStatus::Completed;
     state.report.remaining_frontier = 0;
     let mut client = FetchClient::new(transport, RobotsPolicy::from_profile(request.politeness));
-    if let Some(cache_dir) = options.cache_dir {
-        client = client.with_disk_cache_dir(cache_dir)?;
+    if store.is_none() {
+        if let Some(cache_dir) = options.cache_dir {
+            client = client.with_disk_cache_dir(cache_dir)?;
+        }
     }
     let mut committed_pages = Vec::new();
     let mut artifacts = Vec::new();
@@ -210,7 +253,26 @@ fn run_crawl_loop<T: Transport>(
 
         state.requests_used += 1;
         let fetch_request = FetchRequest { url: item.request_url.clone(), headers: BTreeMap::new() };
-        let artifact = match client.fetch(&fetch_request) {
+        if let Some(store) = store.as_deref() {
+            if matches!(item.request_url.scheme(), "http" | "https") {
+                let site = site_key_for_url(&item.request_url);
+                if !client.robots().has_site_rules(&item.request_url) {
+                    if let Ok(Some(body)) = store.get_robots_cache(&site) {
+                        client.load_site_robots(&site, &String::from_utf8_lossy(&body));
+                    }
+                }
+            }
+            if let Ok(Some(cached)) = store.get_response_cache(&item.request_url.to_string()) {
+                client.cache_mut().put(cached);
+            }
+        }
+        let fetched = client.fetch(&fetch_request);
+        if let Some(store) = store.as_deref_mut() {
+            for (site, body) in client.take_robots_updates() {
+                let _ = store.put_robots_cache(&site, body.as_bytes(), ROBOTS_STORE_TTL);
+            }
+        }
+        let artifact = match fetched {
             Ok(artifact) => {
                 // Classify HTTP status before feeding into extract pipeline.
                 let status_class = crawler_fetch::classify_http_status(artifact.status);
@@ -278,6 +340,10 @@ fn run_crawl_loop<T: Transport>(
                 }
             }
         };
+
+        if let Some(store) = store.as_deref_mut() {
+            let _ = store.put_response_cache(&artifact);
+        }
 
         let host_key = site_key_for_url(&item.request_url);
         if sitemap_discovered.insert(host_key) {

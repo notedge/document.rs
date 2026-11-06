@@ -40,7 +40,8 @@ pub use admission::{admit_frontier_item, seed_frontier};
 pub use assets::{fingerprint, hydrate_assets};
 pub use crawl::{
     CrawlOptions, CrawlOutput, CrawlState, LOW_YIELD_MIN_CONTENT_BLOCKS, LOW_YIELD_MIN_TEXT_CHARS, LOW_YIELD_SCRIPT_MIN_BYTES,
-    LOW_YIELD_SCRIPT_TEXT_RATIO, PageYield, resume_crawl_from_checkpoint, run_crawl, run_crawl_with_options,
+    LOW_YIELD_SCRIPT_TEXT_RATIO, PageYield, ROBOTS_STORE_TTL, resume_crawl_from_checkpoint,
+    resume_crawl_from_checkpoint_with_store, run_crawl, run_crawl_with_options, run_crawl_with_store,
 };
 pub use crawler_browser::{
     BrowserProvider, BrowserProviderStack, ChallengeBlocked, DEFAULT_SNAPSHOT_DOCUMENT_BUDGET_BYTES,
