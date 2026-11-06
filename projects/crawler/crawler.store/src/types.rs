@@ -1,21 +1,34 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
+
+/// Default lease granted to a frontier claim.
+pub const DEFAULT_CLAIM_LEASE: Duration = Duration::from_secs(30);
 
 /// Store open parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreConfig {
     /// File path for file-backed backends such as `YydbStore`.
     pub db_path: Option<std::path::PathBuf>,
+    /// Lease duration granted when a worker claims a frontier item.
+    pub claim_lease: Duration,
 }
 
 impl StoreConfig {
     /// Memory-oriented defaults.
     pub fn memory() -> Self {
-        Self { db_path: None }
+        Self { db_path: None, claim_lease: DEFAULT_CLAIM_LEASE }
     }
 
     /// YYDB file path for integration tests and production.
     pub fn yydb(path: impl Into<std::path::PathBuf>) -> Self {
-        Self { db_path: Some(path.into()) }
+        Self { db_path: Some(path.into()), claim_lease: DEFAULT_CLAIM_LEASE }
+    }
+
+    /// Override the claim lease, mainly for lease expiry contract cases.
+    pub fn with_claim_lease(mut self, claim_lease: Duration) -> Self {
+        self.claim_lease = claim_lease;
+        self
     }
 }
 

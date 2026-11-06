@@ -55,6 +55,28 @@ struct SessionSnapshot {
     robots_cache: BTreeMap<String, RobotsCacheEntry>,
 }
 
+/// One committed page exposed by the legacy session migration path.
+#[derive(Debug, Clone)]
+pub(crate) struct LegacyPage {
+    pub(crate) page_id: String,
+    pub(crate) item_id: String,
+    pub(crate) worker_id: String,
+    pub(crate) fencing_token: u64,
+    pub(crate) phase: PagePhase,
+    pub(crate) fetch_fixture: Option<String>,
+    pub(crate) ir_fixture: Option<String>,
+}
+
+/// One run exposed by the legacy session migration path.
+#[derive(Debug, Clone)]
+pub(crate) struct LegacyRun {
+    pub(crate) run_id: String,
+    pub(crate) seed_url: String,
+    pub(crate) event_count: u64,
+    pub(crate) frontier: Vec<FrontierItem>,
+    pub(crate) pages: Vec<LegacyPage>,
+}
+
 /// Shared store session state used by memory and YYDB backends.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StoreSession {
@@ -64,18 +86,21 @@ pub(crate) struct StoreSession {
     response_cache: BTreeMap<String, Vec<u8>>,
     #[serde(default)]
     robots_cache: BTreeMap<String, RobotsCacheEntry>,
+    #[serde(default)]
+    claim_lease: Duration,
     snapshot: SessionSnapshot,
     last_claim: Option<ClaimToken>,
     active_page_tx: Option<PageTxHandle>,
 }
 
 impl StoreSession {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(claim_lease: Duration) -> Self {
         Self {
             runs: BTreeMap::new(),
             active_run_id: None,
             response_cache: BTreeMap::new(),
             robots_cache: BTreeMap::new(),
+            claim_lease,
             snapshot: SessionSnapshot {
                 runs: BTreeMap::new(),
                 active_run_id: None,
@@ -89,10 +114,6 @@ impl StoreSession {
 
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Self> {
         serde_json::from_slice(bytes).map_err(|error| StoreError::StoreCorrupt(error.to_string()))
-    }
-
-    pub(crate) fn to_bytes(&self) -> Result<Vec<u8>> {
-        serde_json::to_vec(self).map_err(|error| StoreError::StoreCorrupt(error.to_string()))
     }
 
     fn now_millis() -> u64 {
@@ -156,22 +177,31 @@ impl StoreSession {
     }
 
     pub(crate) fn claim_next(&mut self, host_key: &str, worker_id: &str) -> Result<Option<ClaimToken>> {
+        let now = Self::now_millis();
+        let lease_millis = self.claim_lease.as_millis() as u64;
         let run = self.active_run_mut()?;
         for (item_id, item) in &run.frontier {
             if item.site_key != host_key {
                 continue;
             }
-            if let Some(claim) = run.claims.get(item_id) {
-                if claim.worker_id == worker_id && claim.lease_until_ms > Self::now_millis() {
-                    let token = ClaimToken {
-                        item_id: item_id.clone(),
-                        worker_id: worker_id.to_owned(),
-                        fencing_token: claim.fencing_token,
-                    };
-                    self.last_claim = Some(token.clone());
-                    return Ok(Some(token));
-                }
+            // A committed page is terminal for its frontier item and must not be re-claimed.
+            if run.pages.get(item_id).is_some_and(|page| page.phase == PagePhase::Committed) {
                 continue;
+            }
+            if let Some(claim) = run.claims.get(item_id) {
+                if claim.lease_until_ms > now {
+                    if claim.worker_id == worker_id {
+                        let token = ClaimToken {
+                            item_id: item_id.clone(),
+                            worker_id: worker_id.to_owned(),
+                            fencing_token: claim.fencing_token,
+                        };
+                        self.last_claim = Some(token.clone());
+                        return Ok(Some(token));
+                    }
+                    continue;
+                }
+                // Expired claims are reclaimable with a fresh fencing token.
             }
             run.next_fencing += 1;
             let token =
@@ -181,7 +211,7 @@ impl StoreSession {
                 ClaimRecord {
                     worker_id: worker_id.to_owned(),
                     fencing_token: run.next_fencing,
-                    lease_until_ms: Self::now_millis() + Duration::from_secs(30).as_millis() as u64,
+                    lease_until_ms: now + lease_millis,
                 },
             );
             self.last_claim = Some(token.clone());
@@ -205,9 +235,12 @@ impl StoreSession {
             return Err(StoreError::StoreFencingMismatch);
         }
         let run = self.active_run_mut()?;
-        let active = run.claims.get(&claim.item_id).ok_or_else(|| StoreError::StoreFencingMismatch)?;
+        let active = run.claims.get(&claim.item_id).ok_or(StoreError::StoreFencingMismatch)?;
         if active.worker_id != worker_id || active.fencing_token != claim.fencing_token {
             return Err(StoreError::StoreFencingMismatch);
+        }
+        if active.lease_until_ms <= Self::now_millis() {
+            return Err(StoreError::StoreLeaseExpired);
         }
         let page_id = claim.item_id.clone();
         run.pages.insert(
@@ -255,6 +288,10 @@ impl StoreSession {
         let page_id =
             self.active_page_tx.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no page tx".into()))?.page_id.clone();
         let run = self.active_run_mut()?;
+        let claim = run.claims.get(&page_id).ok_or(StoreError::StoreFencingMismatch)?;
+        if claim.lease_until_ms <= Self::now_millis() {
+            return Err(StoreError::StoreLeaseExpired);
+        }
         let page = run.pages.get_mut(&page_id).ok_or_else(|| StoreError::StoreNotFound(page_id.clone()))?;
         page.phase = PagePhase::Committed;
         run.event_count += 1;
@@ -352,5 +389,36 @@ impl StoreSession {
             .insert(site_key.to_string(), RobotsCacheEntry { body: body.to_vec(), expires_at_ms: Some(expires_at_ms) });
         self.persist_snapshot();
         Ok(())
+    }
+
+    /// Read-only view used by the one-way legacy session blob migration.
+    ///
+    /// Active claims are intentionally dropped: their lease tokens live outside the
+    /// blob, so migrated items become reclaimable instead of carrying dead fencing.
+    pub(crate) fn legacy_export(&self) -> (Option<String>, Vec<LegacyRun>) {
+        let runs = self
+            .runs
+            .iter()
+            .map(|(run_id, run)| LegacyRun {
+                run_id: run_id.clone(),
+                seed_url: run.seed_url.clone(),
+                event_count: run.event_count,
+                frontier: run.frontier.values().cloned().collect(),
+                pages: run
+                    .pages
+                    .iter()
+                    .map(|(page_id, page)| LegacyPage {
+                        page_id: page_id.clone(),
+                        item_id: page.item_id.clone(),
+                        worker_id: page.worker_id.clone(),
+                        fencing_token: page.fencing_token,
+                        phase: page.phase,
+                        fetch_fixture: page.fetch_fixture.clone(),
+                        ir_fixture: page.ir_fixture.clone(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        (self.active_run_id.clone(), runs)
     }
 }

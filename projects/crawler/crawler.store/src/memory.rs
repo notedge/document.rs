@@ -16,8 +16,7 @@ pub struct MemoryStore {
 
 impl Store for MemoryStore {
     fn open(config: StoreConfig) -> Result<Self> {
-        let _ = config;
-        Ok(Self { session: StoreSession::new() })
+        Ok(Self { session: StoreSession::new(config.claim_lease) })
     }
 
     fn reopen(&mut self) -> Result<()> {
