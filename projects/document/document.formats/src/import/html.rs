@@ -56,9 +56,44 @@ pub struct HtmlImport {
     pub links: Vec<HtmlLink>,
 }
 
+/// Reads bytes for an HTML image target.
+///
+/// The format layer never fetches. A caller that owns the page bytes (a local
+/// file, a crawler response, or an archive member) supplies them through this
+/// trait so imported assets can be materialized with a content identity.
+pub trait HtmlAssetSource {
+    /// Returns the bytes stored for `target`, or `None` when the target was not
+    /// captured. Uncaptured targets stay `Unresolved` and raise an explicit
+    /// loss marker.
+    fn read_asset(&self, target: &str) -> Option<Vec<u8>>;
+}
+
+/// Asset source for imports that only carry markup.
+pub struct NoHtmlAssets;
+
+impl HtmlAssetSource for NoHtmlAssets {
+    fn read_asset(&self, _target: &str) -> Option<Vec<u8>> {
+        None
+    }
+}
+
 /// Import HTML from UTF-8 bytes.
 pub fn import_html_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, FormatError> {
     import_html_bytes_with_links(label, bytes).map(|import| import.document)
+}
+
+/// Import HTML with caller-supplied asset bytes.
+pub fn import_html_bytes_with_assets(
+    label: &str,
+    bytes: &[u8],
+    assets: &dyn HtmlAssetSource,
+) -> Result<DocumentGraph, FormatError> {
+    import_html_with_links_and_assets(
+        label,
+        std::str::from_utf8(bytes).map_err(|error| FormatError::parse("html", format!("{label}: {error}")))?,
+        assets,
+    )
+    .map(|import| import.document)
 }
 
 /// Import HTML from UTF-8 bytes with link candidates.
@@ -74,6 +109,15 @@ pub fn import_html_text(label: &str, text: &str) -> Result<DocumentGraph, Format
 
 /// Import HTML from a UTF-8 string with link candidates.
 pub fn import_html_with_links(label: &str, text: &str) -> Result<HtmlImport, FormatError> {
+    import_html_with_links_and_assets(label, text, &NoHtmlAssets)
+}
+
+/// Import HTML with link candidates and caller-supplied asset bytes.
+pub fn import_html_with_links_and_assets(
+    label: &str,
+    text: &str,
+    assets: &dyn HtmlAssetSource,
+) -> Result<HtmlImport, FormatError> {
     let authored = text;
     let source = SourceText::new(text);
     let builder = HtmlBuilder::new(HtmlLanguage::default());
@@ -116,6 +160,7 @@ pub fn import_html_with_links(label: &str, text: &str) -> Result<HtmlImport, For
         push_block_with_source(&mut graph, block, span);
     }
     register_image_assets(&mut graph);
+    hydrate_image_assets(&mut graph, assets);
     collect_unsupported_losses(&document, &mut graph);
     if graph.blocks.is_empty() {
         graph.push_loss(LossMarker {
@@ -190,6 +235,99 @@ fn parse_srcset(value: &str) -> Vec<String> {
             if url.is_empty() { None } else { Some(url.to_string()) }
         })
         .collect()
+}
+
+/// Selects the largest `srcset` candidate for an image without `src`.
+///
+/// Width (`w`) and density (`x`) descriptors are compared on one monotonic
+/// scale where a larger value wins. Candidates without a descriptor default to
+/// `1x`. Ties keep the first authored candidate, so repeated imports produce a
+/// stable image target.
+fn select_srcset_target(value: &str) -> String {
+    let mut best: Option<(f64, String)> = None;
+    for part in value.split(',') {
+        let mut words = part.trim().split_whitespace();
+        let Some(url) = words.next().filter(|url| !url.is_empty())
+        else {
+            continue;
+        };
+        let score = words.next().map_or(1.0, srcset_descriptor_score);
+        if best.as_ref().is_none_or(|(best_score, _)| score > *best_score) {
+            best = Some((score, url.to_string()));
+        }
+    }
+    best.map(|(_, url)| url).unwrap_or_default()
+}
+
+fn srcset_descriptor_score(descriptor: &str) -> f64 {
+    if let Some(width) = descriptor.strip_suffix('w') {
+        return width.parse().unwrap_or(1.0);
+    }
+    if let Some(density) = descriptor.strip_suffix('x') {
+        return density.parse().unwrap_or(1.0);
+    }
+    1.0
+}
+
+/// Infers a media type from asset bytes when the target carries no extension.
+fn media_type_for_bytes(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        return Some("image/png");
+    }
+    if bytes.starts_with(&[0xFF, 0xD8]) {
+        return Some("image/jpeg");
+    }
+    if bytes.starts_with(b"GIF8") {
+        return Some("image/gif");
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"ftyp") && &bytes[8..12] == b"avif" {
+        return Some("image/avif");
+    }
+    let head = bytes.trim_ascii_start();
+    if head.starts_with(b"<svg") || head.starts_with(b"<?xml") && head.windows(4).any(|window| window == b"<svg") {
+        return Some("image/svg+xml");
+    }
+    None
+}
+
+/// Materializes image assets supplied by the caller.
+///
+/// Resolved assets carry their bytes and a `blake3` content identity, which
+/// lets project export deduplicate identical images under one stable `assets/`
+/// name. Every target without captured bytes raises an explicit
+/// `import.html.asset_unresolved` loss instead of disappearing from the body.
+fn hydrate_image_assets(graph: &mut DocumentGraph, source: &dyn HtmlAssetSource) {
+    let mut unresolved = Vec::new();
+    for asset in &mut graph.assets {
+        if !matches!(asset.kind, document_ir::AssetKind::Image) {
+            continue;
+        }
+        let Some(target) = asset.source.clone()
+        else {
+            continue;
+        };
+        let Some(bytes) = source.read_asset(&target).filter(|bytes| !bytes.is_empty())
+        else {
+            unresolved.push(target);
+            continue;
+        };
+        asset.content_identity = Some(blake3::hash(&bytes).to_hex().to_string());
+        asset.media_type = asset.media_type.clone().or_else(|| media_type_for_bytes(&bytes).map(str::to_string));
+        asset.status = SemanticStatus::Resolved;
+        asset.bytes = Some(bytes);
+    }
+    for target in unresolved {
+        graph.push_loss(LossMarker {
+            code: "import.html.asset_unresolved".into(),
+            message: format!(
+                "image `{target}` has no captured bytes. The asset stays Unresolved and is not materialized under assets/"
+            ),
+            status: SemanticStatus::Partial,
+        });
+    }
 }
 
 fn body_children(document: &HtmlDocument) -> &[HtmlNode] {
@@ -1268,8 +1406,19 @@ fn lower_inline_element(element: &Element, graph: &mut DocumentGraph, source: &s
         "img" => {
             let alt = attribute(element, "alt").unwrap_or_default();
             let src = attribute(element, "src").unwrap_or_default();
+            let source = if src.trim().is_empty() {
+                element
+                    .attributes
+                    .iter()
+                    .find(|attribute| attribute.name.eq_ignore_ascii_case("srcset"))
+                    .map(|attribute| select_srcset_target(attribute.value.as_deref().unwrap_or_default()))
+                    .unwrap_or_default()
+            }
+            else {
+                src
+            };
             vec![Inline::Image {
-                source: src,
+                source,
                 alt: if alt.is_empty() { Vec::new() } else { vec![Inline::Text { text: alt }] },
                 title: attribute(element, "title"),
                 asset: None,

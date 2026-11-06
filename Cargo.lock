@@ -679,6 +679,7 @@ dependencies = [
  "acorn-doc",
  "acorn-docx",
  "acorn-epub",
+ "blake3",
  "boost-diagnostic",
  "document-ir",
  "oak-core 0.0.12",

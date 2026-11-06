@@ -229,4 +229,5 @@ fn html_export_with_diagrams_is_byte_stable() {
     let second = export_html_with_diagrams(&graph, &diagrams).expect("second export");
     assert_eq!(first, second);
 }
+mod asset_materialization;
 mod import;
