@@ -315,7 +315,8 @@ fn footnote_bodies_stay_for_writers_and_flow_reports_what_it_cannot_place() {
 
     // A flow target such as SVG cannot place the body, so the same import path
     // reports both markers with their authored ranges.
-    let rendered = render_svg("virtual://footnote.md", source, &Diagrams::new()).expect("flow rendering succeeds with a reported loss");
+    let rendered =
+        render_svg("virtual://footnote.md", source, &Diagrams::new()).expect("flow rendering succeeds with a reported loss");
     for (code, expected) in [
         ("import.markdown.footnote_body_unplaced", "[^n]: Footnote body text."),
         ("import.markdown.footnote_reference_marker", "[^n]"),

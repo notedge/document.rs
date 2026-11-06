@@ -1,6 +1,5 @@
 use document_formats::{
-    export::docx::export_docx_bytes,
-    export::markdown_project::export_markdown_project,
+    export::{docx::export_docx_bytes, markdown_project::export_markdown_project},
     import::{docx::import_docx_bytes, markdown::import_markdown_bytes},
 };
 use document_ir::{Block, Inline};

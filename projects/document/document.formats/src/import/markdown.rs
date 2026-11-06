@@ -67,7 +67,11 @@ pub fn import_markdown_bytes_for_flow(label: &str, text: &str) -> Result<Documen
     import_markdown_bytes_with_footnote_flow(label, text, true)
 }
 
-fn import_markdown_bytes_with_footnote_flow(label: &str, text: &str, flow_footnotes: bool) -> Result<DocumentGraph, FormatError> {
+fn import_markdown_bytes_with_footnote_flow(
+    label: &str,
+    text: &str,
+    flow_footnotes: bool,
+) -> Result<DocumentGraph, FormatError> {
     let language = markdown_import_language();
     let masked = mask_fenced_code_angles(text);
     let lex_source = SourceText::new(masked.as_str());
@@ -140,7 +144,8 @@ fn is_fence_line(line: &str) -> bool {
         return false;
     }
     let rest = &line[indent..];
-    let Some(character) = rest.chars().next() else {
+    let Some(character) = rest.chars().next()
+    else {
         return false;
     };
     if character != '`' && character != '~' {
@@ -268,10 +273,7 @@ fn lower_markdown_tree(
             let (html, consumed) = extract_html_block(node, children.get(index..).unwrap_or_default(), source);
             index += consumed;
             let html = html.trim_end_matches('\n').trim_end_matches('\r').to_owned();
-            let span = SourceSpan {
-                start: node.span().start as u32,
-                end: (node.span().start + html.len()) as u32,
-            };
+            let span = SourceSpan { start: node.span().start as u32, end: (node.span().start + html.len()) as u32 };
             // GFM tables cannot express merged cells, so a spanning table is
             // exported as an inline HTML table. Reopening it as an opaque raw
             // block would quietly turn the table back into markup, so a
@@ -402,7 +404,8 @@ fn setext_heading(
     }
     let marker = underline.text(source);
     let marker = marker.trim();
-    let Some(marker_byte) = marker.bytes().next() else {
+    let Some(marker_byte) = marker.bytes().next()
+    else {
         return None;
     };
     if marker_byte != b'-' && marker_byte != b'=' {
@@ -429,11 +432,7 @@ fn setext_heading(
 /// `oak-markdown` only produces a separate `HorizontalRule` node for `---`.
 /// A `===` underline is lexed as ordinary paragraph text, so `Title\n===` would
 /// otherwise reach the IR as a paragraph containing the raw underline.
-fn paragraph_setext_heading(
-    node: RedNode<MarkdownLanguage>,
-    source: &SourceText,
-    context: &mut LinkContext,
-) -> Option<Block> {
+fn paragraph_setext_heading(node: RedNode<MarkdownLanguage>, source: &SourceText, context: &mut LinkContext) -> Option<Block> {
     if node.element_type() != MarkdownElementType::Paragraph {
         return None;
     }
@@ -609,10 +608,7 @@ fn lower_block_node(
                 });
             }
             let span = node.span();
-            context.losses.push((
-                raw_html_loss_marker(),
-                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
-            ));
+            context.losses.push((raw_html_loss_marker(), Some(SourceSpan { start: span.start as u32, end: span.end as u32 })));
             BlockOutcome::Block(Block::RawHtml { html: raw })
         }
         MarkdownElementType::HtmlComment | MarkdownElementType::XmlComment => BlockOutcome::Skip,
@@ -725,7 +721,8 @@ fn merge_adjacent_text(inlines: &mut Vec<Inline>) {
                 continue;
             }
             merged.push(Inline::Text { text });
-        } else {
+        }
+        else {
             merged.push(inline);
         }
     }
@@ -781,10 +778,7 @@ fn lower_inline_node(node: RedNode<MarkdownLanguage>, source: &SourceText, conte
                 });
             }
             let span = node.span();
-            context.losses.push((
-                raw_html_loss_marker(),
-                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
-            ));
+            context.losses.push((raw_html_loss_marker(), Some(SourceSpan { start: span.start as u32, end: span.end as u32 })));
             Some(Inline::RawHtml { html: raw })
         }
         MarkdownElementType::HtmlComment | MarkdownElementType::XmlComment => None,
@@ -908,7 +902,8 @@ fn decode_one_entity(tail: &str) -> Option<(char, usize)> {
     if let Some(body) = body.strip_prefix('#') {
         let value = if let Some(hex) = body.strip_prefix('x').or_else(|| body.strip_prefix('X')) {
             u32::from_str_radix(hex, 16).ok()?
-        } else {
+        }
+        else {
             body.parse::<u32>().ok()?
         };
         return char::from_u32(value).map(|character| (character, consumed));
@@ -1482,11 +1477,7 @@ struct FlatItem {
 /// Authored column indentation of a byte offset, ignoring blockquote markers.
 fn indent_column(text: &str, offset: usize) -> usize {
     let offset = offset.min(text.len());
-    let line_start = text
-        .get(..offset)
-        .and_then(|head| head.rfind(['\n', '\r']))
-        .map(|index| index + 1)
-        .unwrap_or(0);
+    let line_start = text.get(..offset).and_then(|head| head.rfind(['\n', '\r'])).map(|index| index + 1).unwrap_or(0);
     let mut columns = 0;
     for character in text.get(line_start..offset).unwrap_or("").chars() {
         match character {
@@ -1723,7 +1714,8 @@ fn html_block_terminator(text: &str, start: usize) -> usize {
     let mut line_start = start.min(length);
     let mut first_line = true;
     while line_start < length {
-        let line_end = text.get(line_start..).and_then(|rest| rest.find(['\n', '\r'])).map(|index| line_start + index).unwrap_or(length);
+        let line_end =
+            text.get(line_start..).and_then(|rest| rest.find(['\n', '\r'])).map(|index| line_start + index).unwrap_or(length);
         if !first_line && text.get(line_start..line_end).unwrap_or("").trim().is_empty() {
             return line_start;
         }
@@ -1771,20 +1763,13 @@ fn autolink_target(text: &str) -> Option<(String, String)> {
     if let Some((scheme, rest)) = inner.split_once(':') {
         let scheme_ok = (2..=32).contains(&scheme.len())
             && scheme.chars().next().is_some_and(|character| character.is_ascii_alphabetic())
-            && scheme
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'));
+            && scheme.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.'));
         if scheme_ok && !rest.is_empty() {
             return Some((inner.to_owned(), inner.to_owned()));
         }
     }
     let (local, domain) = inner.split_once('@')?;
-    if local.is_empty()
-        || domain.is_empty()
-        || !domain.contains('.')
-        || domain.starts_with('.')
-        || domain.ends_with('.')
-    {
+    if local.is_empty() || domain.is_empty() || !domain.contains('.') || domain.starts_with('.') || domain.ends_with('.') {
         return None;
     }
     Some((format!("mailto:{inner}"), inner.to_owned()))
@@ -1794,8 +1779,7 @@ fn autolink_target(text: &str) -> Option<(String, String)> {
 fn raw_html_loss_marker() -> LossMarker {
     LossMarker {
         code: "import.markdown.raw_html_unrendered".into(),
-        message: "raw HTML is preserved for HTML/EPUB export but semantic SVG/PDF reflow does not lay it out"
-            .into(),
+        message: "raw HTML is preserved for HTML/EPUB export but semantic SVG/PDF reflow does not lay it out".into(),
         status: SemanticStatus::Partial,
     }
 }
@@ -1804,8 +1788,7 @@ fn raw_html_loss_marker() -> LossMarker {
 fn footnote_body_loss_marker() -> LossMarker {
     LossMarker {
         code: "import.markdown.footnote_body_unplaced".into(),
-        message: "footnote body is kept as an opaque payload because flow targets have no footnote collection"
-            .into(),
+        message: "footnote body is kept as an opaque payload because flow targets have no footnote collection".into(),
         status: SemanticStatus::Partial,
     }
 }

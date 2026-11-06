@@ -10,9 +10,7 @@ use document_ir::DocumentGraph;
 use document_layout::{BodyMetrics, Diagrams, LayoutHint, document::layout_with_diagnostics};
 use document_presentation::build_display_presentation;
 
-use crate::report::{
-    IMPORT_FAILED, MAX_SOURCE_BYTES, SOURCE_TOO_LARGE, build_diagnostics, build_report, unterminated_group,
-};
+use crate::report::{IMPORT_FAILED, MAX_SOURCE_BYTES, SOURCE_TOO_LARGE, build_diagnostics, build_report, unterminated_group};
 
 /// Outcome of a Typst import: the document graph, its conversion report, and
 /// the diagnostics the lowering produced.

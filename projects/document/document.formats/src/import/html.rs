@@ -201,10 +201,7 @@ fn lower_children(children: &[HtmlNode], graph: &mut DocumentGraph, source: &str
                 // `<template>` content is inert and never rendered, so only the
                 // empty shell is kept. The contents stay out of the document
                 // and the drop is recorded as `import.html.template_contents`.
-                result.push((
-                    Block::RawHtml { html: "<template></template>".to_string() },
-                    element.span.clone().into(),
-                ));
+                result.push((Block::RawHtml { html: "<template></template>".to_string() }, element.span.clone().into()));
             }
             HtmlNode::Element(element) => {
                 if pending_span.is_none() {
@@ -356,11 +353,8 @@ fn flatten_table_spans(rows: Vec<document_ir::TableRow>) -> (Vec<document_ir::Ta
     if !spanning {
         return (rows, false);
     }
-    let columns = rows
-        .iter()
-        .map(|row| row.cells.iter().map(|cell| cell.colspan.max(1) as usize).sum::<usize>())
-        .max()
-        .unwrap_or(0);
+    let columns =
+        rows.iter().map(|row| row.cells.iter().map(|cell| cell.colspan.max(1) as usize).sum::<usize>()).max().unwrap_or(0);
     let mut grid: Vec<Vec<Option<Vec<Inline>>>> = vec![vec![None; columns]; rows.len()];
     for (row_index, row) in rows.iter().enumerate() {
         let mut column = 0;
@@ -376,13 +370,12 @@ fn flatten_table_spans(rows: Vec<document_ir::TableRow>) -> (Vec<document_ir::Ta
             for covered_row in row_index..(row_index + rowspan).min(rows.len()) {
                 for covered_column in column..(column + colspan).min(columns) {
                     if grid[covered_row][covered_column].is_none() {
-                        grid[covered_row][covered_column] =
-                            Some(if covered_row == row_index && covered_column == column {
-                                cell.content.clone()
-                            }
-                            else {
-                                Vec::new()
-                            });
+                        grid[covered_row][covered_column] = Some(if covered_row == row_index && covered_column == column {
+                            cell.content.clone()
+                        }
+                        else {
+                            Vec::new()
+                        });
                     }
                 }
             }
@@ -579,7 +572,8 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                     if seen_body {
                         header_after_body = true;
                     }
-                } else {
+                }
+                else {
                     seen_body = true;
                 }
             }
@@ -751,11 +745,7 @@ fn lower_footnote_section(element: &Element) -> Option<Vec<(Block, std::ops::Ran
 /// directly, and Pandoc-style `a.footnote-ref > sup` or
 /// `sup[data-footnote-label] > a`.
 fn footnote_reference_inline(element: &Element) -> Option<Inline> {
-    let anchor = element
-        .children
-        .iter()
-        .filter_map(as_element)
-        .find(|child| child.tag_name.eq_ignore_ascii_case("a"));
+    let anchor = element.children.iter().filter_map(as_element).find(|child| child.tag_name.eq_ignore_ascii_case("a"));
     let marker = if has_footnote_marker(element) {
         element
     }

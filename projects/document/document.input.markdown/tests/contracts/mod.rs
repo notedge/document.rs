@@ -22,9 +22,7 @@ fn supported_samples() -> Vec<(String, String)> {
         .iter()
         .map(|entry| {
             let construct = entry["construct"].as_str().expect("construct must be a string").to_string();
-            let sample = entry["sample"]
-                .as_str()
-                .unwrap_or_else(|| panic!("supported entry without a sample: {construct}"));
+            let sample = entry["sample"].as_str().unwrap_or_else(|| panic!("supported entry without a sample: {construct}"));
             (construct, sample.to_string())
         })
         .collect()

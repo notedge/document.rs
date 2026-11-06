@@ -29,9 +29,7 @@ use plotter_types::{Color, Point, Rect, Transform};
 
 use document_compose::Diagnostic;
 
-use crate::render::{
-    EmbeddedText, ImageResources, OpacityResources, base_font_for, num, paint_text, scene_font_style,
-};
+use crate::render::{EmbeddedText, ImageResources, OpacityResources, base_font_for, num, paint_text, scene_font_style};
 
 /// Width of one character as a fraction of the font size.
 const TEXT_WIDTH: f64 = 0.6;

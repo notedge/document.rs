@@ -44,12 +44,7 @@ pub(crate) fn parse_column(text: &str) -> Option<u32> {
         column = column.checked_mul(26)?;
         column = column.checked_add(character.to_ascii_uppercase() as u32 - 'A' as u32 + 1)?;
     }
-    if column == 0 {
-        None
-    }
-    else {
-        Some(column)
-    }
+    if column == 0 { None } else { Some(column) }
 }
 
 /// Formats a one-based column index as letters.

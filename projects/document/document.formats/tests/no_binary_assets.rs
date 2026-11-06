@@ -4,8 +4,10 @@
 //! based, not extension based. An asset `.svg` is rejected even though it is
 //! text.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn repo_root() -> PathBuf {
     let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -44,12 +46,7 @@ fn binary_reason(path: &Path) -> Option<String> {
 #[test]
 fn tracked_files_are_text_only() {
     let root = repo_root();
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .args(["ls-files", "-z"])
-        .output()
-        .expect("run `git ls-files`");
+    let output = Command::new("git").arg("-C").arg(&root).args(["ls-files", "-z"]).output().expect("run `git ls-files`");
     assert!(output.status.success(), "`git ls-files` failed in {}", root.display());
 
     let mut hits: Vec<(u64, String, String)> = Vec::new();

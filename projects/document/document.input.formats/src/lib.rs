@@ -11,10 +11,12 @@ use std::{
 };
 
 use document_compose::{ConversionReport, Diagnostic, Severity};
-use document_formats::detect::detect_bytes;
 pub use document_formats::detect::{ContainerKind, DetectionConfidence, FormatDetection};
-use document_formats::import::{
-    doc::import_doc_bytes, docx::import_docx_bytes, epub::import_epub_bytes, html::import_html_bytes, pdf::import_pdf_bytes,
+use document_formats::{
+    detect::detect_bytes,
+    import::{
+        doc::import_doc_bytes, docx::import_docx_bytes, epub::import_epub_bytes, html::import_html_bytes, pdf::import_pdf_bytes,
+    },
 };
 use document_ir::DocumentGraph;
 
@@ -205,10 +207,12 @@ pub fn import_bytes(format: Format, label: &str, bytes: &[u8]) -> Result<Importe
 pub fn import_auto(label: &str, bytes: &[u8], extension_hint: Option<&str>) -> Result<ImportedDocument, InputError> {
     ensure_source_budget(bytes)?;
     let detection = detect_bytes(bytes, extension_hint);
-    let Some(id) = detection.format else {
+    let Some(id) = detection.format
+    else {
         return Err(probe_failure(&detection, label));
     };
-    let Some(format) = Format::from_id(id) else {
+    let Some(format) = Format::from_id(id)
+    else {
         return Err(InputError::from(Diagnostic {
             code: codes::UNSUPPORTED_FORMAT.to_owned(),
             severity: Severity::Error,
@@ -321,10 +325,7 @@ fn probe_failure(detection: &FormatDetection, label: &str) -> InputError {
                 detection.candidates.join(" / ")
             ),
         ),
-        _ => (
-            codes::UNKNOWN_FORMAT,
-            format!("{label}: {} so an explicit format is required", detection.evidence),
-        ),
+        _ => (codes::UNKNOWN_FORMAT, format!("{label}: {} so an explicit format is required", detection.evidence)),
     };
     InputError::from(Diagnostic { code: code.to_owned(), severity: Severity::Error, message, span: None })
 }

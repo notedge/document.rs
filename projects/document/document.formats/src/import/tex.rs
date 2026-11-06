@@ -509,7 +509,9 @@ impl<'a> TexLowerer<'a> {
             "itemize" | "enumerate" | "description" => {
                 self.lower_list(&name, environment.span.start, environment.span.end, sink)
             }
-            "figure" | "figure*" => self.lower_root(&environment.content.items, environment.span.start, environment.span.end, sink),
+            "figure" | "figure*" => {
+                self.lower_root(&environment.content.items, environment.span.start, environment.span.end, sink)
+            }
             "tabular" | "array" => self.lower_table(environment.span.start, environment.span.end, sink),
             _ => {
                 self.loss(
@@ -934,12 +936,7 @@ impl<'a> TexLowerer<'a> {
                     "math-mode style command used in text mode keeps its argument without the style",
                     SemanticStatus::Partial,
                 );
-                if children.is_empty() {
-                    InlineOutcome::Dropped
-                }
-                else {
-                    InlineOutcome::Inlines(children)
-                }
+                if children.is_empty() { InlineOutcome::Dropped } else { InlineOutcome::Inlines(children) }
             }
             "displaystyle" | "textstyle" | "scriptstyle" | "scriptscriptstyle" | "limits" | "nolimits" => {
                 InlineOutcome::Dropped

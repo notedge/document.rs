@@ -433,7 +433,9 @@ fn unsupported(kind: &str, source: &str, span: Option<SourceSpan>) -> Diagnostic
     Diagnostic {
         code: "vutex.math.unsupported_expression".into(),
         severity: Severity::Warning,
-        message: format!("math {kind} has no VuTeX layout mapping and is rejected: the page keeps a placeholder box instead of `{source}`"),
+        message: format!(
+            "math {kind} has no VuTeX layout mapping and is rejected: the page keeps a placeholder box instead of `{source}`"
+        ),
         span,
     }
 }

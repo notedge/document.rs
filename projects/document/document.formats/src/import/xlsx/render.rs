@@ -6,10 +6,12 @@
 //! semantics — frozen rows and columns are repeated on every page — and every
 //! clamp is reported with a stable code instead of being silently cut.
 
-use super::model::{CellRange, IssueStatus, SheetVisibility, XlsxIssue, XlsxSheet, XlsxWorkbook, codes};
-use super::reference::{column_letters, reference};
-use super::styles::resolve_color;
-use super::value::display_cell;
+use super::{
+    model::{CellRange, IssueStatus, SheetVisibility, XlsxIssue, XlsxSheet, XlsxWorkbook, codes},
+    reference::{column_letters, reference},
+    styles::resolve_color,
+    value::display_cell,
+};
 use crate::import::office::escape;
 
 const A4_WIDTH_PX: f64 = 794.0;
@@ -162,8 +164,11 @@ fn render_sheet(
 
     let frozen_rows =
         rows.iter().copied().filter(|row| *row <= sheet.freeze.map(|freeze| freeze.rows).unwrap_or(0)).collect::<Vec<_>>();
-    let frozen_columns =
-        columns.iter().copied().filter(|column| *column <= sheet.freeze.map(|freeze| freeze.columns).unwrap_or(0)).collect::<Vec<_>>();
+    let frozen_columns = columns
+        .iter()
+        .copied()
+        .filter(|column| *column <= sheet.freeze.map(|freeze| freeze.columns).unwrap_or(0))
+        .collect::<Vec<_>>();
     let body_rows: Vec<u32> = rows.iter().copied().filter(|row| !frozen_rows.contains(row)).collect();
     let body_columns: Vec<u32> = columns.iter().copied().filter(|column| !frozen_columns.contains(column)).collect();
     if !frozen_rows.is_empty() || !frozen_columns.is_empty() {
@@ -249,10 +254,7 @@ fn render_sheet(
         }
         html.push_str("</tr></thead><tbody>");
         for row in &page_rows {
-            html.push_str(&format!(
-                "<tr style=\"height:{:.1}px\">",
-                row_px(sheet, *row).min(content_height)
-            ));
+            html.push_str(&format!("<tr style=\"height:{:.1}px\">", row_px(sheet, *row).min(content_height)));
             html.push_str(&format!("<th class=\"rowhead\">{row}</th>"));
             let mut column_index = 0usize;
             while column_index < page_columns.len() {
@@ -333,7 +335,10 @@ fn group_columns(sheet: &XlsxSheet, columns: &[u32], budget: f64, name: &str, is
         if current.is_empty() && column_width > budget {
             issues.push(issue(
                 codes::VIEW_COLUMN_CLAMPED,
-                format!("sheet `{name}` column {} is {column_width:.0}px wide and is clamped to the {budget:.0}px page", column_letters(*column)),
+                format!(
+                    "sheet `{name}` column {} is {column_width:.0}px wide and is clamped to the {budget:.0}px page",
+                    column_letters(*column)
+                ),
                 IssueStatus::Partial,
                 Some(name.to_owned()),
                 None,
@@ -480,14 +485,25 @@ fn cell_css(sheet: &XlsxSheet, workbook: &XlsxWorkbook, row: u32, column: u32, i
                 "double" => "double",
                 _ => "solid",
             };
-            let color = edge.color.as_deref().and_then(|color| resolve_color(color, &workbook.styles)).unwrap_or_else(|| "#808080".to_owned());
+            let color = edge
+                .color
+                .as_deref()
+                .and_then(|color| resolve_color(color, &workbook.styles))
+                .unwrap_or_else(|| "#808080".to_owned());
             css.push_str(&format!("border-{side}:{width} {line} {color};"));
         }
     }
     css
 }
 
-fn append_cell(html: &mut String, sheet: &XlsxSheet, workbook: &XlsxWorkbook, row: u32, column: u32, issues: &mut Vec<XlsxIssue>) {
+fn append_cell(
+    html: &mut String,
+    sheet: &XlsxSheet,
+    workbook: &XlsxWorkbook,
+    row: u32,
+    column: u32,
+    issues: &mut Vec<XlsxIssue>,
+) {
     let Some(cell) = sheet.cell(row, column)
     else {
         return;
@@ -551,8 +567,10 @@ fn append_images(html: &mut String, sheet: &XlsxSheet, page_rows: &[u32], page_c
 
 fn image_size(image: &super::model::SheetImage) -> (f64, f64) {
     if let Some(to) = image.to {
-        let width = (to.column.saturating_sub(image.from.column) as f64 * 64.0) + (to.column_offset - image.from.column_offset) as f64 / 9525.0;
-        let height = (to.row.saturating_sub(image.from.row) as f64 * 20.0) + (to.row_offset - image.from.row_offset) as f64 / 9525.0;
+        let width = (to.column.saturating_sub(image.from.column) as f64 * 64.0)
+            + (to.column_offset - image.from.column_offset) as f64 / 9525.0;
+        let height =
+            (to.row.saturating_sub(image.from.row) as f64 * 20.0) + (to.row_offset - image.from.row_offset) as f64 / 9525.0;
         if width > 4.0 && height > 4.0 {
             return (width, height);
         }
@@ -588,7 +606,13 @@ fn base64(bytes: &[u8]) -> String {
     output
 }
 
-fn issue(code: &str, message: impl Into<String>, status: IssueStatus, sheet: Option<String>, cell: Option<String>) -> XlsxIssue {
+fn issue(
+    code: &str,
+    message: impl Into<String>,
+    status: IssueStatus,
+    sheet: Option<String>,
+    cell: Option<String>,
+) -> XlsxIssue {
     XlsxIssue { code: code.to_owned(), message: message.into(), status, sheet, cell }
 }
 

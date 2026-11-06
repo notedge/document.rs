@@ -31,7 +31,7 @@ use std::{
 };
 
 use document_compose::{Diagnostic, Severity, math::FontStyle};
-use document_fonts::{key_for_run, BodyFaceSet, BodyFaceStyle, BodyFamily, BodyMetrics};
+use document_fonts::{BodyFaceSet, BodyFaceStyle, BodyFamily, BodyMetrics, key_for_run};
 use document_presentation::display::{
     DisplayGraphic, DisplayImage, DisplayItem, DisplayPage, DisplayPath, DisplayPresentation, DisplayRect, DisplayRule,
     DisplayTextRun,
@@ -1067,7 +1067,19 @@ fn write_text(
     else {
         return;
     };
-    paint_text(out, run.x, page_height - run.y, run.size, resource_index, &run.text, embedded_run, &run.font_family, run.style, false, diagnostics);
+    paint_text(
+        out,
+        run.x,
+        page_height - run.y,
+        run.size,
+        resource_index,
+        &run.text,
+        embedded_run,
+        &run.font_family,
+        run.style,
+        false,
+        diagnostics,
+    );
 }
 
 /// Emit the glyphs collected for one subset, switching to `TJ` when a pair

@@ -587,12 +587,7 @@ fn extract_glyph_metrics_and_outlines(
                 italic_correction: math.and_then(|math| math.italic_correction()).unwrap_or(UNCOVERED_MATH_METRIC),
                 top_accent_attachment: math.and_then(|math| math.top_accent_attachment()).unwrap_or(UNCOVERED_MATH_METRIC),
             };
-            let variant = |style| GlyphKey {
-                char: Some(ch),
-                glyph_id: Some(design.get()),
-                font_family: family.clone(),
-                style,
-            };
+            let variant = |style| GlyphKey { char: Some(ch), glyph_id: Some(design.get()), font_family: family.clone(), style };
             let math_variant = variant(FontStyle::Math);
             let normal_variant = variant(FontStyle::Normal);
             data.glyphs.insert(math_variant.clone(), metrics);

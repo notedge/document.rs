@@ -1,8 +1,6 @@
 use std::fs;
 
-use document_formats::export::{
-    docx::export_docx_bytes, epub::export_epub_bytes, html::export_html, pdf::export_pdf_bytes,
-};
+use document_formats::export::{docx::export_docx_bytes, epub::export_epub_bytes, html::export_html, pdf::export_pdf_bytes};
 use document_ir::{Block, DocumentGraph, DocumentId, Inline};
 
 use super::{DetectionConfidence, Format, codes, import_auto, import_bytes, import_file, probe};

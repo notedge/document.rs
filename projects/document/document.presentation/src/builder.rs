@@ -46,14 +46,9 @@ fn lower_item(item: &LayoutItem) -> DisplayItem {
                 numeric: *numeric,
             })
         }
-        LayoutItem::Rule(Rule { x1, y1, x2, y2, thickness, color }) => DisplayItem::Rule(DisplayRule {
-            x1: *x1,
-            y1: *y1,
-            x2: *x2,
-            y2: *y2,
-            thickness: *thickness,
-            color: *color,
-        }),
+        LayoutItem::Rule(Rule { x1, y1, x2, y2, thickness, color }) => {
+            DisplayItem::Rule(DisplayRule { x1: *x1, y1: *y1, x2: *x2, y2: *y2, thickness: *thickness, color: *color })
+        }
         LayoutItem::Rect(Rect { x, y, width, height, filled, fill, stroke, stroke_width }) => DisplayItem::Rect(DisplayRect {
             x: *x,
             y: *y,

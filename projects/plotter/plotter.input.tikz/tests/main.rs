@@ -62,8 +62,7 @@ fn node_draw_colour_reaches_the_box_stroke() {
 
 #[test]
 fn node_options_combine_with_draw() {
-    let children =
-        children("\\begin{tikzpicture}\n\\node[draw, above, text=red, scale=2] at (1,2) {A};\n\\end{tikzpicture}\n");
+    let children = children("\\begin{tikzpicture}\n\\node[draw, above, text=red, scale=2] at (1,2) {A};\n\\end{tikzpicture}\n");
 
     assert_eq!(children.len(), 2);
     let NodeKind::Path { style, .. } = &children[0].kind

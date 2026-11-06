@@ -44,12 +44,12 @@ pub(crate) mod tex_math;
 /// Lower a standalone TeX formula source into `notedown-ir::math`.
 #[cfg(feature = "tex")]
 pub use tex_math::lower_tex_formula_source;
+/// PresentationML PPTX import, IR projection and slide canvas view.
+#[cfg(feature = "pptx")]
+pub mod pptx;
 /// Typst import via `oak-typst`.
 #[cfg(feature = "typst")]
 pub mod typst;
 /// SpreadsheetML XLSX import, IR projection and sheet grid view.
 #[cfg(feature = "xlsx")]
 pub mod xlsx;
-/// PresentationML PPTX import, IR projection and slide canvas view.
-#[cfg(feature = "pptx")]
-pub mod pptx;

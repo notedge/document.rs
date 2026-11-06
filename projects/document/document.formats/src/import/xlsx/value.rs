@@ -71,7 +71,8 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
 pub(crate) fn detect_date_kind(code: &str) -> Option<DateKind> {
     let tokens = date_tokens(code);
     let has_date = tokens.iter().any(|token| matches!(token, 'y' | 'd'));
-    let has_time = tokens.iter().any(|token| matches!(token, 'h' | 's')) || code.contains("[h]") || code.contains("[m]") && !has_date;
+    let has_time =
+        tokens.iter().any(|token| matches!(token, 'h' | 's')) || code.contains("[h]") || code.contains("[m]") && !has_date;
     match (has_date, has_time) {
         (true, true) => Some(DateKind::DateTime),
         (true, false) => Some(DateKind::Date),
@@ -123,11 +124,15 @@ pub(crate) fn date_from_iso(text: &str, format: &str, system: DateSystem) -> Opt
         0
     };
     let serial = days as f64 + (hour as f64 * 3600.0 + minute as f64 * 60.0 + second as f64) / 86_400.0;
-    Some(ExcelDate { serial, iso: match kind {
-        DateKind::Date => format!("{year:04}-{month:02}-{day:02}"),
-        DateKind::Time => format!("{hour:02}:{minute:02}:{second:02}"),
-        DateKind::DateTime => format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}"),
-    }, kind })
+    Some(ExcelDate {
+        serial,
+        iso: match kind {
+            DateKind::Date => format!("{year:04}-{month:02}-{day:02}"),
+            DateKind::Time => format!("{hour:02}:{minute:02}:{second:02}"),
+            DateKind::DateTime => format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}"),
+        },
+        kind,
+    })
 }
 
 fn date_tokens(code: &str) -> Vec<char> {
@@ -161,7 +166,9 @@ pub(crate) fn display_cell(value: &CellValue, style: &CellStyle, styles: &Workbo
         CellValue::Empty => Displayed { text: String::new(), approximated: false },
         CellValue::Text(text) => Displayed { text: text.clone(), approximated: false },
         CellValue::SharedString { text, .. } => Displayed { text: text.clone(), approximated: false },
-        CellValue::Boolean(value) => Displayed { text: if *value { "TRUE".into() } else { "FALSE".into() }, approximated: false },
+        CellValue::Boolean(value) => {
+            Displayed { text: if *value { "TRUE".into() } else { "FALSE".into() }, approximated: false }
+        }
         CellValue::Error { code } => Displayed { text: code.clone(), approximated: false },
         CellValue::Date(date) => Displayed { text: render_date(date, style.number_format.as_deref()), approximated: false },
         CellValue::Number(number) => render_number(*number, style, styles),
@@ -336,12 +343,7 @@ fn format_plain_number(number: f64, format: &str) -> Displayed {
     if per_mille {
         value *= 1000.0;
     }
-    let mut body = if decimals > 0 {
-        format!("{value:.decimals$}")
-    }
-    else {
-        format!("{value:.0}")
-    };
+    let mut body = if decimals > 0 { format!("{value:.decimals$}") } else { format!("{value:.0}") };
     if grouping {
         body = group_thousands(&body, decimals);
     }
@@ -438,11 +440,7 @@ fn decimals_after_point(section: &str) -> usize {
     else {
         return 0;
     };
-    fractional
-        .chars()
-        .take_while(|character| matches!(character, '0' | '#'))
-        .filter(|character| *character == '0')
-        .count()
+    fractional.chars().take_while(|character| matches!(character, '0' | '#')).filter(|character| *character == '0').count()
 }
 
 fn group_thousands(body: &str, decimals: usize) -> String {

@@ -3,9 +3,7 @@
 
 use std::{cell::RefCell, collections::BTreeSet, sync::OnceLock};
 
-use document_text::math::{
-    FontMetricsSystem, GlyphId, KernCorner, MathFontFacts, MathFontFamily, StretchAxis, StretchPlan,
-};
+use document_text::math::{FontMetricsSystem, GlyphId, KernCorner, MathFontFacts, MathFontFamily, StretchAxis, StretchPlan};
 use serde::{Deserialize, Serialize};
 
 use super::conformance::{FontConformance, FontFallback};
@@ -14,9 +12,9 @@ use document_compose::{
     math::{
         Alignment, AlignmentAnchors, BBox, DelimiterComponent, DelimiterVariant, EnvironmentKind, Fixed, FontMetricsSnapshot,
         FontStyle, FormulaLayoutResult, FormulaMetrics, FormulaNode, GlyphKey, GlyphMetrics, LimitsPolicy, LineStyle,
-        MathConstant, MathEnvironment, MathError, MathItem, MathList, MathResult, MathSemantics, MathStyle,
-        MathStyleState, Noad, NoadKind, Numbering, OperatorClass, PaintNode, RowPlacement, SpacingRule, SymbolRole,
-        math_alphalect, normalize_math_list, project_formula_with_state,
+        MathConstant, MathEnvironment, MathError, MathItem, MathList, MathResult, MathSemantics, MathStyle, MathStyleState,
+        Noad, NoadKind, Numbering, OperatorClass, PaintNode, RowPlacement, SpacingRule, SymbolRole, math_alphalect,
+        normalize_math_list, project_formula_with_state,
     },
 };
 
@@ -2132,8 +2130,7 @@ impl LayoutEngine {
         // removes it when the side scripts are attached.  The display variant
         // carries its own, larger correction, so read it off the laid-out
         // glyph instead of the authored text-size key.
-        let base_italic_correction =
-            if class.is_large_operator() { base_layout.italic_correction() } else { Fixed::ZERO };
+        let base_italic_correction = if class.is_large_operator() { base_layout.italic_correction() } else { Fixed::ZERO };
 
         // TeX's `make_scripts` adds `\scriptspace` to every script box's own
         // width before the boxes are stacked, so the following atom never
@@ -2220,8 +2217,7 @@ impl LayoutEngine {
                 // 0.178 em below the sign's top, matching the measured
                 // -1.1815 em.
                 let drop_max = if large_operator_base {
-                    self.math_constant(MathConstant::SuperscriptBaselineDropMax, size * script_scale)
-                        .unwrap_or(Fixed::ZERO)
+                    self.math_constant(MathConstant::SuperscriptBaselineDropMax, size * script_scale).unwrap_or(Fixed::ZERO)
                 }
                 else {
                     self.math_constant(MathConstant::SuperscriptBaselineDropMax, size).unwrap_or(Fixed::ZERO)
@@ -2260,8 +2256,8 @@ impl LayoutEngine {
                 // lands 0.861 + 0.140 = 1.001 em, against the reference's
                 // measured 0.997 em, and the text-style one 0.306 + 0.140 =
                 // 0.446 em against 0.444 em.
-                let drop_min = self.math_constant(MathConstant::SubscriptBaselineDropMin, size * script_scale)
-                    .unwrap_or(Fixed::ZERO);
+                let drop_min =
+                    self.math_constant(MathConstant::SubscriptBaselineDropMin, size * script_scale).unwrap_or(Fixed::ZERO);
                 calculated_sub_shift = calculated_sub_shift.max(base_layout.depth() + drop_min);
             }
             sub_correction_depth = calculated_sub_shift + sub_layout.depth();

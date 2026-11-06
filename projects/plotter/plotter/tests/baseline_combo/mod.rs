@@ -2,9 +2,7 @@
 
 use plotter::{
     data::ColumnTable,
-    grammar::{
-        CompileOptions, CoordinateSpec, FacetSpec, LayerSpec, Mapping, PlotSpec, ScaleSpec, ThemeSpec, compile_plot,
-    },
+    grammar::{CompileOptions, CoordinateSpec, FacetSpec, LayerSpec, Mapping, PlotSpec, ScaleSpec, ThemeSpec, compile_plot},
     types::plot::Interval,
 };
 

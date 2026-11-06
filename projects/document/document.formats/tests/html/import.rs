@@ -223,11 +223,8 @@ fn html_import_keeps_inline_svg_as_raw_markup_without_leaking_label_text() {
 #[test]
 fn html_import_keeps_block_svg_verbatim_and_reopens_it() {
     let markup = r#"<svg viewBox="0 0 100 40"><rect width="100" height="40"/><text x="4" y="20">gauge</text></svg>"#;
-    let graph = import_html_text(
-        "block-svg.html",
-        &format!("<body><p>before</p><figure>{markup}</figure><p>after</p></body>"),
-    )
-    .expect("import block svg");
+    let graph = import_html_text("block-svg.html", &format!("<body><p>before</p><figure>{markup}</figure><p>after</p></body>"))
+        .expect("import block svg");
     let Block::Paragraph { content } = &graph.blocks[0].block
     else {
         panic!("leading paragraph expected, got {:?}", graph.blocks)
@@ -587,11 +584,7 @@ fn html_import_flattens_table_cell_spans_into_a_pipe_table() {
     assert!(rows[2].cells[0].content.is_empty());
     assert_eq!(rows[2].cells[1].content, vec![Inline::Text { text: "c".into() }]);
     assert!(
-        graph
-            .coverage
-            .loss
-            .iter()
-            .any(|loss| loss.code == "import.html.table_spans" && loss.status == SemanticStatus::Partial),
+        graph.coverage.loss.iter().any(|loss| loss.code == "import.html.table_spans" && loss.status == SemanticStatus::Partial),
         "the flatten downgrade must be reported: {:?}",
         graph.coverage.loss
     );

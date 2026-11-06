@@ -783,12 +783,7 @@ fn image_bytes_for_target(graph: &DocumentGraph, target: &str) -> Option<Vec<u8>
 /// Writes one authored string as run content, honoring accumulated run
 /// properties and keeping inline footnote tokens in text without properties.
 fn write_literal_text(out: &mut String, text: &str, properties: &str) -> Result<(), FormatError> {
-    if properties.is_empty() {
-        write_text_with_footnotes(out, text)
-    }
-    else {
-        write_run_with_properties(out, text, properties)
-    }
+    if properties.is_empty() { write_text_with_footnotes(out, text) } else { write_run_with_properties(out, text, properties) }
 }
 
 fn write_text_with_footnotes(out: &mut String, text: &str) -> Result<(), FormatError> {

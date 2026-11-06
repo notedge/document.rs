@@ -5,10 +5,10 @@ mod markdown_loss_span;
 mod markdown_math_ir;
 #[cfg(any(feature = "docx", feature = "html", feature = "epub"))]
 mod math_import;
-#[cfg(feature = "xlsx")]
-mod xlsx;
 #[cfg(feature = "pptx")]
 mod pptx;
+#[cfg(feature = "xlsx")]
+mod xlsx;
 
 mod common;
 #[cfg(feature = "doc")]
@@ -66,8 +66,7 @@ mod tex_export_smoke {
 
     #[test]
     fn environment_wrapper_stays_out_of_the_math_payload() {
-        let graph =
-            import_tex_bytes("equation", "\\begin{equation}\nx = 1\n\\end{equation}\n").expect("tex import");
+        let graph = import_tex_bytes("equation", "\\begin{equation}\nx = 1\n\\end{equation}\n").expect("tex import");
         let html = export_html(&graph).expect("html export");
         assert!(html.contains(r#"<div class="math" data-language="latex">x = 1</div>"#), "{html}");
         assert!(!html.contains("\\begin{equation}"), "{html}");
@@ -123,24 +122,17 @@ mod html_anchor_integrity {
         let cases: Vec<(&str, String)> = vec![
             (
                 "markdown",
-                export_html(
-                    &import_markdown_bytes("anchor-markdown", "see [^n]\n\n[^n]: body\n")
-                        .expect("markdown import"),
-                )
-                .expect("html export"),
+                export_html(&import_markdown_bytes("anchor-markdown", "see [^n]\n\n[^n]: body\n").expect("markdown import"))
+                    .expect("html export"),
             ),
             (
                 "tex",
-                export_html(
-                    &import_tex_bytes("anchor-tex", "\\section{A}\\label{a}\nsee \\ref{a}\n")
-                        .expect("tex import"),
-                )
-                .expect("html export"),
+                export_html(&import_tex_bytes("anchor-tex", "\\section{A}\\label{a}\nsee \\ref{a}\n").expect("tex import"))
+                    .expect("html export"),
             ),
             (
                 "typst",
-                export_html(&import_typst_bytes("anchor-typst", "= Title\n").expect("typst import"))
-                    .expect("html export"),
+                export_html(&import_typst_bytes("anchor-typst", "= Title\n").expect("typst import")).expect("html export"),
             ),
         ];
         for (label, html) in cases {
@@ -227,16 +219,20 @@ mod html_structure_smoke {
         );
         assert!(output.contains("<thead><tr><th>h</th></tr></thead>"), "{output}");
         assert!(output.contains("<tbody><tr><td>b</td></tr></tbody>"), "{output}");
-        assert!(!loss_codes("<table><thead><tr><th>h</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>")
-            .contains(&"import.html.table_sections".to_string()));
+        assert!(
+            !loss_codes("<table><thead><tr><th>h</th></tr></thead><tbody><tr><td>b</td></tr></tbody></table>")
+                .contains(&"import.html.table_sections".to_string())
+        );
     }
 
     #[test]
     fn header_rows_after_body_rows_are_a_recorded_loss() {
         let output = html("<table><tbody><tr><td>b</td></tr></tbody><thead><tr><th>h</th></tr></thead></table>");
         assert!(output.contains("<th>h</th>"), "{output}");
-        assert!(loss_codes("<table><tbody><tr><td>b</td></tr></tbody><thead><tr><th>h</th></tr></thead></table>")
-            .contains(&"import.html.table_sections".to_string()));
+        assert!(
+            loss_codes("<table><tbody><tr><td>b</td></tr></tbody><thead><tr><th>h</th></tr></thead></table>")
+                .contains(&"import.html.table_sections".to_string())
+        );
     }
 
     #[test]

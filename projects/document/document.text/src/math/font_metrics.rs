@@ -356,10 +356,7 @@ fn rekey_family<V>(map: HashMap<GlyphKey, V>, new_family: &str) -> HashMap<Glyph
 }
 
 /// Re-key the `ssty` alternate map, including the variant keys it points at.
-fn rekey_script_variants(
-    map: HashMap<GlyphKey, Vec<GlyphKey>>,
-    new_family: &str,
-) -> HashMap<GlyphKey, Vec<GlyphKey>> {
+fn rekey_script_variants(map: HashMap<GlyphKey, Vec<GlyphKey>>, new_family: &str) -> HashMap<GlyphKey, Vec<GlyphKey>> {
     let family = Some(new_family.to_string());
     map.into_iter()
         .map(|(mut key, mut variants)| {

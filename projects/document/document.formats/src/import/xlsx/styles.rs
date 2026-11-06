@@ -4,14 +4,14 @@ use std::collections::BTreeMap;
 
 use oak_xml::ast::{XmlElement, XmlValue};
 
-use super::model::{
-    BorderEdge, BorderEdges, CellStyle, HorizontalAlign, VerticalAlign, WorkbookStyles, XlsxIssue, codes,
+use super::model::{BorderEdge, BorderEdges, CellStyle, HorizontalAlign, VerticalAlign, WorkbookStyles, XlsxIssue, codes};
+use crate::{
+    FormatError,
+    import::office::{
+        attribute_value, bool_attribute, child_named, children_named, document_root, element_text, f64_attribute, local_name,
+        parse_xml, u32_attribute,
+    },
 };
-use crate::import::office::{
-    attribute_value, bool_attribute, child_named, children_named, document_root, element_text, f64_attribute, local_name,
-    parse_xml, u32_attribute,
-};
-use crate::FormatError;
 
 /// Parses the workbook style table, resolving cell formats against fonts, fills
 /// and borders.
@@ -196,12 +196,7 @@ fn parse_color(element: &XmlElement) -> Option<String> {
 
 fn normalize_argb(value: &str) -> String {
     let hex = value.trim().trim_start_matches('#');
-    if hex.len() == 8 {
-        format!("#{}", &hex[2..])
-    }
-    else {
-        format!("#{hex}")
-    }
+    if hex.len() == 8 { format!("#{}", &hex[2..]) } else { format!("#{hex}") }
 }
 
 fn indexed_color(index: usize) -> String {
@@ -259,12 +254,7 @@ fn apply_tint(base: &str, tint: f64) -> String {
     }
     let parse = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).unwrap_or(0) as f64;
     let adjust = |channel: f64| {
-        let shifted = if tint < 0.0 {
-            channel * (1.0 + tint)
-        }
-        else {
-            channel * (1.0 - tint) + 255.0 * tint
-        };
+        let shifted = if tint < 0.0 { channel * (1.0 + tint) } else { channel * (1.0 - tint) + 255.0 * tint };
         shifted.clamp(0.0, 255.0) as u8
     };
     format!("#{:02X}{:02X}{:02X}", adjust(parse(0..2)), adjust(parse(2..4)), adjust(parse(4..6)))

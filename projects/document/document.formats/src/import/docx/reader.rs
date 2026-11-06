@@ -18,8 +18,7 @@ use crate::FormatError;
 const DOCUMENT_XML: &str = "word/document.xml";
 const NUMBERING_XML: &str = "word/numbering.xml";
 const STYLES_XML: &str = "word/styles.xml";
-const NUMBERING_RELATIONSHIP_TYPE: &str =
-    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering";
+const NUMBERING_RELATIONSHIP_TYPE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering";
 
 /// Import a DOCX file from disk into `notedown-ir`.
 pub fn import_docx(path: impl AsRef<Path>) -> Result<DocumentGraph, FormatError> {

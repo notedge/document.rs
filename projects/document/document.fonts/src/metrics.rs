@@ -205,9 +205,11 @@ impl BodyMetrics {
     /// A face whose file cannot be parsed is recorded in [`Self::unreadable`],
     /// exactly as [`Self::from_faces`] does.
     pub fn from_set(set: &BodyFaceSet) -> Self {
-        Self::from_faces(set.faces().iter().map(|face| {
-            (BodyFaceKey { family: face.family, style: face.style }, face_label(face), face.bytes.as_ref())
-        }))
+        Self::from_faces(
+            set.faces()
+                .iter()
+                .map(|face| (BodyFaceKey { family: face.family, style: face.style }, face_label(face), face.bytes.as_ref())),
+        )
     }
 
     /// Metrics of an arbitrary face set, for hosts that paint their own faces.

@@ -1,4 +1,7 @@
-use std::{collections::{HashMap, HashSet}, fmt::Write as _};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write as _,
+};
 
 use document_ir::{Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
 
@@ -496,7 +499,7 @@ fn write_inlines(out: &mut String, inlines: &[Inline], footnote_refs: &mut Footn
                         return Err(FormatError::unsupported(
                             "html",
                             format!("link target `{target:?}` has no HTML destination mapping"),
-                        ))
+                        ));
                     }
                 };
                 out.push_str(r#"<a href=""#);

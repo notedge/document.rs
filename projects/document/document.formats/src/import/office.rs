@@ -197,11 +197,7 @@ fn collect_descendants<'a>(element: &'a XmlElement, name: &str, output: &mut Vec
 
 /// Reads an attribute by local name and resolves XML entities in its value.
 pub(crate) fn attribute_value(element: &XmlElement, expected: &str) -> Option<String> {
-    element
-        .attributes
-        .iter()
-        .find(|attr| local_name(&attr.name) == expected)
-        .map(|attr| decode_xml_entities(&attr.value))
+    element.attributes.iter().find(|attr| local_name(&attr.name) == expected).map(|attr| decode_xml_entities(&attr.value))
 }
 
 /// Parses a `u32` attribute by local name.

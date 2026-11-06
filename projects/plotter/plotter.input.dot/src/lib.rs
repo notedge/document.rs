@@ -454,11 +454,7 @@ enum StyleTarget {
     Edge,
 }
 
-fn check_attribute(
-    attribute: &Attribute,
-    target: StyleTarget,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Result<(), DiagramError> {
+fn check_attribute(attribute: &Attribute, target: StyleTarget, diagnostics: &mut Vec<Diagnostic>) -> Result<(), DiagramError> {
     let key = attribute.name.to_ascii_lowercase();
     let span = span_of(attribute.span);
     if FORBIDDEN_KEYS.iter().any(|forbidden| *forbidden == key) {
@@ -517,7 +513,8 @@ fn check_style(
             }
             "bold" => {
                 if target == StyleTarget::Node {
-                    diagnostics.push(approximated_at("node outline style `bold` is not applied as a stroke weight", span.clone()));
+                    diagnostics
+                        .push(approximated_at("node outline style `bold` is not applied as a stroke weight", span.clone()));
                 }
             }
             "filled" => {

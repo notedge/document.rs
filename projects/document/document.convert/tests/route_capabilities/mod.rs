@@ -38,11 +38,7 @@ fn tex_to_markdown_keeps_the_authored_structure() {
 
     assert!(output.markdown.starts_with("# "), "the section became a heading: {}", output.markdown);
     assert!(output.markdown.contains("Intro"), "the heading text survived: {}", output.markdown);
-    assert!(
-        output.markdown.contains("class=\"tex-section-number\""),
-        "the authored class survived: {}",
-        output.markdown
-    );
+    assert!(output.markdown.contains("class=\"tex-section-number\""), "the authored class survived: {}", output.markdown);
     assert!(output.markdown.contains("**world**"), "bold run was lost: {}", output.markdown);
     assert_eq!(output.loss_count, 0, "unexpected loss markers: {}", output.report_json);
 }

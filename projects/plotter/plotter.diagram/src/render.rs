@@ -355,11 +355,15 @@ fn node_shape(node: &PlacedNode) -> SemanticNode {
                 style: ShapeStyle { fill: Some(NODE_STROKE), stroke: None, ..ShapeStyle::default() },
             }
         }
-        NodeShape::DoubleCircle => SemanticKind::Group { children: double_circle_children(&node.id, node.rect, style), opacity: 1.0 },
-        NodeShape::Component => SemanticKind::Group { children: component_children(&node.id, node.rect, style), opacity: 1.0 },
-        NodeShape::Ellipse => {
-            SemanticKind::Ellipse { center: node.rect.center(), radii: Size::new(node.rect.width * 0.5, node.rect.height * 0.5), style }
+        NodeShape::DoubleCircle => {
+            SemanticKind::Group { children: double_circle_children(&node.id, node.rect, style), opacity: 1.0 }
         }
+        NodeShape::Component => SemanticKind::Group { children: component_children(&node.id, node.rect, style), opacity: 1.0 },
+        NodeShape::Ellipse => SemanticKind::Ellipse {
+            center: node.rect.center(),
+            radii: Size::new(node.rect.width * 0.5, node.rect.height * 0.5),
+            style,
+        },
         NodeShape::Plaintext => {
             SemanticKind::Rect { rect: node.rect, style: ShapeStyle { fill: None, stroke: None, ..ShapeStyle::default() } }
         }
@@ -440,8 +444,7 @@ fn note_children(id: &str, rect: Rect, style: ShapeStyle) -> Vec<SemanticNode> {
         Point::new(rect.x, rect.bottom()),
     ]);
     vec![
-        SemanticNode::new(SemanticKind::Path { path: outline, style: style.clone() })
-            .with_id(format!("node-{id}-outline")),
+        SemanticNode::new(SemanticKind::Path { path: outline, style: style.clone() }).with_id(format!("node-{id}-outline")),
         SemanticNode::new(SemanticKind::Line {
             from: Point::new(rect.right() - fold, rect.y),
             to: Point::new(rect.right(), rect.y + fold),

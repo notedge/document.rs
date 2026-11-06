@@ -10,8 +10,7 @@ use std::fmt::Write as _;
 use document_ir::{Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableRow};
 
 use super::chapter::{ChapterPlan, asset_source_map, plan_assets};
-use crate::FormatError;
-use crate::export::html::FootnoteRefIds;
+use crate::{FormatError, export::html::FootnoteRefIds};
 
 /// Render a single chapter as a full XHTML document.
 pub fn chapter_xhtml(graph: &DocumentGraph, plan: &ChapterPlan) -> Result<String, FormatError> {

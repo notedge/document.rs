@@ -26,7 +26,7 @@
 //! corrupt header, or zero-sized image returns `None` instead of panicking or
 //! emitting an invalid dictionary.
 
-use acorn_codec::{compression::zlib::Zlib, CodecLimits};
+use acorn_codec::{CodecLimits, compression::zlib::Zlib};
 use std::{fs, path::Path};
 
 /// PNG file signature, the first eight bytes of every PNG stream.

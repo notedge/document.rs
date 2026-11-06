@@ -14,11 +14,11 @@ mod reference;
 mod styles;
 mod value;
 
-pub use lower::{import_xlsx_graph, import_xlsx_graph_bytes, workbook_to_graph, GraphOptions};
+pub use lower::{GraphOptions, import_xlsx_graph, import_xlsx_graph_bytes, workbook_to_graph};
 pub use model::{
     CellComment, CellFormula, CellRange, CellStyle, CellValue, DateKind, DateSystem, ExcelDate, FormulaKind, FreezePane,
     HorizontalAlign, ImageAnchor, IssueStatus, SheetColumn, SheetImage, SheetRow, SheetVisibility, VerticalAlign,
     WorkbookStyles, XlsxCell, XlsxIssue, XlsxSheet, XlsxStats, XlsxWorkbook,
 };
 pub use reader::{import_xlsx, import_xlsx_bytes};
-pub use render::{render_workbook_html, PageOptions, RenderOptions, XlsxPage, XlsxRender};
+pub use render::{PageOptions, RenderOptions, XlsxPage, XlsxRender, render_workbook_html};

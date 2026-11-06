@@ -1,8 +1,7 @@
 //! Conversion report projection for imported container documents.
 
 use document_compose::{
-    ConversionReport, CoverageSummary, Diagnostic, LossyItem, OpaqueItem, PreservedItem, Severity, SourceSpan,
-    UnsupportedItem,
+    ConversionReport, CoverageSummary, Diagnostic, LossyItem, OpaqueItem, PreservedItem, Severity, SourceSpan, UnsupportedItem,
 };
 use document_ir::{Block, DocumentGraph, SemanticStatus};
 

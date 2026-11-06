@@ -367,7 +367,8 @@ impl FontChain {
             let mut glyphs = BTreeMap::new();
             let mut remaining = charset.clone();
             for candidate in key_order(*key) {
-                let matching = faces.iter().filter(|(_, family, style)| *family == candidate.family && *style == candidate.style);
+                let matching =
+                    faces.iter().filter(|(_, family, style)| *family == candidate.family && *style == candidate.style);
                 for (font, _, _) in matching {
                     let covered: BTreeSet<char> = remaining.iter().copied().filter(|ch| font.glyph_id(*ch).is_some()).collect();
                     if covered.is_empty() {
@@ -398,7 +399,9 @@ impl FontChain {
     /// Subset index and CID that paint one character for one family and style.
     pub(crate) fn glyph(&self, ch: char, key: ChainKey) -> Option<(usize, u16)> {
         for candidate in key_order(key) {
-            if let Some((index, cid)) = self.styles.iter().find(|(built, _)| *built == candidate).and_then(|(_, glyphs)| glyphs.get(&ch)) {
+            if let Some((index, cid)) =
+                self.styles.iter().find(|(built, _)| *built == candidate).and_then(|(_, glyphs)| glyphs.get(&ch))
+            {
                 return Some((*index, *cid));
             }
         }

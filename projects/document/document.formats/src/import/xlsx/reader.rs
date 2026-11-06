@@ -1,26 +1,28 @@
 //! OPC and SpreadsheetML reading.
 
-use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
+use std::{collections::HashMap, fs, path::Path};
 
 use acorn_core::{Budget, BudgetTracker};
 use acorn_docx::{OpcPackage, OpcRelationship, resolve_opc_target};
 use oak_xml::ast::XmlElement;
 
-use super::model::{
-    CellComment, CellFormula, CellStyle, CellValue, DateKind, DateSystem, FormulaKind, FreezePane, ImageAnchor,
-    IssueStatus, SheetColumn, SheetImage, SheetRow, SheetVisibility, WorkbookStyles, XlsxCell, XlsxIssue, XlsxSheet,
-    XlsxStats, XlsxWorkbook, codes,
+use super::{
+    model::{
+        CellComment, CellFormula, CellStyle, CellValue, DateKind, DateSystem, FormulaKind, FreezePane, ImageAnchor,
+        IssueStatus, SheetColumn, SheetImage, SheetRow, SheetVisibility, WorkbookStyles, XlsxCell, XlsxIssue, XlsxSheet,
+        XlsxStats, XlsxWorkbook, codes,
+    },
+    reference::{parse_range, parse_reference, reference},
+    styles::parse_styles,
+    value::{date_from_iso, detect_date_kind, display_cell, excel_date, is_date_format},
 };
-use super::reference::{parse_range, parse_reference, reference};
-use super::styles::parse_styles;
-use super::value::{date_from_iso, detect_date_kind, display_cell, excel_date, is_date_format};
-use crate::import::office::{
-    attribute_value, bool_attribute, child_named, children_named, descendants_named, document_root, element_text,
-    element_text_without, f64_attribute, local_name, parse_xml, u32_attribute,
+use crate::{
+    FormatError,
+    import::office::{
+        attribute_value, bool_attribute, child_named, children_named, descendants_named, document_root, element_text,
+        element_text_without, f64_attribute, local_name, parse_xml, u32_attribute,
+    },
 };
-use crate::FormatError;
 
 const WORKBOOK_PART: &str = "xl/workbook.xml";
 const SHARED_STRINGS_PART: &str = "xl/sharedStrings.xml";
@@ -30,7 +32,8 @@ const THEME_PART: &str = "xl/theme/theme1.xml";
 /// Imports an XLSX workbook from disk.
 pub fn import_xlsx(path: impl AsRef<Path>) -> Result<XlsxWorkbook, FormatError> {
     let path = path.as_ref();
-    let bytes = fs::read(path).map_err(|error| FormatError::invalid_input(format!("failed to read {}: {error}", path.display())))?;
+    let bytes =
+        fs::read(path).map_err(|error| FormatError::invalid_input(format!("failed to read {}: {error}", path.display())))?;
     import_xlsx_bytes(&path.display().to_string(), &bytes)
 }
 
@@ -50,26 +53,25 @@ pub fn import_xlsx_bytes(label: &str, bytes: &[u8]) -> Result<XlsxWorkbook, Form
     let workbook_root = document_root(&workbook_value, "xlsx")?;
 
     let workbook_rels = read_rels(&package, &mut ledger, &workbook_part);
-    let date_system = bool_attribute_of(book_workbook_prop(workbook_root), "date1904").map_or(DateSystem::Date1900, |enabled| {
-        if enabled {
-            DateSystem::Date1904
-        }
-        else {
-            DateSystem::Date1900
-        }
-    });
+    let date_system = bool_attribute_of(book_workbook_prop(workbook_root), "date1904")
+        .map_or(DateSystem::Date1900, |enabled| if enabled { DateSystem::Date1904 } else { DateSystem::Date1900 });
 
     let shared_strings = read_shared_strings(&package, &mut ledger, &workbook_rels, &workbook_part);
     let styles_part = find_part(&workbook_rels, "/styles", &workbook_part).unwrap_or_else(|| STYLES_PART.to_owned());
     let theme_part = find_part(&workbook_rels, "/theme", &workbook_part).unwrap_or_else(|| THEME_PART.to_owned());
     let theme = read_part_optional(&package, &mut ledger, &theme_part);
-    let (styles, style_issues) =
-        parse_styles(&read_part_or_default(&package, &mut ledger, &styles_part), theme.as_deref())?;
+    let (styles, style_issues) = parse_styles(&read_part_or_default(&package, &mut ledger, &styles_part), theme.as_deref())?;
     issues.extend(style_issues);
 
     let macro_enabled = package.part_paths().iter().any(|path| local_name(path).eq_ignore_ascii_case("vbaProject.bin"));
     if macro_enabled {
-        issues.push(issue(codes::MACRO, "VBA project detected and refused by the XLSX reader", IssueStatus::Unsupported, None, None));
+        issues.push(issue(
+            codes::MACRO,
+            "VBA project detected and refused by the XLSX reader",
+            IssueStatus::Unsupported,
+            None,
+            None,
+        ));
     }
     if package.part_paths().iter().any(|path| path.starts_with("xl/externalLinks/")) {
         issues.push(issue(
@@ -97,7 +99,10 @@ pub fn import_xlsx_bytes(label: &str, bytes: &[u8]) -> Result<XlsxWorkbook, Form
             .and_then(|id| workbook_rels.get(id))
             .map(|relationship| resolve_target(&workbook_part, &relationship.target))
             .unwrap_or_else(|| format!("xl/worksheets/sheet{}.xml", sheet_number + 1));
-        let relationship_type = relation_id.as_deref().and_then(|id| workbook_rels.get(id)).map(|relationship| relationship.relationship_type.clone());
+        let relationship_type = relation_id
+            .as_deref()
+            .and_then(|id| workbook_rels.get(id))
+            .map(|relationship| relationship.relationship_type.clone());
         let is_worksheet = relationship_type.as_deref().map(|kind| kind.ends_with("/worksheet")).unwrap_or(true);
         if !is_worksheet {
             issues.push(issue(
@@ -158,16 +163,7 @@ pub fn import_xlsx_bytes(label: &str, bytes: &[u8]) -> Result<XlsxWorkbook, Form
     }
 
     let stats = compute_stats(&sheets, &styles);
-    Ok(XlsxWorkbook {
-        label: label.to_owned(),
-        date_system,
-        sheets,
-        styles,
-        defined_names,
-        macro_enabled,
-        issues,
-        stats,
-    })
+    Ok(XlsxWorkbook { label: label.to_owned(), date_system, sheets, styles, defined_names, macro_enabled, issues, stats })
 }
 
 fn looks_like_zip(bytes: &[u8]) -> bool {
@@ -236,10 +232,7 @@ fn read_shared_strings(
     else {
         return Vec::new();
     };
-    children_named(root, "si")
-        .into_iter()
-        .map(|item| element_text_without(item, &["rPh"]))
-        .collect()
+    children_named(root, "si").into_iter().map(|item| element_text_without(item, &["rPh"])).collect()
 }
 
 fn book_workbook_prop<'a>(root: &'a XmlElement) -> Option<&'a XmlElement> {
@@ -285,7 +278,9 @@ fn parse_sheet(
             )
         })
         .unwrap_or((15.0, 8.43));
-    let dimension = child_named(root, "dimension").and_then(|dimension| attribute_value(dimension, "ref")).and_then(|text| parse_range(&text));
+    let dimension = child_named(root, "dimension")
+        .and_then(|dimension| attribute_value(dimension, "ref"))
+        .and_then(|text| parse_range(&text));
 
     let columns = child_named(root, "cols")
         .map(|cols| {
@@ -315,13 +310,14 @@ fn parse_sheet(
             rows.push(SheetRow { index: row_index, height, custom_height, hidden });
             let mut next_column = 1;
             for cell in children_named(row, "c") {
-                let (cell_row, cell_column, cell_reference) = match attribute_value(cell, "r").and_then(|text| parse_reference(&text)) {
-                    Some((cell_row, cell_column)) => (cell_row, cell_column, reference(cell_row, cell_column)),
-                    None => {
-                        let cell_reference = reference(row_index, next_column);
-                        (row_index, next_column, cell_reference)
-                    }
-                };
+                let (cell_row, cell_column, cell_reference) =
+                    match attribute_value(cell, "r").and_then(|text| parse_reference(&text)) {
+                        Some((cell_row, cell_column)) => (cell_row, cell_column, reference(cell_row, cell_column)),
+                        None => {
+                            let cell_reference = reference(row_index, next_column);
+                            (row_index, next_column, cell_reference)
+                        }
+                    };
                 next_column = cell_column + 1;
                 let style_index = u32_attribute(cell, "s");
                 let style = style_index
@@ -355,7 +351,12 @@ fn parse_sheet(
     cells.sort_by_key(|cell| (cell.row, cell.column));
 
     let merged = child_named(root, "mergeCells")
-        .map(|block| children_named(block, "mergeCell").into_iter().filter_map(|cell| attribute_value(cell, "ref").and_then(|text| parse_range(&text))).collect())
+        .map(|block| {
+            children_named(block, "mergeCell")
+                .into_iter()
+                .filter_map(|cell| attribute_value(cell, "ref").and_then(|text| parse_range(&text)))
+                .collect()
+        })
         .unwrap_or_default();
 
     let freeze = child_named(root, "sheetViews")
@@ -372,7 +373,8 @@ fn parse_sheet(
             })
         });
 
-    let auto_filter = child_named(root, "autoFilter").and_then(|filter| attribute_value(filter, "ref")).and_then(|text| parse_range(&text));
+    let auto_filter =
+        child_named(root, "autoFilter").and_then(|filter| attribute_value(filter, "ref")).and_then(|text| parse_range(&text));
     let conditional_formatting = child_named(root, "conditionalFormatting").is_some();
     let data_validations = child_named(root, "dataValidations").is_some();
 
@@ -441,7 +443,11 @@ fn parse_sheet(
             issues.extend(drawing_issues);
         }
     }
-    if let Some(comments_part) = sheet_rels.values().find(|relationship| relationship.relationship_type.ends_with("/comments")).map(|relationship| resolve_target(part, &relationship.target)) {
+    if let Some(comments_part) = sheet_rels
+        .values()
+        .find(|relationship| relationship.relationship_type.ends_with("/comments"))
+        .map(|relationship| resolve_target(part, &relationship.target))
+    {
         if let Some(comments_xml) = read_part_optional(package, ledger, &comments_part) {
             comments = parse_comments(&comments_xml, name, issues);
         }
@@ -605,7 +611,13 @@ fn parse_drawing(
     let mut issues = Vec::new();
     let Ok(value) = parse_xml(xml, "xlsx")
     else {
-        issues.push(issue(codes::DRAWING_UNSUPPORTED, format!("sheet `{sheet}` drawing part could not be parsed"), IssueStatus::Unsupported, Some(sheet.to_owned()), None));
+        issues.push(issue(
+            codes::DRAWING_UNSUPPORTED,
+            format!("sheet `{sheet}` drawing part could not be parsed"),
+            IssueStatus::Unsupported,
+            Some(sheet.to_owned()),
+            None,
+        ));
         return (images, charts, issues);
     };
     let Ok(root) = document_root(&value, "xlsx")
@@ -618,7 +630,12 @@ fn parse_drawing(
         .chain(children_named(root, "twoCellAnchor"))
         .chain(children_named(root, "absoluteAnchor"))
     {
-        let from = child_named(anchor, "from").map(parse_anchor).unwrap_or(ImageAnchor { column: 0, column_offset: 0, row: 0, row_offset: 0 });
+        let from = child_named(anchor, "from").map(parse_anchor).unwrap_or(ImageAnchor {
+            column: 0,
+            column_offset: 0,
+            row: 0,
+            row_offset: 0,
+        });
         let to = child_named(anchor, "to").map(parse_anchor);
         let extent = child_named(anchor, "ext").and_then(|ext| {
             let cx = i64::from(u32_attribute(ext, "cx").unwrap_or(0));
@@ -684,23 +701,31 @@ fn parse_anchor(element: &XmlElement) -> ImageAnchor {
 
 fn media_type_for(path: &str) -> Option<String> {
     let extension = path.rsplit_once('.')?.1.to_ascii_lowercase();
-    Some(match extension.as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "bmp" => "image/bmp",
-        "svg" => "image/svg+xml",
-        "tif" | "tiff" => "image/tiff",
-        "webp" => "image/webp",
-        _ => return None,
-    }
-    .to_owned())
+    Some(
+        match extension.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "bmp" => "image/bmp",
+            "svg" => "image/svg+xml",
+            "tif" | "tiff" => "image/tiff",
+            "webp" => "image/webp",
+            _ => return None,
+        }
+        .to_owned(),
+    )
 }
 
 fn parse_comments(xml: &[u8], sheet: &str, issues: &mut Vec<XlsxIssue>) -> Vec<CellComment> {
     let Ok(value) = parse_xml(xml, "xlsx")
     else {
-        issues.push(issue(codes::COMMENT_ANCHOR, format!("sheet `{sheet}` comments part could not be parsed"), IssueStatus::Partial, Some(sheet.to_owned()), None));
+        issues.push(issue(
+            codes::COMMENT_ANCHOR,
+            format!("sheet `{sheet}` comments part could not be parsed"),
+            IssueStatus::Partial,
+            Some(sheet.to_owned()),
+            None,
+        ));
         return Vec::new();
     };
     let Ok(root) = document_root(&value, "xlsx")

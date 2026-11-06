@@ -51,7 +51,12 @@ pub struct FormatDetection {
 }
 
 impl FormatDetection {
-    fn resolved(format: &'static str, container: ContainerKind, confidence: DetectionConfidence, evidence: impl Into<String>) -> Self {
+    fn resolved(
+        format: &'static str,
+        container: ContainerKind,
+        confidence: DetectionConfidence,
+        evidence: impl Into<String>,
+    ) -> Self {
         Self { format: Some(format), candidates: vec![format], container, confidence, evidence: evidence.into() }
     }
 
@@ -60,7 +65,13 @@ impl FormatDetection {
     }
 
     fn unknown(container: ContainerKind, evidence: impl Into<String>) -> Self {
-        Self { format: None, candidates: Vec::new(), container, confidence: DetectionConfidence::Unknown, evidence: evidence.into() }
+        Self {
+            format: None,
+            candidates: Vec::new(),
+            container,
+            confidence: DetectionConfidence::Unknown,
+            evidence: evidence.into(),
+        }
     }
 }
 
@@ -76,7 +87,12 @@ pub fn detect_bytes(bytes: &[u8], extension_hint: Option<&str>) -> FormatDetecti
         return FormatDetection::unknown(ContainerKind::Plain, "empty input carries no container header or format signature");
     }
     if bytes.starts_with(b"%PDF-") {
-        return FormatDetection::resolved("pdf", ContainerKind::Pdf, DetectionConfidence::Verified, "header `%PDF-` identifies a PDF stream");
+        return FormatDetection::resolved(
+            "pdf",
+            ContainerKind::Pdf,
+            DetectionConfidence::Verified,
+            "header `%PDF-` identifies a PDF stream",
+        );
     }
     if looks_like_ole(bytes) {
         return FormatDetection::resolved(
@@ -121,7 +137,12 @@ fn detect_zip(extension_hint: Option<&str>) -> FormatDetection {
 
 fn detect_text(bytes: &[u8], extension_hint: Option<&str>) -> FormatDetection {
     if let Some(format) = textual_signature(bytes) {
-        return FormatDetection::resolved(format, ContainerKind::Plain, DetectionConfidence::Hinted, describe_text_signature(format));
+        return FormatDetection::resolved(
+            format,
+            ContainerKind::Plain,
+            DetectionConfidence::Hinted,
+            describe_text_signature(format),
+        );
     }
     if let Some(format) = normalize_hint(extension_hint) {
         if matches!(format, "markdown" | "notedown" | "html" | "tex" | "typst") {
@@ -133,17 +154,18 @@ fn detect_text(bytes: &[u8], extension_hint: Option<&str>) -> FormatDetection {
             );
         }
     }
-    FormatDetection::unknown(
-        ContainerKind::Plain,
-        "plain text has no container header and no recognizable format signature",
-    )
+    FormatDetection::unknown(ContainerKind::Plain, "plain text has no container header and no recognizable format signature")
 }
 
 fn textual_signature(bytes: &[u8]) -> Option<&'static str> {
     let head = leading_text(bytes, 64);
     let trimmed = head.trim_start();
     let lower = trimmed.to_ascii_lowercase();
-    if lower.starts_with("<!doctype html") || lower.starts_with("<html") || lower.starts_with("<head") || lower.starts_with("<body") {
+    if lower.starts_with("<!doctype html")
+        || lower.starts_with("<html")
+        || lower.starts_with("<head")
+        || lower.starts_with("<body")
+    {
         return Some("html");
     }
     if trimmed.starts_with("\\documentclass") || trimmed.starts_with("\\begin{document") || trimmed.starts_with("\\section{") {

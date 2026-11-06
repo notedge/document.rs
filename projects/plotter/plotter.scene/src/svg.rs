@@ -85,9 +85,7 @@ fn validate_shape_style(style: &ShapeStyle, context: &str) -> Result<(), SceneEr
         for (name, value) in [("on", on), ("off", off)] {
             validate_finite(value, &format!("{context}.dash.{name}"))?;
             if value <= 0.0 {
-                return Err(SceneError::invalid_style(format!(
-                    "{context}.dash.{name} must be positive, found {value}"
-                )));
+                return Err(SceneError::invalid_style(format!("{context}.dash.{name} must be positive, found {value}")));
             }
         }
     }

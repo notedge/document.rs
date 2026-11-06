@@ -306,8 +306,7 @@ fn epub_css_stylesheets_stay_fail_closed_with_diagnostics() {
 /// and record an explicit loss.
 #[test]
 fn epub_list_value_and_reversed_are_explicit() {
-    let graph =
-        import_epub_bytes("list-value-reversed.epub", &epub_fixture("list-value-reversed")).expect("epub import");
+    let graph = import_epub_bytes("list-value-reversed.epub", &epub_fixture("list-value-reversed")).expect("epub import");
     assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
 
     let shifted = ordered_list_starting_with(&graph, "two");
@@ -387,36 +386,20 @@ fn epub_footnote_reference_without_definition_stays_a_note() {
 
 fn epub_fixture(name: &str) -> Vec<u8> {
     match name {
-        "ordered-list" => build_epub(
-            "ordered-list",
-            "Fixture ordered-list.epub",
-            &[("chapter1.xhtml", ORDERED_LIST_CHAPTER)],
-            false,
-        ),
-        "css-link" => build_epub(
-            "css-link",
-            "Fixture css-link.epub",
-            &[("chapter1.xhtml", CSS_LINK_CHAPTER)],
-            true,
-        ),
-        "inline-style" => build_epub(
-            "inline-style",
-            "Fixture inline-style.epub",
-            &[("chapter1.xhtml", INLINE_STYLE_CHAPTER)],
-            false,
-        ),
+        "ordered-list" => {
+            build_epub("ordered-list", "Fixture ordered-list.epub", &[("chapter1.xhtml", ORDERED_LIST_CHAPTER)], false)
+        }
+        "css-link" => build_epub("css-link", "Fixture css-link.epub", &[("chapter1.xhtml", CSS_LINK_CHAPTER)], true),
+        "inline-style" => {
+            build_epub("inline-style", "Fixture inline-style.epub", &[("chapter1.xhtml", INLINE_STYLE_CHAPTER)], false)
+        }
         "list-value-reversed" => build_epub(
             "list-value-reversed",
             "Fixture list value reversed",
             &[("chapter1.xhtml", LIST_VALUE_REVERSED_CHAPTER)],
             false,
         ),
-        "footnotes" => build_epub(
-            "footnotes",
-            "Fixture footnotes.epub",
-            &[("chapter1.xhtml", FOOTNOTES_CHAPTER)],
-            false,
-        ),
+        "footnotes" => build_epub("footnotes", "Fixture footnotes.epub", &[("chapter1.xhtml", FOOTNOTES_CHAPTER)], false),
         "footnotes-edge" => build_epub(
             "footnotes-edge",
             "Fixture footnotes-edge.epub",
@@ -428,8 +411,7 @@ fn epub_fixture(name: &str) -> Vec<u8> {
 }
 
 fn build_epub(identifier: &str, title: &str, chapters: &[(&str, &str)], linked_css: bool) -> Vec<u8> {
-    let mut manifest =
-        String::from(r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#);
+    let mut manifest = String::from(r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#);
     let mut spine = String::new();
     let mut nav_items = String::new();
     for (index, (href, _)) in chapters.iter().enumerate() {

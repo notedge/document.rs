@@ -431,7 +431,10 @@ fn write_span_attributes(out: &mut String, attributes: &Attributes) -> Result<()
         let valid_name = !pair.key.is_empty()
             && pair.key.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | ':' | '.'));
         if !valid_name || pair.key.eq_ignore_ascii_case("id") || pair.key.eq_ignore_ascii_case("class") {
-            return Err(FormatError::unsupported("markdown", format!("attribute name `{}` has no inline HTML spelling", pair.key)));
+            return Err(FormatError::unsupported(
+                "markdown",
+                format!("attribute name `{}` has no inline HTML spelling", pair.key),
+            ));
         }
         out.push(' ');
         out.push_str(&pair.key);

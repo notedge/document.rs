@@ -97,7 +97,8 @@ impl DocumentRelsRegistry {
         if self.entries.is_empty() {
             let numbering = if include_numbering {
                 format!("\n  <Relationship Id=\"rId2\" Type=\"{NUMBERING_REL}\" Target=\"numbering.xml\"/>")
-            } else {
+            }
+            else {
                 String::new()
             };
             return format!(

@@ -54,11 +54,7 @@ pub fn capabilities() -> Vec<FormatCapability> {
         // tables, code, media and footnotes. `Block::Math`, `Block::RawHtml`
         // and opaque blocks are refused with an unsupported diagnostic instead
         // of being silently dropped, so the route stays partially deliverable.
-        capabilities.push(FormatCapability {
-            id: "docx",
-            direction: FormatDirection::Export,
-            status: FormatStatus::Partial,
-        });
+        capabilities.push(FormatCapability { id: "docx", direction: FormatDirection::Export, status: FormatStatus::Partial });
     }
     #[cfg(feature = "doc")]
     {
@@ -75,11 +71,7 @@ pub fn capabilities() -> Vec<FormatCapability> {
         // The PDF export is delivered by the `layout → presentation →
         // renderer-pdf` chain, so it keeps layout, embeds glyphs for CJK text
         // and typesets math instead of printing its source.
-        capabilities.push(FormatCapability {
-            id: "pdf",
-            direction: FormatDirection::Export,
-            status: FormatStatus::Partial,
-        });
+        capabilities.push(FormatCapability { id: "pdf", direction: FormatDirection::Export, status: FormatStatus::Partial });
     }
     #[cfg(feature = "epub")]
     {

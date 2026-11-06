@@ -597,7 +597,10 @@ fn docx_export_lowers_math_to_omml_and_reads_it_back() {
     });
     let exported = export_docx_bytes(&graph).expect("export math");
     let xml = String::from_utf8_lossy(&exported);
-    assert!(xml.contains("xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\""), "the math namespace is declared");
+    assert!(
+        xml.contains("xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\""),
+        "the math namespace is declared"
+    );
     assert!(xml.contains("<m:oMathPara><m:oMath><m:f>"), "display math becomes an OMML fraction");
     assert!(xml.contains("<m:sSup>"), "inline math keeps its superscript");
     let reopened = import_docx_bytes("math-round.docx", &exported).expect("reopen math");

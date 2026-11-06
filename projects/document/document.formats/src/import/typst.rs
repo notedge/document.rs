@@ -465,13 +465,7 @@ impl<'a> TypstLowerer<'a> {
                 // count from one, so the graph needs the ordinal the source
                 // leaves implicit.
                 let number = line.number.or_else(|| line.ordered.then(|| items.len() as u32 + 1));
-                items.push(ListItem {
-                    content,
-                    children: Vec::new(),
-                    number,
-                    is_task: false,
-                    is_checked: None,
-                });
+                items.push(ListItem { content, children: Vec::new(), number, is_task: false, is_checked: None });
             }
         }
     }
@@ -621,10 +615,7 @@ impl<'a> TypstLowerer<'a> {
         for segment in segments {
             match segment {
                 QuoteSegment::Text(text) => {
-                    if text.starts_with(char::is_whitespace)
-                        && !inlines.is_empty()
-                        && !last_inline_ends_with_space(inlines)
-                    {
+                    if text.starts_with(char::is_whitespace) && !inlines.is_empty() && !last_inline_ends_with_space(inlines) {
                         push_inline_text(inlines, " ");
                     }
                     push_text_inlines(inlines, text);
@@ -634,11 +625,7 @@ impl<'a> TypstLowerer<'a> {
                         .map(|body| self.lower_inline_fragment(body))
                         .filter(|display| !display.is_empty())
                         .unwrap_or_else(|| vec![Inline::Text { text: destination.clone() }]);
-                    inlines.push(Inline::Link {
-                        target: RelationEndpoint::ExternalUri(destination),
-                        display,
-                        title: None,
-                    });
+                    inlines.push(Inline::Link { target: RelationEndpoint::ExternalUri(destination), display, title: None });
                 }
             }
         }

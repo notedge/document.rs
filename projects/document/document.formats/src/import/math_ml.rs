@@ -32,7 +32,9 @@ pub(crate) fn normalize_self_closing_math_elements(text: &str) -> Cow<'_, str> {
         }
         let name_start = index + 1;
         let mut name_end = name_start;
-        while name_end < bytes.len() && (bytes[name_end].is_ascii_alphanumeric() || bytes[name_end] == b'-' || bytes[name_end] == b':') {
+        while name_end < bytes.len()
+            && (bytes[name_end].is_ascii_alphanumeric() || bytes[name_end] == b'-' || bytes[name_end] == b':')
+        {
             name_end += 1;
         }
         let name = text[name_start..name_end].to_ascii_lowercase();
@@ -44,7 +46,8 @@ pub(crate) fn normalize_self_closing_math_elements(text: &str) -> Cow<'_, str> {
                 continue;
             }
         };
-        let Some(offset) = text[name_end..].find('>') else {
+        let Some(offset) = text[name_end..].find('>')
+        else {
             break;
         };
         let tag_end = name_end + offset + 1;
@@ -114,7 +117,8 @@ fn collect_svg_expansions(text: &str, out: &mut Vec<(usize, usize, String)>) {
     let bytes = text.as_bytes();
     let mut index = 0usize;
     while index < bytes.len() {
-        let Some(offset) = text[index..].find('<') else {
+        let Some(offset) = text[index..].find('<')
+        else {
             break;
         };
         let start = index + offset;
@@ -127,11 +131,13 @@ fn collect_svg_expansions(text: &str, out: &mut Vec<(usize, usize, String)>) {
                 None => break,
             }
         }
-        let Some((name, name_end)) = tag_name(text, start) else {
+        let Some((name, name_end)) = tag_name(text, start)
+        else {
             index = start + 1;
             continue;
         };
-        let Some(tag_end) = find_tag_end(text, name_end) else {
+        let Some(tag_end) = find_tag_end(text, name_end)
+        else {
             break;
         };
         if name.eq_ignore_ascii_case("svg") {
@@ -151,7 +157,8 @@ fn collect_svg_expansions(text: &str, out: &mut Vec<(usize, usize, String)>) {
 fn collect_inner_expansions(text: &str, from: usize, to: usize, out: &mut Vec<(usize, usize, String)>) {
     let mut index = from;
     while index < to {
-        let Some(offset) = text[index..to].find('<') else {
+        let Some(offset) = text[index..to].find('<')
+        else {
             break;
         };
         let start = index + offset;
@@ -164,11 +171,13 @@ fn collect_inner_expansions(text: &str, from: usize, to: usize, out: &mut Vec<(u
                 None => break,
             }
         }
-        let Some((name, name_end)) = tag_name(text, start) else {
+        let Some((name, name_end)) = tag_name(text, start)
+        else {
             index = start + 1;
             continue;
         };
-        let Some(tag_end) = find_tag_end(text, name_end) else {
+        let Some(tag_end) = find_tag_end(text, name_end)
+        else {
             break;
         };
         if tag_end >= to {
@@ -194,7 +203,20 @@ fn expanded_tag(text: &str, start: usize, name_end: usize, tag_end: usize) -> St
 fn is_void_html_element(name: &str) -> bool {
     matches!(
         name,
-        "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input" | "link" | "meta" | "param" | "source" | "track" | "wbr"
+        "area"
+            | "base"
+            | "br"
+            | "col"
+            | "embed"
+            | "hr"
+            | "img"
+            | "input"
+            | "link"
+            | "meta"
+            | "param"
+            | "source"
+            | "track"
+            | "wbr"
     )
 }
 
@@ -245,7 +267,8 @@ fn find_svg_close_end(text: &str, from: usize) -> Option<usize> {
     let mut depth = 0usize;
     let mut index = from;
     while index < bytes.len() {
-        let Some(offset) = text[index..].find('<') else {
+        let Some(offset) = text[index..].find('<')
+        else {
             return None;
         };
         let start = index + offset;
@@ -367,18 +390,18 @@ impl Builder {
     fn lower(&mut self, element: &Element) {
         let tag = tag_of(element);
         match tag.as_str() {
-            "math" | "mrow" | "mstyle" | "mphantom" | "menclose" | "mbox" | "mstack" | "msgroup" | "mfrac"
-            | "msup" | "msub" | "msubsup" | "msqrt" | "mroot" | "mfenced" | "mtable" | "mtr" | "mtd" | "mover"
-            | "munder" | "munderover" | "mspace" | "mtext" | "mi" | "mn" | "mo" | "semantics" | "none" | "mpadded"
-            | "merror" | "br" | "wbr" => self.lower_supported(tag.as_str(), element),
+            "math" | "mrow" | "mstyle" | "mphantom" | "menclose" | "mbox" | "mstack" | "msgroup" | "mfrac" | "msup"
+            | "msub" | "msubsup" | "msqrt" | "mroot" | "mfenced" | "mtable" | "mtr" | "mtd" | "mover" | "munder"
+            | "munderover" | "mspace" | "mtext" | "mi" | "mn" | "mo" | "semantics" | "none" | "mpadded" | "merror" | "br"
+            | "wbr" => self.lower_supported(tag.as_str(), element),
             other => self.lower_unknown(other, element),
         }
     }
 
     fn lower_supported(&mut self, tag: &str, element: &Element) {
         match tag {
-            "math" | "mrow" | "mstyle" | "mphantom" | "menclose" | "mbox" | "mstack" | "msgroup" | "mpadded"
-            | "merror" | "mtr" | "mtd" => self.lower_children(element),
+            "math" | "mrow" | "mstyle" | "mphantom" | "menclose" | "mbox" | "mstack" | "msgroup" | "mpadded" | "merror"
+            | "mtr" | "mtd" => self.lower_children(element),
             "semantics" => {
                 // The first child is the presentation tree. `annotation` and
                 // `annotation-xml` carry the authored source instead, so they
@@ -408,7 +431,7 @@ impl Builder {
             "mspace" => self.out.push_str("\\quad "),
             // Placeholders produced by `normalize_self_closing_math_elements`.
             "br" => self.out.push_str("\\quad "),
-            "wbr" => {},
+            "wbr" => {}
             "mfrac" => {
                 let (numerator, denominator) = first_two_children(element);
                 self.out.push_str("\\frac{");
@@ -513,7 +536,8 @@ impl Builder {
     }
 
     fn lower_table(&mut self, element: &Element) {
-        let rows: Vec<&Element> = element.children.iter().filter_map(as_element).filter(|child| tag_of(child) == "mtr").collect();
+        let rows: Vec<&Element> =
+            element.children.iter().filter_map(as_element).filter(|child| tag_of(child) == "mtr").collect();
         if rows.is_empty() {
             self.note_unsupported("mtable.empty");
             self.lower_children(element);
@@ -571,7 +595,11 @@ fn tag_of(element: &Element) -> String {
 }
 
 fn attribute_value(element: &Element, name: &str) -> Option<String> {
-    element.attributes.iter().find(|attribute| attribute.name.eq_ignore_ascii_case(name)).and_then(|attribute| attribute.value.clone())
+    element
+        .attributes
+        .iter()
+        .find(|attribute| attribute.name.eq_ignore_ascii_case(name))
+        .and_then(|attribute| attribute.value.clone())
 }
 
 fn first_two_children(element: &Element) -> (Option<&Element>, Option<&Element>) {

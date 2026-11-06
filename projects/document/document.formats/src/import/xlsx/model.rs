@@ -399,10 +399,7 @@ pub struct XlsxSheet {
 impl XlsxSheet {
     /// Returns the cell at a one-based row and column.
     pub fn cell(&self, row: u32, column: u32) -> Option<&XlsxCell> {
-        self.cells
-            .binary_search_by_key(&(row, column), |cell| (cell.row, cell.column))
-            .ok()
-            .map(|index| &self.cells[index])
+        self.cells.binary_search_by_key(&(row, column), |cell| (cell.row, cell.column)).ok().map(|index| &self.cells[index])
     }
 
     /// Largest row index that carries a cell or row metadata.
@@ -412,12 +409,7 @@ impl XlsxSheet {
 
     /// Largest column index that carries a cell or column metadata.
     pub fn last_column(&self) -> u32 {
-        self.cells
-            .iter()
-            .map(|cell| cell.column)
-            .chain(self.columns.iter().map(|column| column.max))
-            .max()
-            .unwrap_or(0)
+        self.cells.iter().map(|cell| cell.column).chain(self.columns.iter().map(|column| column.max)).max().unwrap_or(0)
     }
 
     /// Width of a column in Excel character units, falling back to the default.
@@ -462,10 +454,9 @@ impl XlsxSheet {
 
     /// Merge range that covers the given cell.
     pub fn merge_covering(&self, row: u32, column: u32) -> Option<CellRange> {
-        self.merged
-            .iter()
-            .copied()
-            .find(|range| range.start_row <= row && row <= range.end_row && range.start_column <= column && column <= range.end_column)
+        self.merged.iter().copied().find(|range| {
+            range.start_row <= row && row <= range.end_row && range.start_column <= column && column <= range.end_column
+        })
     }
 
     /// Comment attached to the given cell.

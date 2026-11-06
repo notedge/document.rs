@@ -283,11 +283,7 @@ fn markdown_spanning_table_reopens_as_a_flattened_pipe_table() {
     assert!(rows[0].is_header);
     assert_eq!(rows[0].cells.len(), 2);
     assert_eq!(rows[0].cells[0].content, vec![Inline::Text { text: "Head".into() }]);
-    assert!(
-        rows[1].cells.iter().any(|cell| cell.content == vec![Inline::Text { text: "a".into() }]),
-        "{:?}",
-        rows[1].cells
-    );
+    assert!(rows[1].cells.iter().any(|cell| cell.content == vec![Inline::Text { text: "a".into() }]), "{:?}", rows[1].cells);
     assert!(
         reopened
             .coverage
@@ -1017,8 +1013,11 @@ fn markdown_raw_html_block_is_preserved() {
     // The block is preserved verbatim, but the semantic SVG/PDF reflow does not
     // lay raw HTML out, so the loss stays truthful instead of being cleared.
     assert!(
-        graph.coverage.loss.iter().any(|loss| loss.code == "import.markdown.raw_html_unrendered"
-            && loss.status == SemanticStatus::Partial),
+        graph
+            .coverage
+            .loss
+            .iter()
+            .any(|loss| loss.code == "import.markdown.raw_html_unrendered" && loss.status == SemanticStatus::Partial),
         "the unrendered raw HTML block must surface a structured loss: {:#?}",
         graph.coverage.loss
     );

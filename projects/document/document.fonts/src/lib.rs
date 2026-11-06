@@ -76,12 +76,7 @@ pub struct BodyFace {
 
 impl BodyFace {
     /// Build one face from bytes the host owns.
-    pub fn new(
-        family: BodyFamily,
-        script: BodyScript,
-        style: BodyFaceStyle,
-        bytes: impl Into<Arc<[u8]>>,
-    ) -> Self {
+    pub fn new(family: BodyFamily, script: BodyScript, style: BodyFaceStyle, bytes: impl Into<Arc<[u8]>>) -> Self {
         Self { family, script, style, bytes: bytes.into() }
     }
 }
@@ -106,12 +101,37 @@ pub struct FaceSpec {
 /// too. A requested style is served by the faces of that style first, then by
 /// the regular faces, which is why the list repeats script order per style.
 pub const FACE_FILES: &[FaceSpec] = &[
-    FaceSpec { file_name: "Tinos-Regular.ttf", family: BodyFamily::Serif, script: BodyScript::Latin, style: BodyFaceStyle::Regular },
+    FaceSpec {
+        file_name: "Tinos-Regular.ttf",
+        family: BodyFamily::Serif,
+        script: BodyScript::Latin,
+        style: BodyFaceStyle::Regular,
+    },
     FaceSpec { file_name: "Tinos-Bold.ttf", family: BodyFamily::Serif, script: BodyScript::Latin, style: BodyFaceStyle::Bold },
-    FaceSpec { file_name: "Tinos-Italic.ttf", family: BodyFamily::Serif, script: BodyScript::Latin, style: BodyFaceStyle::Italic },
-    FaceSpec { file_name: "NotoSerifSC-Regular.ttf", family: BodyFamily::Serif, script: BodyScript::Cjk, style: BodyFaceStyle::Regular },
-    FaceSpec { file_name: "NotoSerifSC-Bold.ttf", family: BodyFamily::Serif, script: BodyScript::Cjk, style: BodyFaceStyle::Bold },
-    FaceSpec { file_name: "NotoSansMono-Regular.ttf", family: BodyFamily::Mono, script: BodyScript::Latin, style: BodyFaceStyle::Regular },
+    FaceSpec {
+        file_name: "Tinos-Italic.ttf",
+        family: BodyFamily::Serif,
+        script: BodyScript::Latin,
+        style: BodyFaceStyle::Italic,
+    },
+    FaceSpec {
+        file_name: "NotoSerifSC-Regular.ttf",
+        family: BodyFamily::Serif,
+        script: BodyScript::Cjk,
+        style: BodyFaceStyle::Regular,
+    },
+    FaceSpec {
+        file_name: "NotoSerifSC-Bold.ttf",
+        family: BodyFamily::Serif,
+        script: BodyScript::Cjk,
+        style: BodyFaceStyle::Bold,
+    },
+    FaceSpec {
+        file_name: "NotoSansMono-Regular.ttf",
+        family: BodyFamily::Mono,
+        script: BodyScript::Latin,
+        style: BodyFaceStyle::Regular,
+    },
 ];
 
 /// A face pack could not be read from its directory.
@@ -153,10 +173,8 @@ impl BodyFaceSet {
         let mut faces = Vec::with_capacity(FACE_FILES.len());
         for spec in FACE_FILES {
             let path = dir.join(spec.file_name);
-            let bytes = std::fs::read(&path).map_err(|error| FaceSetError {
-                file: path.display().to_string(),
-                reason: io_reason(&error),
-            })?;
+            let bytes = std::fs::read(&path)
+                .map_err(|error| FaceSetError { file: path.display().to_string(), reason: io_reason(&error) })?;
             faces.push(BodyFace::new(spec.family, spec.script, spec.style, bytes));
         }
         Ok(Self { faces })
@@ -220,7 +238,8 @@ impl MathFontPack {
 
 /// Read one file into a slice that lives as long as the process.
 fn read_static(path: &Path) -> Result<&'static [u8], FaceSetError> {
-    let bytes = std::fs::read(path).map_err(|error| FaceSetError { file: path.display().to_string(), reason: io_reason(&error) })?;
+    let bytes =
+        std::fs::read(path).map_err(|error| FaceSetError { file: path.display().to_string(), reason: io_reason(&error) })?;
     Ok(Box::leak(bytes.into_boxed_slice()))
 }
 

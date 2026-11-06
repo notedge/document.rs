@@ -130,22 +130,22 @@ fn import_source_for_flow(label: &str, source: &str) -> Result<MarkdownDocument,
     import_source_with_footnotes(label, source, true)
 }
 
-fn import_source_with_footnotes(label: &str, source: &str, flow_footnotes: bool) -> Result<MarkdownDocument, MarkdownInputError> {
+fn import_source_with_footnotes(
+    label: &str,
+    source: &str,
+    flow_footnotes: bool,
+) -> Result<MarkdownDocument, MarkdownInputError> {
     ensure_source_budget(source)?;
-    let graph = if flow_footnotes {
-        import_markdown_bytes_for_flow(label, source)
-    }
-    else {
-        import_markdown_bytes(label, source)
-    }
-    .map_err(|error| {
-        MarkdownInputError::from(Diagnostic {
-            code: codes::PARSE_FAILED.to_owned(),
-            severity: Severity::Error,
-            message: error.to_string(),
-            span: None,
-        })
-    })?;
+    let graph =
+        if flow_footnotes { import_markdown_bytes_for_flow(label, source) } else { import_markdown_bytes(label, source) }
+            .map_err(|error| {
+                MarkdownInputError::from(Diagnostic {
+                    code: codes::PARSE_FAILED.to_owned(),
+                    severity: Severity::Error,
+                    message: error.to_string(),
+                    span: None,
+                })
+            })?;
     finish(graph)
 }
 
