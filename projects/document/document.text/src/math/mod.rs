@@ -10,4 +10,4 @@ pub use facts::{
     StretchPlan,
 };
 pub use font_metrics::{FontMetricsSystem, builtin_font_metrics, builtin_font_metrics_for};
-pub use opentype::{MathFontFamily, install_math_font, opentype_font_metrics};
+pub use opentype::{MathFontFamily, install_math_font, install_math_font_named, opentype_font_metrics};

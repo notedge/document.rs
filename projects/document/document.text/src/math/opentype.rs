@@ -17,7 +17,7 @@
 //! [`super::font_metrics::builtin_font_metrics`] when the font cannot be
 //! parsed or carries no MATH table.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use acorn_ttf::{FontFace, OutlineBuilder};
 
@@ -37,6 +37,12 @@ use super::facts::{GlyphId, MathFontFacts, StretchAxis};
 /// [`opentype_font_metrics`] to return `None` and callers fall back to
 /// synthetic metrics — [`builtin_default`][Self::builtin_default] picks the
 /// first installed family.
+///
+/// [`Custom`][Self::Custom] lets a host register a face the crate does not
+/// know at compile time, such as one a resource package downloaded. The name
+/// is the identity layout, metrics and reports key on, so registering a
+/// downloaded face under the package id keeps the declared slot and the
+/// observed family one value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MathFontFamily {
     /// Times-like, same lineage as KaTeX_Main; the modern default face.
@@ -45,6 +51,8 @@ pub enum MathFontFamily {
     StixTwoMath,
     /// Computer Modern OpenType successor.
     LmMath,
+    /// Host-registered face keyed by the name it was installed under.
+    Custom(&'static str),
 }
 
 #[derive(Debug, Default)]
@@ -52,11 +60,16 @@ struct InstalledMathFonts {
     lm: Option<&'static [u8]>,
     xits: Option<&'static [u8]>,
     stix: Option<&'static [u8]>,
+    custom: BTreeMap<&'static str, &'static [u8]>,
 }
 
 fn installed_fonts() -> &'static std::sync::RwLock<InstalledMathFonts> {
-    static INSTALLED: std::sync::RwLock<InstalledMathFonts> =
-        std::sync::RwLock::new(InstalledMathFonts { lm: None, xits: None, stix: None });
+    static INSTALLED: std::sync::RwLock<InstalledMathFonts> = std::sync::RwLock::new(InstalledMathFonts {
+        lm: None,
+        xits: None,
+        stix: None,
+        custom: BTreeMap::new(),
+    });
     &INSTALLED
 }
 
@@ -71,7 +84,20 @@ pub fn install_math_font(family: MathFontFamily, bytes: &'static [u8]) {
         MathFontFamily::LmMath => guard.lm = Some(bytes),
         MathFontFamily::XitsMath => guard.xits = Some(bytes),
         MathFontFamily::StixTwoMath => guard.stix = Some(bytes),
+        MathFontFamily::Custom(name) => {
+            guard.custom.insert(name, bytes);
+        }
     }
+}
+
+/// Install host-owned bytes under a name the crate did not compile in.
+///
+/// The name becomes [`MathFontFamily::Custom`]'s identity and the label
+/// [`opentype_font_metrics`] publishes, so a product that downloads a face can
+/// pass the resource package id straight through to layout. Reinstalling the
+/// same name replaces its payload for the rest of the process.
+pub fn install_math_font_named(name: &'static str, bytes: &'static [u8]) {
+    install_math_font(MathFontFamily::Custom(name), bytes);
 }
 
 impl MathFontFamily {
@@ -81,6 +107,7 @@ impl MathFontFamily {
             Self::XitsMath => "xits-math",
             Self::StixTwoMath => "stix-two-math",
             Self::LmMath => "latin-modern-math",
+            Self::Custom(name) => name,
         }
     }
 
@@ -91,6 +118,7 @@ impl MathFontFamily {
             Self::LmMath => guard.lm,
             Self::XitsMath => guard.xits,
             Self::StixTwoMath => guard.stix,
+            Self::Custom(name) => guard.custom.get(name).copied(),
         }
     }
 
@@ -764,6 +792,17 @@ mod tests {
 
     // Real OTF payloads live in VuTeX. These probes need `install_math_font`
     // from the host product and are exercised there, not in document.rs CI.
+
+    #[test]
+    fn custom_families_register_under_their_name() {
+        static PAYLOAD: &[u8] = b"placeholder math face";
+        let name = "custom-slot-probe";
+        install_math_font_named(name, PAYLOAD);
+        let family = MathFontFamily::Custom(name);
+        assert_eq!(family.label(), name);
+        assert_eq!(family.bytes(), Some(PAYLOAD));
+        assert!(MathFontFamily::Custom("custom-slot-absent").bytes().is_none());
+    }
 
     #[test]
     #[ignore = "math fonts are owned by VuTeX"]
