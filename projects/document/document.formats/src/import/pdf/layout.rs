@@ -43,12 +43,22 @@ impl StyleProfile {
                     continue;
                 }
                 sizes.push(line.size);
-                let key = (line.size * 10.0).round() as i32;
-                *weights.entry(key).or_default() += line.text.chars().filter(|character| !character.is_whitespace()).count();
+                *weights.entry((line.size * 10.0).round() as i32).or_default() += 1;
             }
         }
-        let body_size =
-            weights.into_iter().max_by(|left, right| left.1.cmp(&right.1)).map(|(size, _)| size as f32 / 10.0).unwrap_or(10.0);
+        // Body size is the size that carries the most lines. A short document
+        // can tie every size at one line, and a long heading then outweighs a
+        // one-line body under a character count. `weights` iterates ascending,
+        // so a strict greater-than keeps the smallest size on ties: the theme's
+        // heading ladder is strictly larger than body text.
+        let mut body_size = 10.0f32;
+        let mut best_count = 0usize;
+        for (key, count) in &weights {
+            if *count > best_count {
+                best_count = *count;
+                body_size = *key as f32 / 10.0;
+            }
+        }
         let mut heading_sizes = Vec::new();
         sizes.sort_by(|left, right| right.partial_cmp(left).unwrap_or(std::cmp::Ordering::Equal));
         for size in sizes {

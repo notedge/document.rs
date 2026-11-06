@@ -66,6 +66,19 @@ fn pdf_self_reopen_drops_page_furniture() {
 }
 
 #[test]
+fn tex_to_pdf_reopens_three_heading_levels() {
+    let faces = pdf_body_faces();
+    let tex = "\\section{One}\nBody.\n\n\\subsection{Two}\n\\subsubsection{Three}\n";
+    let pdf =
+        convert_bytes_with_body_faces("tex", "pdf", "levels.tex", tex.as_bytes().to_vec(), None, &faces).expect("write PDF");
+    let reopened = convert_bytes("pdf", "markdown", "levels.pdf", pdf.binary.expect("PDF bytes"), None).expect("read PDF");
+    let markdown = reopened.markdown;
+    assert!(markdown.contains("# 1 One"), "{markdown}");
+    assert!(markdown.contains("## 1.1 Two"), "{markdown}");
+    assert!(markdown.contains("### 1.1.1 Three"), "{markdown}");
+}
+
+#[test]
 fn markdown_to_pdf_and_back_reopens_text() {
     let faces = pdf_body_faces();
     let output =
