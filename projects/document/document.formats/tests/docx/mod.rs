@@ -382,6 +382,41 @@ fn docx_imports_ordered_lists_from_numbering_xml() {
 }
 
 #[test]
+fn docx_resolves_numbering_through_the_document_relationship() {
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+      <w:r><w:t>One</w:t></w:r>
+    </w:p>
+    <w:p>
+      <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr>
+      <w:r><w:t>Two</w:t></w:r>
+    </w:p>
+  </w:body>
+</w:document>"#;
+    let rels_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId7"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering"
+    Target="listed/numbering.xml"/>
+</Relationships>"#;
+    // The numbering part is not at the conventional path, so only the
+    // relationship can point the importer at it.
+    let zip = stored_zip(&[
+        ("word/document.xml", document_xml),
+        ("word/_rels/document.xml.rels", rels_xml),
+        ("word/listed/numbering.xml", DECIMAL_NUMBERING_XML),
+    ]);
+    let graph = import_docx_bytes("related-numbering.docx", &zip).expect("import docx");
+    let markdown = export_markdown(&graph).expect("export markdown");
+    assert!(markdown.contains("1. One"), "{markdown:?}");
+    assert!(markdown.contains("2. Two"), "{markdown:?}");
+    assert!(!graph.coverage.loss.iter().any(|loss| loss.code == "reader.docx.numbering_unresolved"));
+}
+
+#[test]
 fn docx_imports_nested_ordered_lists_with_sequential_numbers() {
     const NESTED_NUMBERING_XML: &[u8] = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">

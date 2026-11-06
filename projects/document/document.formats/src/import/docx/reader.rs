@@ -1,14 +1,14 @@
 use std::{fs, path::Path};
 
 use acorn_core::{Budget, BudgetTracker};
-use acorn_docx::OpcPackage;
+use acorn_docx::{OpcPackage, resolve_opc_target};
 use document_ir::{AssetKind, DocumentGraph, DocumentMetadata, LossMarker, SemanticStatus};
 
 use super::{
     footnotes::{FootnoteCatalog, append_footnote_definitions, footnotes_part_path, parse_footnotes_xml_lossy},
     map_opc_error,
     numbering::{NumberingCatalog, parse_numbering_xml_lossy},
-    rels::read_document_relationships,
+    rels::{document_rels_part_path, read_document_relationships},
     styles::{StyleDefaults, parse_styles_xml_lossy},
     xml,
     xml_extensions::{document_root, element_text, elements_by_local_name, parse_xml_bytes},
@@ -18,6 +18,8 @@ use crate::FormatError;
 const DOCUMENT_XML: &str = "word/document.xml";
 const NUMBERING_XML: &str = "word/numbering.xml";
 const STYLES_XML: &str = "word/styles.xml";
+const NUMBERING_RELATIONSHIP_TYPE: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering";
 
 /// Import a DOCX file from disk into `notedown-ir`.
 pub fn import_docx(path: impl AsRef<Path>) -> Result<DocumentGraph, FormatError> {
@@ -43,7 +45,7 @@ pub fn import_docx_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
     let xml = package.read_part(&document_part, &mut ledger).map_err(map_opc_error)?;
 
     let rels = read_document_relationships(&package, &document_part, &mut ledger)?;
-    let numbering = read_numbering_catalog(&package, &mut ledger);
+    let numbering = read_numbering_catalog(&package, &document_part, &mut ledger);
     let footnotes = read_footnote_catalog(&package, &mut ledger);
     let style_defaults = read_style_defaults(&package, &mut ledger);
     let mut graph = xml::new_graph(label);
@@ -110,8 +112,26 @@ fn looks_like_ole(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1])
 }
 
-fn read_numbering_catalog(package: &OpcPackage, ledger: &mut BudgetTracker) -> NumberingCatalog {
-    package.read_part(NUMBERING_XML, ledger).ok().map(|xml| parse_numbering_xml_lossy(&xml)).unwrap_or_default()
+/// Reads the numbering definitions the main document part references.
+///
+/// The `numbering` relationship is the entry point: Word does not have to store
+/// the part at `word/numbering.xml`, and a package may rename or relocate it.
+/// The conventional path stays as a fallback for packages whose relationships
+/// part is missing or omits the numbering entry.
+fn read_numbering_catalog(package: &OpcPackage, document_part: &str, ledger: &mut BudgetTracker) -> NumberingCatalog {
+    let part = numbering_part_path(package, document_part, ledger).unwrap_or_else(|| NUMBERING_XML.to_string());
+    package.read_part(&part, ledger).ok().map(|xml| parse_numbering_xml_lossy(&xml)).unwrap_or_default()
+}
+
+fn numbering_part_path(package: &OpcPackage, document_part: &str, ledger: &mut BudgetTracker) -> Option<String> {
+    let relationships = package.read_relationships(&document_rels_part_path(document_part), ledger).ok()?;
+    relationships
+        .into_iter()
+        .find(|relationship| {
+            relationship.relationship_type == NUMBERING_RELATIONSHIP_TYPE
+                && relationship.target_mode.as_deref() != Some("External")
+        })
+        .map(|relationship| resolve_opc_target(document_part, &relationship.target))
 }
 
 fn read_footnote_catalog(package: &OpcPackage, ledger: &mut BudgetTracker) -> FootnoteCatalog {
