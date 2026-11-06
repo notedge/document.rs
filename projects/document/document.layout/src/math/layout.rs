@@ -1776,19 +1776,14 @@ impl LayoutEngine {
         // plus the rule. A sign drawn from the base outline is never scaled —
         // that would be an invented design, not a font fact.
         //
-        // Appendix G's acceptance test applies to the radical exactly as it does
-        // to a fence: the smallest design that reaches
-        // `max(0.901 × required, required − \delimitershortfall)` is accepted,
-        // even when it is a little short of the required extent.  Selecting the
-        // first design that fully covers the radicand instead jumps a whole
-        // variant step whenever the radicand crosses the design boundary — the
-        // `radical-index` case took the 1.2 em design while TeX stayed on its
-        // 12 pt one, and the extra 2.2 pt widened the measured box by 0.23 em.
+        // TeX picks the smallest radical design whose own extent reaches the
+        // radicand's extent plus clearance and rule outright.  The 0.901
+        // acceptance factor belongs to fences: a same-font XeTeX probe picks the
+        // 1.2 em surd for the 1.09 em nested radicand instead of accepting the
+        // 1.0 em one, and the 1.8 em one for the 1.228 em display case.
         let radical_key = GlyphKey::from_char('√', Some("default".to_string()), FontStyle::Normal);
         let required = radicand_layout.height() + radicand_layout.depth() + vertical_gap + rule_thickness;
-        let minimum = (required * Fixed::from_f64(DELIMITER_FACTOR))
-            .max(required - size * Fixed::from_f64(DELIMITER_SHORTFALL_EM))
-            .max(size);
+        let minimum = required;
         let radical_symbol = self.radical_sign(&radical_key, minimum, size, radical_span)?;
 
         // Height of the nominal radical bar above the radicand baseline, before
@@ -1811,25 +1806,17 @@ impl LayoutEngine {
             vertical_gap = vertical_gap + excess / Fixed::from_f64(2.0);
         }
 
-        // TeX sets the sign's reference point `height(radicand) + clr` above
-        // the formula baseline (`shift_amount(y) := -(height(x)+clr)`), and
-        // `clr` is the vertical gap alone.  The reference point therefore sits
-        // on the rule's *bottom* edge, not on its top edge.  LM Math's `√` keeps
-        // an ascent of 0.04 em, which is exactly `RadicalRuleThickness`, so the
-        // sign's short bar lands on the vinculum's top edge without any extra
-        // shift.  Tectonic confirms the placement: for `\sqrt{\pi}` at 10 pt the
-        // sign origin is 7.611 pt above the baseline at 9.963 pt, i.e. 7.639 pt
-        // at 10 pt, exactly `height(radicand) + clr`.  Subtracting the glyph's
-        // own ascent instead put the origin at 7.240 pt, dropping the whole
-        // sign 0.4 pt and its tail 0.4 pt too far below the baseline.
-        // The clearance is measured from the radicand's ink to the *bottom*
-        // edge of the vinculum, so the kern only advances the radicand by
-        // `vertical_gap`.  Advancing by `vertical_gap + rule_thickness` charged
-        // the rule twice and made every radical 0.04 em taller than its font
-        // clearance allows.
-        let rule_bottom = radicand_layout.height() + vertical_gap;
+        // TeX aligns the sign's *top* with the vinculum's top edge, so the sign
+        // reference point sits `ascent - rule_top` relative to the formula
+        // baseline.  Only the base design's ascent equals the rule thickness,
+        // which is why the old `-(height(radicand) + clr)` shift looked right
+        // for `\sqrt{x}` but lifted every stretched design by its own ascent.
+        // Same-font XeTeX confirms: for the nested 3082 sign (ascent 1.15 em)
+        // the origin sits 0.1735 em above the baseline, and the sign's depth
+        // reaches 0.4765 em.
+        let rule_top = radicand_layout.height() + vertical_gap + rule_thickness;
         if let LayoutNode::HBox(h) = &mut radical_box {
-            h.shift = Fixed::ZERO - rule_bottom;
+            h.shift = radical_box_height - rule_top;
         }
 
         let mut children = Vec::new();
@@ -1867,6 +1854,10 @@ impl LayoutEngine {
         children.push(radical_box);
 
         let mut radicand_vbox = Vec::new();
+        // TeX reserves `RadicalExtraAscender` above the vinculum
+        // (`\kern0.4pt\rule(0.4pt)` in `\showbox`), so the surd's top edge sits
+        // one rule thickness below this box's top.
+        radicand_vbox.push(LayoutNode::Kern(self.constant_em(family, MathConstant::RadicalExtraAscender)? * size));
         radicand_vbox.push(LayoutNode::Rule { width: radicand_layout.width(), height: rule_thickness, depth: Fixed::ZERO });
         radicand_vbox.push(LayoutNode::Kern(vertical_gap));
         radicand_vbox.push(radicand_layout);
