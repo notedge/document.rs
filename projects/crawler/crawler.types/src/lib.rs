@@ -7,7 +7,6 @@ pub mod diagnostics;
 mod artifact;
 mod browser;
 mod challenge;
-mod checkpoint;
 mod error;
 mod events;
 mod extract;
@@ -23,7 +22,6 @@ pub use crate::{
         AuthProfile, BrowserActionKind, BrowserSnapshot, ChallengePolicy, CredentialRef, PageChallengeState, SessionPersistence,
     },
     challenge::{ChallengeOutcome, apply_challenge_policy},
-    checkpoint::CrawlCheckpoint,
     diagnostics::{
         NAMESPACE as DIAGNOSTIC_NAMESPACE, code, origin_browser, origin_crawl, origin_extract, origin_fetch, origin_fetch_http,
         origin_frontier, origin_politeness, origin_robots, origin_store,

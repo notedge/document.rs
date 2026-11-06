@@ -7,7 +7,7 @@ use crate::contract::support::{HOST, LONG_LEASE, assert_both, item};
 #[test]
 fn y7_reopen_keeps_committed_page_and_skips_it() {
     assert_both!("y7", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/first")).expect("enqueue first");
         store.enqueue(item("/second")).expect("enqueue second");
 

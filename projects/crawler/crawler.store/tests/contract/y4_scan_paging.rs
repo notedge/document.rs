@@ -11,7 +11,7 @@ const ITEMS: usize = 20;
 #[test]
 fn y4_paged_scan_claims_every_item_exactly_once() {
     assert_both!("y4", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         for index in 0..ITEMS {
             store.enqueue(item(&format!("/page-{index}"))).expect("enqueue");
         }

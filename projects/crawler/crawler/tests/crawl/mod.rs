@@ -3,10 +3,11 @@
 use std::collections::BTreeMap;
 
 use crawler::{
-    CrawlOptions, Extractor, FixtureBrowserProvider, HtmlExtractor, resume_crawl_from_checkpoint, run_crawl,
-    run_crawl_with_options, run_extract,
+    CrawlOptions, Extractor, FixtureBrowserProvider, HtmlExtractor, resume_crawl_from_store, run_crawl, run_crawl_with_options,
+    run_crawl_with_store, run_extract,
 };
 use crawler_fetch::{MemoryEntry, MemoryTransport};
+use crawler_store::{MemoryStore, Store, StoreConfig};
 use crawler_types::{
     BrowserFallbackPolicy, BrowserSnapshot, ChallengePolicy, CrawlBudgetStatus, CrawlEvent, CrawlRequest, CrawlScope,
     ExtractBudget, ExtractContext, ExtractStatus, PageChallengeState, diagnostics as pd,
@@ -50,7 +51,8 @@ fn resume_rejects_browser_fallback_strategy_mismatch() {
     let request = CrawlRequest::from_seed(seed.as_str()).expect("seed");
     let html = HtmlExtractor;
     let extractors: [&dyn Extractor; 1] = [&html];
-    let paused = run_crawl_with_options(
+    let mut store = MemoryStore::open(StoreConfig::memory()).expect("store");
+    let paused = run_crawl_with_store(
         request,
         transport,
         &extractors,
@@ -60,14 +62,18 @@ fn resume_rejects_browser_fallback_strategy_mismatch() {
             challenge_policy: ChallengePolicy::PauseForOperator,
             ..Default::default()
         },
+        &mut store,
     )
     .expect("pause");
-    let checkpoint = paused.checkpoint.expect("checkpoint");
-    let error = resume_crawl_from_checkpoint(
-        checkpoint,
+    let run_id = paused.run_id.expect("run id");
+    store.reopen().expect("reopen");
+    let resume = store.resume(&run_id).expect("resume");
+    let error = resume_crawl_from_store(
+        resume,
         MemoryTransport::new(),
         &extractors,
         CrawlOptions { browser: Some(&browser), browser_fallback: BrowserFallbackPolicy::Never, ..Default::default() },
+        &mut store,
     )
     .expect_err("mismatch");
     assert!(error.to_string().contains("resume strategy mismatch"));
@@ -354,11 +360,14 @@ fn browser_fallback_pauses_and_resumes_after_operator_snapshot() {
         challenge_policy: ChallengePolicy::PauseForOperator,
         ..Default::default()
     };
-    let paused = run_crawl_with_options(request, transport, &extractors, options).expect("pause");
+    let mut store = MemoryStore::open(StoreConfig::memory()).expect("store");
+    let paused = run_crawl_with_store(request, transport, &extractors, options, &mut store).expect("pause");
     assert_eq!(paused.report.paused, 1);
-    let checkpoint = paused.checkpoint.expect("checkpoint");
-    let strategy_fp = checkpoint.strategy_fingerprint.clone();
-    let attempt_id = checkpoint.attempt_identity;
+    let run_id = paused.run_id.expect("run id");
+    store.reopen().expect("reopen");
+    let resume = store.resume(&run_id).expect("resume");
+    assert!(resume.strategy_fingerprint.is_some());
+    assert_eq!(resume.committed_pages, 0);
 
     browser.insert(BrowserSnapshot {
         requested_url: seed.clone(),
@@ -370,8 +379,8 @@ fn browser_fallback_pauses_and_resumes_after_operator_snapshot() {
         challenge_state: PageChallengeState::Normal,
     });
 
-    let resumed = resume_crawl_from_checkpoint(
-        checkpoint,
+    let resumed = resume_crawl_from_store(
+        resume,
         MemoryTransport::new(),
         &extractors,
         CrawlOptions {
@@ -380,45 +389,12 @@ fn browser_fallback_pauses_and_resumes_after_operator_snapshot() {
             challenge_policy: ChallengePolicy::Stop,
             ..Default::default()
         },
+        &mut store,
     )
     .expect("resume");
     assert_eq!(resumed.report.committed, 1);
-    assert_eq!(resumed.report.paused, 1);
-    assert_eq!(resumed.checkpoint, None);
-    assert!(strategy_fp.is_some());
-    assert_eq!(attempt_id, 0);
-}
-
-#[test]
-fn disk_cache_reuses_response_without_transport() {
-    let dir = std::env::temp_dir().join(format!("crawler-crawl-cache-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let mut transport = MemoryTransport::new();
-    transport.insert(
-        "https://example.com/cache-page",
-        MemoryEntry {
-            status: 200,
-            headers: BTreeMap::from([("content-type".into(), "text/html".into())]),
-            body: br#"<html><head><title>Cached</title></head><body>cached</body></html>"#.to_vec(),
-        },
-    );
-    let request = CrawlRequest::from_seed("https://example.com/cache-page").expect("seed");
-    let html = HtmlExtractor;
-    let extractors: [&dyn Extractor; 1] = [&html];
-    let options = CrawlOptions { cache_dir: Some(dir.as_path()), ..Default::default() };
-    let first = run_crawl_with_options(request.clone(), transport, &extractors, options).expect("first crawl");
-    assert_eq!(first.report.committed, 1);
-
-    let second = run_crawl_with_options(
-        request,
-        MemoryTransport::new(),
-        &extractors,
-        CrawlOptions { cache_dir: Some(dir.as_path()), ..Default::default() },
-    )
-    .expect("second crawl");
-    assert_eq!(second.report.committed, 1);
-    assert!(second.report.events.events().iter().any(|event| matches!(event, CrawlEvent::Fetched { cache_hit: true, .. })));
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(resumed.report.paused, 0);
+    assert_eq!(resumed.run_id.as_deref(), Some(run_id.as_str()));
 }
 
 #[test]

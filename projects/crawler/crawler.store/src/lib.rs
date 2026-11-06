@@ -21,7 +21,7 @@ pub use store::Store;
 pub use types::{
     BrowserSessionPersistence, BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord,
     CheckpointClaim, CheckpointView, ClaimToken, DEFAULT_CLAIM_LEASE, ObjectKind, ObjectRef, PageAssetBinding, PagePhase,
-    PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue,
+    PageTxHandle, ReleaseOutcome, ResumeState, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue,
     StoreDoctorSeverity, StoreNamespaceStats,
 };
 

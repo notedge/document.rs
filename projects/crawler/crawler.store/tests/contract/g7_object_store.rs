@@ -51,7 +51,7 @@ fn g7_large_objects_survive_reopen_on_yydx_layout() {
         assert_eq!(first.fingerprint, second.fingerprint, "large bytes deduplicate by fingerprint");
         assert_eq!(first.size, large.len() as u64, "payload exceeds the 4 KiB single-file inline limit");
 
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/big")).expect("enqueue big");
         let claim = store.claim_next(HOST, "w1").expect("claim").expect("claimable item");
         store.begin_page_tx("w1").expect("begin tx");
@@ -84,7 +84,7 @@ fn g7_large_objects_survive_reopen_on_yydx_layout() {
 #[test]
 fn g7_page_objects_route_through_the_object_store() {
     assert_both!("g7-page", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/a")).expect("enqueue a");
         store.enqueue(item("/b")).expect("enqueue b");
 

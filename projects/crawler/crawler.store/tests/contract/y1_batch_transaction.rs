@@ -7,7 +7,7 @@ use crate::contract::support::{HOST, LONG_LEASE, assert_both, item};
 #[test]
 fn y1_page_commit_is_one_batch_and_abort_leaves_no_ghost() {
     assert_both!("y1", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/a")).expect("enqueue a");
         store.enqueue(item("/b")).expect("enqueue b");
 

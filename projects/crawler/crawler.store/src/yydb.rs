@@ -11,7 +11,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem, PageChallengeState};
+use crawler_types::{CrawlEvent, CrawlRequest, FetchArtifact, FrontierItem, PageChallengeState};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::Url;
 use yydb::{
@@ -27,7 +27,8 @@ use crate::{
     types::{
         BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord, CheckpointClaim,
         CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome,
-        RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue, StoreDoctorSeverity, StoreNamespaceStats,
+        ResumeState, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue, StoreDoctorSeverity,
+        StoreNamespaceStats,
     },
 };
 
@@ -49,6 +50,10 @@ const SCAN_PAGE: usize = 16;
 struct RunMeta {
     seed_url: String,
     event_count: u64,
+    #[serde(default)]
+    request: Option<CrawlRequest>,
+    #[serde(default)]
+    strategy_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +246,32 @@ impl YydbStore {
         }
     }
 
+    /// Count frontier records for one run without an active-run round trip.
+    fn count_frontier(&self, run_id: &str) -> Result<u64> {
+        Ok(self.frontier_summary(run_id)?.0)
+    }
+
+    /// Count frontier records and collect their host partitions.
+    fn frontier_summary(&self, run_id: &str) -> Result<(u64, Vec<String>)> {
+        let prefix = keyspace::frontier_prefix(run_id);
+        let mut total = 0u64;
+        let mut hosts = BTreeSet::new();
+        let mut after: Option<String> = None;
+        loop {
+            let page = self.connection()?.scan_prefix(&prefix, after.as_deref(), SCAN_PAGE).map_err(map_yydb_error)?;
+            let fetched = page.len();
+            total += fetched as u64;
+            for (_, bytes) in &page {
+                let item: FrontierItem = decode(bytes, "frontier")?;
+                hosts.insert(item.site_key);
+            }
+            if fetched < SCAN_PAGE {
+                return Ok((total, hosts.into_iter().collect()));
+            }
+            after = page.last().map(|(key, _)| key.clone());
+        }
+    }
+
     /// Allocate the next run-scoped fencing token through CAS.
     fn allocate_fencing(&self, run_id: &str) -> Result<u64> {
         let conn = self.connection()?;
@@ -375,7 +406,12 @@ impl Store for YydbStore {
 
     fn begin_run(&mut self, spec: RunSpec) -> Result<RunHandle> {
         let run_id = keyspace::run_id_from_seed(&spec.seed_url);
-        let meta = RunMeta { seed_url: spec.seed_url, event_count: 0 };
+        let meta = RunMeta {
+            seed_url: spec.seed_url,
+            event_count: 0,
+            request: spec.request,
+            strategy_fingerprint: spec.strategy_fingerprint,
+        };
         let mut batch = Batch::new();
         batch.put(keyspace::run_meta(&run_id), encode(&meta)?);
         batch.put(keyspace::active_run(), run_id.as_bytes());
@@ -384,6 +420,83 @@ impl Store for YydbStore {
         self.last_claim = None;
         self.page_tx = None;
         Ok(RunHandle { run_id })
+    }
+
+    fn resume(&mut self, run_id: &str) -> Result<ResumeState> {
+        let meta = self.read_run_meta(run_id)?;
+        let now = now_millis();
+        let conn = self.connection()?;
+        let prefix = keyspace::claim_prefix(run_id);
+        let mut expired = Vec::new();
+        let mut open_claims = Vec::new();
+        let mut after: Option<String> = None;
+        loop {
+            let page = conn.scan_prefix(&prefix, after.as_deref(), SCAN_PAGE).map_err(map_yydb_error)?;
+            let fetched = page.len();
+            for (key, bytes) in &page {
+                let item_id = key
+                    .strip_prefix(&prefix)
+                    .ok_or_else(|| StoreError::StoreCorrupt("claim key does not match its prefix".into()))?
+                    .to_owned();
+                let record: ClaimRecord = decode(bytes, "claim")?;
+                if record.lease_until_ms <= now {
+                    expired.push((key.clone(), item_id, record));
+                }
+                else {
+                    open_claims.push(CheckpointClaim {
+                        item_id,
+                        worker_id: record.worker_id,
+                        fencing_token: record.fencing_token,
+                        lease_until_ms: record.lease_until_ms,
+                    });
+                }
+            }
+            if fetched < SCAN_PAGE {
+                break;
+            }
+            after = page.last().map(|(key, _)| key.clone());
+        }
+        if !expired.is_empty() {
+            let mut batch = Batch::new();
+            for (key, _item_id, _record) in &expired {
+                batch.delete(key);
+            }
+            batch.commit(conn).map_err(map_yydb_error)?;
+            for (key, _item_id, record) in expired {
+                // The upstream lease outlives our record only by clock skew, so
+                // releasing it as requeue keeps the frontier item claimable.
+                let lease = LeaseToken {
+                    key,
+                    worker_id: record.worker_id,
+                    fencing_token: record.lease_fencing_token,
+                    lease_until: record.lease_until_ms,
+                };
+                let _ = conn.release_lease(&lease, YydbReleaseOutcome::Requeue);
+            }
+        }
+        let committed_pages = self.collect_committed(run_id)?.len() as u64;
+        let (pending_frontier, pending_hosts) = self.frontier_summary(run_id)?;
+        let mut resume_batch = Batch::new();
+        resume_batch.put(keyspace::active_run(), run_id.as_bytes());
+        resume_batch.commit(self.connection()?).map_err(map_yydb_error)?;
+        self.active_run_id = Some(run_id.to_owned());
+        self.last_claim = None;
+        self.page_tx = None;
+        Ok(ResumeState {
+            run_id: run_id.to_owned(),
+            seed_url: meta.seed_url,
+            request: meta.request,
+            strategy_fingerprint: meta.strategy_fingerprint,
+            last_commit_sequence: meta.event_count,
+            committed_pages,
+            pending_frontier,
+            pending_hosts,
+            open_claims,
+        })
+    }
+
+    fn active_run_id(&self) -> Result<Option<String>> {
+        Ok(self.active_run_id.clone())
     }
 
     fn enqueue(&mut self, item: FrontierItem) -> Result<()> {
@@ -404,18 +517,7 @@ impl Store for YydbStore {
 
     fn pending_frontier_count(&self) -> Result<u64> {
         let run_id = self.active_run_id.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
-        let prefix = keyspace::frontier_prefix(run_id);
-        let mut total = 0u64;
-        let mut after: Option<String> = None;
-        loop {
-            let page = self.connection()?.scan_prefix(&prefix, after.as_deref(), SCAN_PAGE).map_err(map_yydb_error)?;
-            let fetched = page.len();
-            total += fetched as u64;
-            if fetched < SCAN_PAGE {
-                return Ok(total);
-            }
-            after = page.last().map(|(key, _)| key.clone());
-        }
+        self.count_frontier(run_id)
     }
 
     fn claim_next(&mut self, host_key: &str, worker_id: &str) -> Result<Option<ClaimToken>> {
@@ -631,7 +733,15 @@ impl Store for YydbStore {
                 );
             }
         }
-        batch.put(keyspace::run_meta(&run_id), encode(&RunMeta { seed_url: meta.seed_url, event_count: commit_sequence })?);
+        batch.put(
+            keyspace::run_meta(&run_id),
+            encode(&RunMeta {
+                seed_url: meta.seed_url,
+                event_count: commit_sequence,
+                request: meta.request,
+                strategy_fingerprint: meta.strategy_fingerprint,
+            })?,
+        );
         conn.commit_with_lease(&staging.lease, batch).map_err(map_yydb_error)?;
         self.page_tx = None;
         Ok(())
@@ -879,7 +989,15 @@ impl Store for YydbStore {
             keyspace::report_event(&run_id, sequence),
             encode(&EventRecord { sequence, event: Some(CrawlEvent::PausedForOperator { url, challenge_state: state }) })?,
         );
-        batch.put(keyspace::run_meta(&run_id), encode(&RunMeta { seed_url: meta.seed_url, event_count: sequence })?);
+        batch.put(
+            keyspace::run_meta(&run_id),
+            encode(&RunMeta {
+                seed_url: meta.seed_url,
+                event_count: sequence,
+                request: meta.request,
+                strategy_fingerprint: meta.strategy_fingerprint,
+            })?,
+        );
         batch.commit(self.connection()?).map_err(map_yydb_error)?;
         Ok(record)
     }
@@ -1105,7 +1223,8 @@ fn migrate_legacy_session(conn: &Connection) -> Result<()> {
         let session = StoreSession::from_bytes(&bytes)?;
         let (active_run_id, runs) = session.legacy_export();
         for run in runs {
-            let meta = RunMeta { seed_url: run.seed_url, event_count: run.event_count };
+            let meta =
+                RunMeta { seed_url: run.seed_url, event_count: run.event_count, request: None, strategy_fingerprint: None };
             changes.push((keyspace::run_meta(&run.run_id), Some(encode(&meta)?)));
             for item in run.frontier {
                 let item_id = keyspace::item_id_from_url(item.request_url.as_str());

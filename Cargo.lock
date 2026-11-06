@@ -402,7 +402,6 @@ dependencies = [
  "boost-random",
  "crawler-types",
  "serde",
- "serde_json",
  "url",
 ]
 

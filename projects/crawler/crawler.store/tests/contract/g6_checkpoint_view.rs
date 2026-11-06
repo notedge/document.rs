@@ -20,7 +20,7 @@ fn commit_one(store: &mut impl crawler_store::Store, slot: &str) {
 #[test]
 fn g6_checkpoint_view_is_derived_and_never_authoritative() {
     assert_both!("g6", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/a")).expect("enqueue a");
         assert!(store.checkpoint_view().expect("view").is_none(), "no view exists before an export");
         assert!(store.checkpoint_view_json().expect("view json").is_none());

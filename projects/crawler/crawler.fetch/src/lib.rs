@@ -9,7 +9,6 @@ use url::Url;
 
 mod cache;
 mod client;
-mod disk_cache;
 mod file;
 mod http;
 mod memory;
@@ -19,7 +18,6 @@ mod select;
 
 pub use cache::ResponseCache;
 pub use client::{FetchClient, HttpStatusClass, classify_http_status, fetch_url};
-pub use disk_cache::{DiskResponseCache, LayeredResponseCache};
 pub use file::FileTransport;
 pub use http::{DEFAULT_FETCH_BODY_BUDGET_BYTES, HttpTransport};
 pub use memory::{MemoryEntry, MemoryTransport};

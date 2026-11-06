@@ -7,7 +7,7 @@ use crate::contract::support::{HOST, TEST_LEASE, assert_both, item};
 #[test]
 fn y2_claim_has_single_winner_and_is_idempotent_per_worker() {
     assert_both!("y2", TEST_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/only")).expect("enqueue");
 
         let first = store.claim_next(HOST, "w1").expect("claim").expect("first claim");

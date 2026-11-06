@@ -7,8 +7,8 @@ use crate::{
     session::StoreSession,
     types::{
         BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord, CheckpointView, ClaimToken,
-        ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
-        StoreDiagnosticReport,
+        ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, ResumeState, RunHandle, RunSpec,
+        StoreConfig, StoreDiagnosticReport,
     },
 };
 
@@ -25,6 +25,14 @@ impl Store for MemoryStore {
 
     fn reopen(&mut self) -> Result<()> {
         self.session.reopen()
+    }
+
+    fn resume(&mut self, run_id: &str) -> Result<ResumeState> {
+        self.session.resume(run_id)
+    }
+
+    fn active_run_id(&self) -> Result<Option<String>> {
+        self.session.active_run_id()
     }
 
     fn begin_run(&mut self, spec: RunSpec) -> Result<RunHandle> {

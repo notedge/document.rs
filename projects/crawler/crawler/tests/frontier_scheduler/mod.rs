@@ -18,7 +18,7 @@ fn item(url: &str, site: &str) -> FrontierItem {
 }
 
 fn begin(store: &mut dyn Store, seed: &str) {
-    store.begin_run(RunSpec { seed_url: seed.into() }).expect("begin run");
+    store.begin_run(RunSpec::new(seed)).expect("begin run");
 }
 
 fn fast_scheduler() -> HostScheduler {

@@ -4,11 +4,11 @@ use boost_diagnostic::{DiagnosticSeverity, Message, MessageArg};
 use crawler_browser::{BrowserProvider, snapshot_to_fetch_artifact};
 use crawler_fetch::{FetchClient, FetchRequest, RobotsPolicy, Transport, site_key_for_url};
 use crawler_frontier::{FrontierQueue, FrontierSink, frontier_from_links};
-use crawler_store::{ClaimToken, PageAssetBinding, RunSpec, Store, keyspace::item_id_from_url};
+use crawler_store::{ClaimToken, PageAssetBinding, ResumeState, RunSpec, Store, keyspace::item_id_from_url};
 use crawler_types::{
     AdmissionDecision, BrowserFallbackPolicy, BrowserFallbackTrigger, ChallengeOutcome, ChallengePolicy, CrawlBudgetStatus,
-    CrawlCheckpoint, CrawlError, CrawlEvent, CrawlReport, CrawlRequest, ExtractBudget, ExtractContext, ExtractResult,
-    ExtractStatus, FetchArtifact, FrontierItem, PageChallengeState, Result, apply_challenge_policy, diagnostics as pd,
+    CrawlError, CrawlEvent, CrawlReport, CrawlRequest, ExtractBudget, ExtractContext, ExtractResult, ExtractStatus,
+    FetchArtifact, FrontierItem, PageChallengeState, Result, apply_challenge_policy, diagnostics as pd,
 };
 use document_ir::{Block, DocumentGraph, Inline};
 
@@ -81,12 +81,9 @@ pub struct CrawlOptions<'a> {
     pub browser_fallback: BrowserFallbackPolicy,
     /// Challenge handling for browser snapshots.
     pub challenge_policy: ChallengePolicy,
-    /// Optional persistent fetch cache directory.
-    pub cache_dir: Option<&'a std::path::Path>,
-    /// Strategy fingerprint recorded into checkpoints.
+    /// Strategy fingerprint frozen in the store so a resume cannot silently
+    /// continue under a different fallback strategy.
     pub strategy_fingerprint: Option<&'a str>,
-    /// Attempt identity incremented on resume.
-    pub attempt_identity: u32,
 }
 
 impl<'a> Default for CrawlOptions<'a> {
@@ -95,23 +92,21 @@ impl<'a> Default for CrawlOptions<'a> {
             browser: None,
             browser_fallback: BrowserFallbackPolicy::Never,
             challenge_policy: ChallengePolicy::Stop,
-            cache_dir: None,
             strategy_fingerprint: None,
-            attempt_identity: 0,
         }
     }
 }
 
-/// Mutable crawl session state for checkpointing.
+/// Mutable crawl session state.
 #[derive(Debug, Clone)]
 pub struct CrawlState {
     /// User request.
     pub request: CrawlRequest,
-    /// Frontier queue.
+    /// Frontier queue used when the run has no store backend.
     pub queue: FrontierQueue,
-    /// Requests consumed so far.
+    /// Requests consumed in this invocation.
     pub requests_used: u32,
-    /// Accumulated report.
+    /// Accumulated report for this invocation.
     pub report: CrawlReport,
     /// Last frontier item paused for operator action.
     pub last_paused_item: Option<FrontierItem>,
@@ -126,8 +121,8 @@ pub struct CrawlOutput {
     pub committed_pages: Vec<String>,
     /// Artifacts available for offline re-extract.
     pub artifacts: Vec<FetchArtifact>,
-    /// Checkpoint when the run paused for operator action.
-    pub checkpoint: Option<CrawlCheckpoint>,
+    /// Store run identity, when the run persisted to a store.
+    pub run_id: Option<String>,
 }
 
 /// Run a bounded crawl using the provided transport.
@@ -156,9 +151,12 @@ pub fn run_crawl_with_store<T: Transport>(
     store: &mut dyn Store,
 ) -> Result<CrawlOutput> {
     let mut state = seeded_state(&request)?;
-    let mut frontier = begin_store_run(store, &request)?;
+    let run_id = begin_store_run(store, &request, options)?;
+    let mut frontier = StoreFrontier::new(STORE_WORKER_ID, request.politeness);
     enqueue_state_queue(store, &mut frontier, &mut state.queue)?;
-    run_crawl_loop(state, transport, extractors, options, Some(store), Some(frontier))
+    let mut output = run_crawl_loop(state, transport, extractors, options, Some(store), Some(frontier))?;
+    output.run_id = Some(run_id);
+    Ok(output)
 }
 
 fn seeded_state(request: &CrawlRequest) -> Result<CrawlState> {
@@ -176,65 +174,47 @@ fn seeded_state(request: &CrawlRequest) -> Result<CrawlState> {
     Ok(state)
 }
 
-/// Resume a crawl from a saved checkpoint.
-pub fn resume_crawl_from_checkpoint<T: Transport>(
-    checkpoint: CrawlCheckpoint,
-    transport: T,
-    extractors: &[&dyn Extractor],
-    options: CrawlOptions<'_>,
-) -> Result<CrawlOutput> {
-    resume_crawl_with_store(checkpoint, transport, extractors, options, None)
-}
-
-/// Resume a crawl from checkpoint while reusing the store-backed caches.
-pub fn resume_crawl_from_checkpoint_with_store<T: Transport>(
-    checkpoint: CrawlCheckpoint,
+/// Resume a crawl from persisted store state.
+///
+/// The caller must have already called [`Store::resume`] so the store points at
+/// the returned run. Frontier records, claims and committed pages stay in the
+/// store: this function only rebuilds the in-process report and scheduler.
+pub fn resume_crawl_from_store<T: Transport>(
+    resume: ResumeState,
     transport: T,
     extractors: &[&dyn Extractor],
     options: CrawlOptions<'_>,
     store: &mut dyn Store,
 ) -> Result<CrawlOutput> {
-    resume_crawl_with_store(checkpoint, transport, extractors, options, Some(store))
-}
-
-fn resume_crawl_with_store<T: Transport>(
-    checkpoint: CrawlCheckpoint,
-    transport: T,
-    extractors: &[&dyn Extractor],
-    options: CrawlOptions<'_>,
-    store: Option<&mut dyn Store>,
-) -> Result<CrawlOutput> {
-    validate_resume_strategy(&checkpoint, options)?;
-    let politeness = checkpoint.request.politeness;
-    let mut state = CrawlState {
-        request: checkpoint.request,
+    let request = resume.request.clone().ok_or_else(|| {
+        store_error("run has no persisted request and cannot be resumed without a JSON checkpoint".to_string())
+    })?;
+    validate_resume_strategy(&resume, options)?;
+    let state = CrawlState {
+        request: request.clone(),
         queue: FrontierQueue::new(),
-        requests_used: checkpoint.requests_used,
-        report: checkpoint.report,
-        last_paused_item: checkpoint.paused_item.clone(),
+        requests_used: 0,
+        report: initial_report(&request)?,
+        last_paused_item: None,
     };
-    state.queue.restore(checkpoint.pending_frontier);
-    if let Some(item) = checkpoint.paused_item {
-        state.queue.requeue(item);
-    }
-    let mut store = store;
-    let mut frontier = None;
-    if let Some(store) = store.as_deref_mut() {
-        let mut seeded = StoreFrontier::new(STORE_WORKER_ID, politeness);
-        enqueue_state_queue(store, &mut seeded, &mut state.queue)?;
-        frontier = Some(seeded);
-    }
-    let resume_options = CrawlOptions { attempt_identity: checkpoint.attempt_identity.saturating_add(1), ..options };
-    run_crawl_loop(state, transport, extractors, resume_options, store, frontier)
+    let mut frontier = StoreFrontier::new(STORE_WORKER_ID, request.politeness);
+    frontier.adopt_hosts(&resume.pending_hosts);
+    let mut output = run_crawl_loop(state, transport, extractors, options, Some(store), Some(frontier))?;
+    output.run_id = Some(resume.run_id);
+    Ok(output)
 }
 
 /// Worker identity recorded on store claims for a local crawl run.
 const STORE_WORKER_ID: &str = "crawl-local";
 
-fn begin_store_run(store: &mut dyn Store, request: &CrawlRequest) -> Result<StoreFrontier> {
+fn begin_store_run(store: &mut dyn Store, request: &CrawlRequest, options: CrawlOptions<'_>) -> Result<String> {
     let seed_url = request.seeds.first().map(|seed| seed.url.to_string()).unwrap_or_default();
-    store.begin_run(RunSpec { seed_url }).map_err(store_error)?;
-    Ok(StoreFrontier::new(STORE_WORKER_ID, request.politeness))
+    let strategy_fingerprint =
+        options.strategy_fingerprint.map(str::to_string).unwrap_or_else(|| default_strategy_fingerprint(options));
+    store
+        .begin_run(RunSpec { seed_url, request: Some(request.clone()), strategy_fingerprint: Some(strategy_fingerprint) })
+        .map(|handle| handle.run_id)
+        .map_err(store_error)
 }
 
 fn enqueue_state_queue(store: &mut dyn Store, frontier: &mut StoreFrontier, queue: &mut FrontierQueue) -> Result<()> {
@@ -297,11 +277,6 @@ fn run_crawl_loop<T: Transport>(
     state.report.budget_status = CrawlBudgetStatus::Completed;
     state.report.remaining_frontier = 0;
     let mut client = FetchClient::new(transport, RobotsPolicy::from_profile(request.politeness));
-    if store.is_none() {
-        if let Some(cache_dir) = options.cache_dir {
-            client = client.with_disk_cache_dir(cache_dir)?;
-        }
-    }
     let mut committed_pages = Vec::new();
     let mut artifacts = Vec::new();
     let extract_budget = ExtractBudget::default();
@@ -347,9 +322,8 @@ fn run_crawl_loop<T: Transport>(
         state.report.budget_status = CrawlBudgetStatus::Cancelled;
         state.report.remaining_frontier = remaining_frontier(&state, &store);
     }
-    let checkpoint = if state.last_paused_item.is_some() { Some(build_checkpoint(&state, options)) } else { None };
 
-    Ok(CrawlOutput { report: state.report, committed_pages, artifacts, checkpoint })
+    Ok(CrawlOutput { report: state.report, committed_pages, artifacts, run_id: None })
 }
 
 fn remaining_frontier(state: &CrawlState, store: &Option<&mut dyn Store>) -> u32 {
@@ -949,27 +923,12 @@ fn record_paused(state: &mut CrawlState, item: &FrontierItem, challenge_state: P
     state.report.events.push(CrawlEvent::PausedForOperator { url: item.request_url.clone(), challenge_state });
 }
 
-fn build_checkpoint(state: &CrawlState, options: CrawlOptions<'_>) -> CrawlCheckpoint {
-    let (paused_url, paused_challenge) = last_pause_from_report(&state.report);
-    CrawlCheckpoint::new(
-        state.request.clone(),
-        state.queue.pending_items().to_vec(),
-        state.requests_used,
-        state.report.clone(),
-        paused_url,
-        paused_challenge,
-        state.last_paused_item.clone(),
-        options.strategy_fingerprint.map(str::to_string).or_else(|| Some(default_strategy_fingerprint(options))),
-        options.attempt_identity,
-    )
-}
-
 fn default_strategy_fingerprint(options: CrawlOptions<'_>) -> String {
     format!("browser_fallback={:?}", options.browser_fallback)
 }
 
-fn validate_resume_strategy(checkpoint: &CrawlCheckpoint, options: CrawlOptions<'_>) -> Result<()> {
-    if let Some(expected) = &checkpoint.strategy_fingerprint {
+fn validate_resume_strategy(resume: &ResumeState, options: CrawlOptions<'_>) -> Result<()> {
+    if let Some(expected) = &resume.strategy_fingerprint {
         let actual = options.strategy_fingerprint.map(str::to_string).unwrap_or_else(|| default_strategy_fingerprint(options));
         if expected != &actual {
             let diag = boost_diagnostic::Diagnostic::new(
@@ -987,13 +946,4 @@ fn validate_resume_strategy(checkpoint: &CrawlCheckpoint, options: CrawlOptions<
         }
     }
     Ok(())
-}
-
-fn last_pause_from_report(report: &CrawlReport) -> (Option<url::Url>, Option<PageChallengeState>) {
-    for event in report.events.events().iter().rev() {
-        if let CrawlEvent::PausedForOperator { url, challenge_state } = event {
-            return (Some(url.clone()), Some(*challenge_state));
-        }
-    }
-    (None, None)
 }

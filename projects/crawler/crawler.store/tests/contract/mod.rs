@@ -6,6 +6,7 @@ mod g5_page_tx;
 mod g6_checkpoint_view;
 mod g7_object_store;
 mod g8_browser_vault;
+mod g8_store_resume;
 mod support;
 mod y1_batch_transaction;
 mod y2_single_winner;

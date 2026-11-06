@@ -1,9 +1,9 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crawler_types::{CrawlEvent, FetchArtifact, FrontierItem, PageChallengeState, TransportProvenance};
+use crawler_types::{CrawlEvent, CrawlRequest, FetchArtifact, FrontierItem, PageChallengeState, TransportProvenance};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -13,7 +13,7 @@ use crate::{
     types::{
         BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord, CheckpointClaim,
         CheckpointView, ClaimToken, ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome,
-        RunHandle, RunSpec,
+        ResumeState, RunHandle, RunSpec,
     },
 };
 
@@ -54,6 +54,10 @@ pub(crate) struct StoredObject {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct RunState {
     seed_url: String,
+    #[serde(default)]
+    request: Option<CrawlRequest>,
+    #[serde(default)]
+    strategy_fingerprint: Option<String>,
     frontier: BTreeMap<String, FrontierItem>,
     claims: BTreeMap<String, ClaimRecord>,
     pages: BTreeMap<String, PageRecord>,
@@ -202,6 +206,8 @@ impl StoreSession {
         let run_id = run_id_from_seed(&spec.seed_url);
         let run = RunState {
             seed_url: spec.seed_url,
+            request: spec.request,
+            strategy_fingerprint: spec.strategy_fingerprint,
             frontier: BTreeMap::new(),
             claims: BTreeMap::new(),
             pages: BTreeMap::new(),
@@ -219,6 +225,49 @@ impl StoreSession {
         self.active_page_tx = None;
         self.persist_snapshot();
         Ok(RunHandle { run_id })
+    }
+
+    pub(crate) fn resume(&mut self, run_id: &str) -> Result<ResumeState> {
+        let now = Self::now_millis();
+        let run = self.runs.get_mut(run_id).ok_or_else(|| StoreError::StoreInvalidState(format!("unknown run `{run_id}`")))?;
+        let expired: Vec<String> =
+            run.claims.iter().filter(|(_, claim)| claim.lease_until_ms <= now).map(|(item_id, _)| item_id.clone()).collect();
+        for item_id in expired {
+            run.claims.remove(&item_id);
+        }
+        let committed_pages = run.pages.values().filter(|page| page.phase == PagePhase::Committed).count() as u64;
+        let pending_frontier = run.frontier.len() as u64;
+        let pending_hosts: BTreeSet<String> = run.frontier.values().map(|item| item.site_key.clone()).collect();
+        let open_claims = run
+            .claims
+            .iter()
+            .map(|(item_id, claim)| CheckpointClaim {
+                item_id: item_id.clone(),
+                worker_id: claim.worker_id.clone(),
+                fencing_token: claim.fencing_token,
+                lease_until_ms: claim.lease_until_ms,
+            })
+            .collect();
+        let state = ResumeState {
+            run_id: run_id.to_owned(),
+            seed_url: run.seed_url.clone(),
+            request: run.request.clone(),
+            strategy_fingerprint: run.strategy_fingerprint.clone(),
+            last_commit_sequence: run.event_count,
+            committed_pages,
+            pending_frontier,
+            pending_hosts: pending_hosts.into_iter().collect(),
+            open_claims,
+        };
+        self.active_run_id = Some(run_id.to_owned());
+        self.last_claim = None;
+        self.active_page_tx = None;
+        self.persist_snapshot();
+        Ok(state)
+    }
+
+    pub(crate) fn active_run_id(&self) -> Result<Option<String>> {
+        Ok(self.active_run_id.clone())
     }
 
     pub(crate) fn enqueue(&mut self, item: FrontierItem) -> Result<()> {

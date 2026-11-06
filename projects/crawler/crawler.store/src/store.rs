@@ -4,8 +4,8 @@ use crate::{
     error::Result,
     types::{
         BrowserSessionRecord, BrowserSnapshotInput, BrowserSnapshotRecord, ChallengePauseRecord, CheckpointView, ClaimToken,
-        ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
-        StoreDiagnosticReport,
+        ObjectKind, ObjectRef, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, ResumeState, RunHandle, RunSpec,
+        StoreConfig, StoreDiagnosticReport,
     },
 };
 
@@ -18,6 +18,15 @@ pub trait Store {
 
     /// Close and reopen the backend, simulating process restart.
     fn reopen(&mut self) -> Result<()>;
+
+    /// Switch the active run to a persisted run and reclaim expired claims.
+    ///
+    /// The returned state is a derived view: committed pages, frontier records
+    /// and the claim ledger remain authoritative.
+    fn resume(&mut self, run_id: &str) -> Result<ResumeState>;
+
+    /// Active run identifier, when a run has been started or resumed.
+    fn active_run_id(&self) -> Result<Option<String>>;
 
     /// Start a crawl run.
     fn begin_run(&mut self, spec: RunSpec) -> Result<RunHandle>;

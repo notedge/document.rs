@@ -41,8 +41,8 @@ pub use admission::{admit_frontier_item, seed_frontier};
 pub use assets::{fingerprint, hydrate_assets};
 pub use crawl::{
     CrawlOptions, CrawlOutput, CrawlState, LOW_YIELD_MIN_CONTENT_BLOCKS, LOW_YIELD_MIN_TEXT_CHARS, LOW_YIELD_SCRIPT_MIN_BYTES,
-    LOW_YIELD_SCRIPT_TEXT_RATIO, PageYield, ROBOTS_STORE_TTL, resume_crawl_from_checkpoint,
-    resume_crawl_from_checkpoint_with_store, run_crawl, run_crawl_with_options, run_crawl_with_store,
+    LOW_YIELD_SCRIPT_TEXT_RATIO, PageYield, ROBOTS_STORE_TTL, resume_crawl_from_store, run_crawl, run_crawl_with_options,
+    run_crawl_with_store,
 };
 pub use crawler_browser::{
     BrowserProvider, BrowserProviderStack, ChallengeBlocked, DEFAULT_SNAPSHOT_DOCUMENT_BUDGET_BYTES,
@@ -51,9 +51,8 @@ pub use crawler_browser::{
     path_looks_like_snapshot, run_extract_from_snapshot, save_snapshot_json, snapshot_to_fetch_artifact,
 };
 pub use crawler_fetch::{
-    DEFAULT_FETCH_BODY_BUDGET_BYTES, DiskResponseCache, FetchClient, FetchRequest, FileTransport, HttpTransport, MemoryEntry,
-    MemoryTransport, ResponseCache, RobotsPolicy, SeedTransport, Transport, build_artifact, fetch_url, map_transport_error,
-    transport_for_url,
+    DEFAULT_FETCH_BODY_BUDGET_BYTES, FetchClient, FetchRequest, FileTransport, HttpTransport, MemoryEntry, MemoryTransport,
+    ResponseCache, RobotsPolicy, SeedTransport, Transport, build_artifact, fetch_url, map_transport_error, transport_for_url,
 };
 pub use crawler_frontier::{FrontierQueue, frontier_from_links};
 #[cfg(feature = "yydb")]

@@ -19,7 +19,7 @@ fn binding() -> PageAssetBinding {
 #[test]
 fn g5_page_tx_assets_links_and_events_are_atomic() {
     assert_both!("g5", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/a")).expect("enqueue a");
         let claim = store.claim_next(HOST, "w1").expect("claim").expect("first claim");
 
@@ -62,7 +62,7 @@ fn g5_page_tx_assets_links_and_events_are_atomic() {
 #[test]
 fn g5_expired_lease_cannot_commit_page_tx() {
     assert_both!("g5-expired", TEST_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/a")).expect("enqueue a");
         let claim = store.claim_next(HOST, "w1").expect("claim").expect("first claim");
 

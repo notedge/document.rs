@@ -56,7 +56,7 @@ fn g4_doctor_reports_quota_bound_and_usage() {
 #[test]
 fn g4_checkpoint_lag_reports_and_recovery_keeps_committed_pages() {
     assert_both!("g4-lag", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/a")).expect("enqueue a");
         store.enqueue(item("/b")).expect("enqueue b");
         let mut committed = Vec::new();

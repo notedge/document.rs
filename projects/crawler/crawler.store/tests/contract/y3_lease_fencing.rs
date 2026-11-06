@@ -12,7 +12,7 @@ const EXPIRY_WAIT: Duration = Duration::from_millis(600);
 #[test]
 fn y3_stale_fencing_is_rejected_and_expired_claims_are_reclaimed() {
     assert_both!("y3", TEST_LEASE, |store, backend| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/lease")).expect("enqueue");
 
         let stale = store.claim_next(HOST, "w1").expect("claim").expect("first claim");

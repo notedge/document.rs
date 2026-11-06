@@ -217,6 +217,17 @@ impl StoreFrontier {
         }
     }
 
+    /// Register hosts that already have queued frontier records in the store.
+    ///
+    /// A resumed run rebuilds the scheduler from persisted records instead of
+    /// re-enqueuing items.
+    pub fn adopt_hosts(&mut self, hosts: &[String]) {
+        let now = now_millis();
+        for host in hosts {
+            self.scheduler.note_queued(host, now);
+        }
+    }
+
     /// Claim the next item allowed by the host schedule.
     pub fn next(&mut self, store: &mut dyn Store) -> crawler_store::Result<Option<ClaimToken>> {
         let now = now_millis();

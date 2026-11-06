@@ -5,7 +5,7 @@ use crawler_store::RunSpec;
 use crate::contract::support::{HOST, LONG_LEASE, assert_both, item};
 
 fn commit_shared_pages<S: crawler_store::Store>(store: &mut S) {
-    store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+    store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
     store.enqueue(item("/a")).expect("enqueue a");
     store.enqueue(item("/b")).expect("enqueue b");
     for _ in 0..2 {

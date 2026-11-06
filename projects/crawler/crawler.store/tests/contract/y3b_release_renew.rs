@@ -7,7 +7,7 @@ use crate::contract::support::{HOST, LONG_LEASE, assert_both, item};
 #[test]
 fn y3_release_and_renew_keep_fencing_monotonic() {
     assert_both!("y3-release", LONG_LEASE, |store, backend| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         store.enqueue(item("/release")).expect("enqueue");
 
         let token = store.claim_next(HOST, "w1").expect("claim").expect("first claim");

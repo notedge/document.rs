@@ -13,7 +13,7 @@ fn redacted_archive() -> Vec<u8> {
 #[test]
 fn g8_browser_snapshot_roundtrips_through_the_object_store() {
     assert_both!("g8-snapshot", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         let archive = redacted_archive();
         let record = store
             .put_browser_snapshot(BrowserSnapshotInput {
@@ -45,7 +45,7 @@ fn g8_browser_snapshot_roundtrips_through_the_object_store() {
 #[test]
 fn g8_browser_snapshot_rejects_credential_plaintext() {
     assert_both!("g8-redact", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         let poisoned = b"HTTP/1.1 200 OK\r\nSet-Cookie: sid=abc123\r\n\r\n<html></html>".to_vec();
         let fingerprint = blake3::hash(&poisoned).to_hex().to_string();
         let error = store
@@ -86,7 +86,7 @@ fn g8_browser_snapshot_rejects_credential_plaintext() {
 #[test]
 fn g8_challenge_pause_lands_in_run_state() {
     assert_both!("g8-challenge", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         let pause = store
             .record_challenge_pause(
                 "https://example.com/login",
@@ -113,7 +113,7 @@ fn g8_challenge_pause_lands_in_run_state() {
 #[test]
 fn g8_browser_session_keeps_only_an_external_vault_handle() {
     assert_both!("g8-session", LONG_LEASE, |store| {
-        store.begin_run(RunSpec { seed_url: "https://example.com/".into() }).expect("begin run");
+        store.begin_run(RunSpec::new("https://example.com/")).expect("begin run");
         let record = BrowserSessionRecord {
             persistence: BrowserSessionPersistence::ExternalVault,
             vault_session_ref: Some("vault://pandark/session/run-1".into()),

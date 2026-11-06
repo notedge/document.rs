@@ -16,8 +16,6 @@ pub const NAMESPACE: &str = "crawler";
 
 /// Crawl / extract report schema (`crawler.report/v0`).
 pub const SCHEMA_REPORT: &str = "crawler.report/v0";
-/// Checkpoint resume schema (`crawler.checkpoint/v0`).
-pub const SCHEMA_CHECKPOINT: &str = "crawler.checkpoint/v0";
 /// Inspect / probe schema (`crawler.inspect/v0`).
 pub const SCHEMA_INSPECT: &str = "crawler.inspect/v0";
 

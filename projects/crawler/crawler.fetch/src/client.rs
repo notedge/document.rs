@@ -1,6 +1,5 @@
 use std::{
     collections::BTreeMap,
-    path::Path,
     thread,
     time::{Duration, Instant},
 };
@@ -10,13 +9,7 @@ use boost_random::{Random, Secure};
 use crawler_types::{CrawlError, FetchArtifact, Result, TransportProvenance, diagnostics as pd};
 use url::Url;
 
-use super::{
-    FetchRequest, Transport,
-    cache::ResponseCache,
-    disk_cache::{DiskResponseCache, LayeredResponseCache},
-    robots::RobotsPolicy,
-    robots_txt::site_key_for_url,
-};
+use super::{FetchRequest, Transport, cache::ResponseCache, robots::RobotsPolicy, robots_txt::site_key_for_url};
 
 /// Maximum retries for retryable HTTP status codes with `Retry-After` or exponential backoff.
 const MAX_HTTP_RETRIES: usize = 3;
@@ -89,7 +82,7 @@ fn apply_jitter(base: u64) -> u64 {
 /// Fetch orchestration with robots checks and response caching.
 pub struct FetchClient<T: Transport> {
     transport: T,
-    cache: LayeredResponseCache,
+    cache: ResponseCache,
     robots: RobotsPolicy,
     last_site_requests: BTreeMap<String, Instant>,
     robots_updates: Vec<(String, String)>,
@@ -100,27 +93,21 @@ impl<T: Transport> FetchClient<T> {
     pub fn new(transport: T, robots: RobotsPolicy) -> Self {
         Self {
             transport,
-            cache: LayeredResponseCache::memory_only(),
+            cache: ResponseCache::default(),
             robots,
             last_site_requests: BTreeMap::new(),
             robots_updates: Vec::new(),
         }
     }
 
-    /// Persist responses under the given cache directory.
-    pub fn with_disk_cache_dir(mut self, dir: impl AsRef<Path>) -> Result<Self> {
-        self.cache = LayeredResponseCache::with_disk(DiskResponseCache::open(dir)?);
-        Ok(self)
-    }
-
     /// Access the in-memory response cache.
     pub fn cache(&self) -> &ResponseCache {
-        self.cache.memory()
+        &self.cache
     }
 
     /// Mutable in-memory cache access for tests.
     pub fn cache_mut(&mut self) -> &mut ResponseCache {
-        self.cache.memory_mut()
+        &mut self.cache
     }
 
     /// Robots policy used for admission checks.
@@ -161,12 +148,10 @@ impl<T: Transport> FetchClient<T> {
             return Err(CrawlError::from(diagnostic));
         }
 
-        let request_key = request.url.to_string();
         let cache_key = super::cache_key_for(&request.url, None);
 
-        // Cache hit — drop the cache-layer &mut borrow before attempting revalidation
-        // (which needs &mut self for transport fetch and cache put).
-        let cached = self.cache.get_by_request_url(&request_key)?.or_else(|| self.cache.get(&cache_key).ok().flatten());
+        // Clone the hit before revalidation because revalidation needs `&mut self`.
+        let cached = self.cache.get(&cache_key).cloned();
 
         if let Some(cached) = cached {
             if let Some(revalidated) = self.try_revalidate(request, &cached)? {
@@ -190,19 +175,15 @@ impl<T: Transport> FetchClient<T> {
             artifact = self.transport.fetch(request)?;
         }
 
-        let key = self.cache.put(artifact)?;
-        Ok(self.cache.get(&key)?.expect("artifact inserted into cache"))
+        let key = self.cache.put(artifact);
+        Ok(self.cache.get(&key).cloned().expect("artifact inserted into cache"))
     }
 
     fn try_revalidate(&mut self, request: &FetchRequest, cached: &FetchArtifact) -> Result<Option<FetchArtifact>> {
-        let request_url = request.url.to_string();
         let cache_key = super::cache_key_for(&request.url, None);
-        let (etag, last_modified) = match self.cache.validators_for_url(&request_url)? {
+        let (etag, last_modified) = match self.cache.validators_for(&cache_key) {
             Some(v) => v,
-            None => match self.cache.validators_for_cache_key(&cache_key) {
-                Some(v) => v,
-                None => return Ok(None),
-            },
+            None => return Ok(None),
         };
 
         let mut cond_request = request.clone();
@@ -216,12 +197,12 @@ impl<T: Transport> FetchClient<T> {
                 let mut result = artifact;
                 result.body = cached.body.clone();
                 result.transport_provenance = TransportProvenance::CacheHit;
-                let _ = self.cache.put(result.clone())?;
+                let _ = self.cache.put(result.clone());
                 Ok(Some(result))
             }
             Ok(artifact) => {
-                let key = self.cache.put(artifact.clone())?;
-                Ok(Some(self.cache.get(&key)?.expect("artifact inserted")))
+                let _ = self.cache.put(artifact.clone());
+                Ok(Some(artifact))
             }
             Err(_) => Ok(None),
         }

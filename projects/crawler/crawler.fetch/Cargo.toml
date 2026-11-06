@@ -13,7 +13,6 @@ publish = false
 [dependencies]
 crawler-types = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 url = { workspace = true }
 boost-http = { workspace = true }
 boost-log = { workspace = true, optional = true }

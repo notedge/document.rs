@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crawler_types::PageChallengeState;
+use crawler_types::{CrawlRequest, PageChallengeState};
 use serde::{Deserialize, Serialize};
 
 /// Default lease granted to a frontier claim.
@@ -42,6 +42,53 @@ impl StoreConfig {
 pub struct RunSpec {
     /// Seed URL for the run.
     pub seed_url: String,
+    /// Original crawl request, persisted so a resume can rebuild depth,
+    /// budget, scope and politeness without a JSON checkpoint.
+    #[serde(default)]
+    pub request: Option<CrawlRequest>,
+    /// Strategy fingerprint frozen at run start.
+    ///
+    /// A resume with a different fingerprint is rejected instead of silently
+    /// continuing under changed crawl semantics.
+    #[serde(default)]
+    pub strategy_fingerprint: Option<String>,
+}
+
+impl RunSpec {
+    /// Start a run from a seed URL without persisting a request.
+    pub fn new(seed_url: impl Into<String>) -> Self {
+        Self { seed_url: seed_url.into(), request: None, strategy_fingerprint: None }
+    }
+}
+
+/// State reconstructed from store records when a run resumes.
+///
+/// The view is never the source of truth: committed pages, frontier records
+/// and claims stay authoritative and are re-read from the store on resume.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeState {
+    /// Run being resumed.
+    pub run_id: String,
+    /// Seed URL recorded at run start.
+    pub seed_url: String,
+    /// Original crawl request when the run persisted one.
+    #[serde(default)]
+    pub request: Option<CrawlRequest>,
+    /// Strategy fingerprint recorded at run start.
+    #[serde(default)]
+    pub strategy_fingerprint: Option<String>,
+    /// Last committed report event sequence.
+    pub last_commit_sequence: u64,
+    /// Pages already committed in this run.
+    pub committed_pages: u64,
+    /// Frontier records still queued after expired claims were reclaimed.
+    pub pending_frontier: u64,
+    /// Host partitions with queued frontier records, used to rebuild the
+    /// in-process host scheduler on resume.
+    #[serde(default)]
+    pub pending_hosts: Vec<String>,
+    /// Claims that stay open after resume.
+    pub open_claims: Vec<CheckpointClaim>,
 }
 
 /// Active run identity.
