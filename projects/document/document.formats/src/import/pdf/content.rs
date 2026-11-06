@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::{
     encoding::{DecodedRun, decode_with_font},
     fonts::ToUnicodeMap,
-    images::parse_inline_jpeg,
+    images::{parse_inline_jpeg, skip_inline_image},
     syntax::{
         hex_bytes, is_pdf_number_start, literal_close, pdf_delimiter, pdf_operator_at, skip_content_space, skip_pdf_comment,
         skip_pdf_number, skip_space,
@@ -207,6 +207,7 @@ pub(crate) fn extract_text_operators(
     sink: &mut PageSink,
 ) -> ExtractedText {
     let mut spacing_adjustments = false;
+    let mut unsupported_inline_images = false;
     let mut unresolved_fonts = std::collections::BTreeSet::new();
     let mut cursor = 0;
     let mut current_font = None;
@@ -235,6 +236,13 @@ pub(crate) fn extract_text_operators(
         {
             if let Some((image, end)) = parse_inline_jpeg(stream, cursor) {
                 sink.image(PageItem::InlineImage(image));
+                cursor = end;
+                continue;
+            }
+            // Unsupported inline images must be skipped as one block. Walking
+            // their raw sample bytes would let them masquerade as operators.
+            if let Some(end) = skip_inline_image(stream, cursor) {
+                unsupported_inline_images = true;
                 cursor = end;
                 continue;
             }
@@ -505,7 +513,7 @@ pub(crate) fn extract_text_operators(
             _ => cursor += 1,
         }
     }
-    ExtractedText { spacing_adjustments, unresolved_fonts }
+    ExtractedText { spacing_adjustments, unsupported_inline_images, unresolved_fonts }
 }
 
 /// Where the next run starts on the current baseline.

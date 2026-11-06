@@ -16,7 +16,7 @@ mod types;
 #[doc(hidden)]
 pub mod test_support;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use document_ir::{
     Block, DocumentGraph, DocumentId, Inline, ListItem, LossMarker, NodeId, SemanticStatus, TableCell, TableRow,
@@ -68,16 +68,31 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
     else {
         vec![streams.iter().collect::<Vec<_>>()]
     };
+    // Resource names are page-scoped. A single unscoped stream group has no
+    // page boundary left, so its resources are merged instead of taking page 0.
+    let (page_font_maps, page_images) = if use_page_filter {
+        (font_maps, images)
+    }
+    else {
+        (
+            vec![font_maps.into_iter().flatten().collect::<HashMap<_, _>>()],
+            vec![images.into_iter().flatten().collect::<HashMap<_, _>>()],
+        )
+    };
     let mut unresolved_fonts = BTreeSet::new();
     let mut spacing_adjustments = false;
+    let mut unsupported_inline_images = false;
     let mut pages = Vec::new();
-    for streams_in_page in page_streams {
+    for (index, streams_in_page) in page_streams.into_iter().enumerate() {
         let mut sink = PageSink::new();
+        let empty_fonts = HashMap::new();
+        let fonts = page_font_maps.get(index).unwrap_or(&empty_fonts);
         for stream in streams_in_page {
             let decoded = streams::decode_stream(stream.dictionary, stream.data)?;
-            let extracted = extract_text_operators(&decoded, &font_maps, &mut sink);
+            let extracted = extract_text_operators(&decoded, fonts, &mut sink);
             unresolved_fonts.extend(extracted.unresolved_fonts);
             spacing_adjustments |= extracted.spacing_adjustments;
+            unsupported_inline_images |= extracted.unsupported_inline_images;
         }
         pages.push(sink.finish());
     }
@@ -88,15 +103,24 @@ pub fn import_pdf_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, Form
             status: SemanticStatus::Partial,
         });
     }
+    if unsupported_inline_images {
+        graph.push_loss(LossMarker {
+            code: "import.pdf.unsupported_inline_image".into(),
+            message: "inline images that are not JPEG payloads are skipped as whole `BI`/`EI` blocks".into(),
+            status: SemanticStatus::Unsupported,
+        });
+    }
     let profile = StyleProfile::from_pages(&pages);
     let page_setup = page_setup(&pages, &profile, &page_media_boxes(&scan.bodies));
     if page_setup.has_values() {
         graph.page_setup = Some(page_setup);
     }
     let mut inferred = InferredStructure::default();
-    for page in &pages {
+    let empty_images = HashMap::new();
+    for (index, page) in pages.iter().enumerate() {
+        let images = page_images.get(index).unwrap_or(&empty_images);
         for block in page_flow(page, &profile) {
-            emit_flow_block(&mut graph, &images, block, &mut inferred);
+            emit_flow_block(&mut graph, images, block, &mut inferred);
         }
     }
     for font in unresolved_fonts {

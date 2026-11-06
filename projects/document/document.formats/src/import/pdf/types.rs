@@ -47,6 +47,9 @@ pub(crate) enum PageItem {
 #[derive(Default)]
 pub(crate) struct ExtractedText {
     pub(crate) spacing_adjustments: bool,
+    /// Inline images that are not supported JPEG payloads were skipped as one
+    /// block instead of being parsed as page operators.
+    pub(crate) unsupported_inline_images: bool,
     /// Font resource names whose encoding could not be resolved. Text drawn
     /// with them is omitted and reported as a loss marker.
     pub(crate) unresolved_fonts: std::collections::BTreeSet<String>,

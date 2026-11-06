@@ -875,4 +875,113 @@ fn plain_text_above_a_table_stays_outside_the_grid() {
     assert!(paragraph.contains("plain sentence"), "{paragraph}");
 }
 
+#[test]
+fn page_scoped_font_resources_do_not_leak_across_pages() {
+    let first = "BT /F1 12 Tf (Alpha) Tj ET";
+    let second = "BT /F1 12 Tf <0102> Tj ET";
+    let cmap = "1 begincodespacerange\n<00> <FF>\nendcodespacerange\n2 beginbfchar\n<01> <4F60>\n<02> <597D>\nendbfchar";
+    let bytes = format!(
+        "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R >>\nendobj\n4 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 7 0 R >> >> /Contents 8 0 R >>\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n6 0 obj\n<< /Length {} >>\nstream\n{first}\nendstream\nendobj\n7 0 obj\n<< /Type /Font /Subtype /Type0 /ToUnicode 9 0 R >>\nendobj\n8 0 obj\n<< /Length {} >>\nstream\n{second}\nendstream\nendobj\n9 0 obj\n<< /Length {} >>\nstream\n{cmap}\nendstream\nendobj\n%%EOF",
+        first.len(),
+        second.len(),
+        cmap.len()
+    );
+    let graph = import_pdf_bytes("page-fonts.pdf", bytes.as_bytes()).expect("import page-scoped fonts");
+    let paragraphs = graph
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::Paragraph { content } => match content.as_slice() {
+                [Inline::Text { text }] => Some(text.clone()),
+                other => panic!("single text run expected, got {other:?}"),
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    // `/F1` is bound to a WinAnsi font on the first page and to a Type0 font
+    // with a ToUnicode map on the second. Neither binding may decode the other.
+    assert_eq!(paragraphs, ["Alpha", "你好"]);
+}
+
+#[test]
+fn nested_page_tree_inherits_resources_and_media_box() {
+    let first = "BT /F1 12 Tf (First page) Tj ET";
+    let second = "BT /F1 12 Tf (Second page) Tj ET";
+    let bytes = format!(
+        "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [7 0 R] /Count 2 >>\nendobj\n7 0 obj\n<< /Type /Pages /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Kids [3 0 R 4 0 R] /Count 2 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 7 0 R /Contents 6 0 R >>\nendobj\n4 0 obj\n<< /Type /Page /Parent 7 0 R /Contents 8 0 R >>\nendobj\n5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n6 0 obj\n<< /Length {} >>\nstream\n{first}\nendstream\nendobj\n8 0 obj\n<< /Length {} >>\nstream\n{second}\nendstream\nendobj\n%%EOF",
+        first.len(),
+        second.len()
+    );
+    let graph = import_pdf_bytes("nested-pages.pdf", bytes.as_bytes()).expect("import nested page tree");
+    let page = graph.page_setup.expect("inherited media box");
+    assert_eq!(page.page_width, Some(612.0));
+    assert_eq!(page.page_height, Some(792.0));
+    let text = graph.blocks.iter().map(|node| format!("{:?}", node.block)).collect::<String>();
+    assert!(text.find("First page").expect("first page text") < text.find("Second page").expect("second page text"));
+}
+
+#[test]
+fn pdf_writer_uses_device_gray_for_grayscale_images_and_keeps_aspect_ratio() {
+    let mut jpeg = DocumentGraph::new(DocumentId(30));
+    jpeg.push_asset(Asset {
+        id: AssetId(1),
+        kind: AssetKind::Image,
+        content_identity: None,
+        source: Some("gray.jpg".into()),
+        media_type: Some("image/jpeg".into()),
+        status: SemanticStatus::Resolved,
+        bytes: Some(jpeg_frame_fixture(200, 600, 1)),
+    });
+    jpeg.push_block(Block::Paragraph {
+        content: vec![Inline::Image { source: "gray.jpg".into(), alt: Vec::new(), title: None, asset: Some(AssetId(1)) }],
+    });
+    let exported = export_pdf_bytes(&jpeg).expect("export grayscale JPEG");
+    let text = String::from_utf8_lossy(&exported);
+    assert!(text.contains("/ColorSpace /DeviceGray"), "{text}");
+    // A 200x600 portrait image is capped at 300 points high and keeps its ratio.
+    assert!(text.contains("q 100 0 0 300 256 470 cm"), "{text}");
+
+    let png = png_fixture(2, 1, 0, &[0, 0x80, 0x40]);
+    let mut png_graph = DocumentGraph::new(DocumentId(31));
+    png_graph.push_asset(Asset {
+        id: AssetId(1),
+        kind: AssetKind::Image,
+        content_identity: None,
+        source: Some("gray.png".into()),
+        media_type: Some("image/png".into()),
+        status: SemanticStatus::Resolved,
+        bytes: Some(png.clone()),
+    });
+    png_graph.push_block(Block::Paragraph {
+        content: vec![Inline::Image { source: "gray.png".into(), alt: Vec::new(), title: None, asset: Some(AssetId(1)) }],
+    });
+    let exported = export_pdf_bytes(&png_graph).expect("export grayscale PNG");
+    let text = String::from_utf8_lossy(&exported);
+    assert!(text.contains("/ColorSpace /DeviceGray"), "{text}");
+    assert!(text.contains("/Predictor 15 /Colors 1 /BitsPerComponent 8 /Columns 2"), "{text}");
+    let reopened = import_pdf_bytes("gray-round-trip.pdf", &exported).expect("reopen grayscale PNG");
+    let image =
+        reopened.assets.iter().find(|asset| asset.media_type.as_deref() == Some("image/png")).expect("grayscale PNG asset");
+    assert_eq!(image.bytes.as_deref(), Some(png.as_slice()));
+}
+
+#[test]
+fn unsupported_inline_images_are_skipped_as_whole_blocks() {
+    let content = b"BI\n/F /AHx\n/W 1\n/H 1\nID\n00\nEI\nBT (After) Tj ET";
+    let mut bytes = format!("%PDF-1.4\n1 0 obj\n<< /Length {} >>\nstream\n", content.len()).into_bytes();
+    bytes.extend_from_slice(content);
+    bytes.extend_from_slice(b"\nendstream\nendobj\n%%EOF");
+    let graph = import_pdf_bytes("unsupported-inline.pdf", &bytes).expect("import unsupported inline image");
+    assert!(
+        graph
+            .coverage
+            .loss
+            .iter()
+            .any(|loss| loss.code == "import.pdf.unsupported_inline_image" && loss.status == SemanticStatus::Unsupported),
+        "{:?}",
+        graph.coverage.loss
+    );
+    assert!(graph.blocks.iter().any(|node| format!("{:?}", node.block).contains("After")));
+}
+
 mod import_internal;

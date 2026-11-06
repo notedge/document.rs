@@ -96,14 +96,21 @@ fn combine_advance(total: Option<f32>, next: Option<f32>) -> Option<f32> {
     }
 }
 
+/// Font resource maps keyed by page-tree position.
+///
+/// A `/F1` name is page-scoped, so two pages may legally bind the same name to
+/// different fonts. Keeping one map per page stops the last page's binding from
+/// decoding every earlier page's text.
 pub(crate) fn page_font_maps(
     bodies: &[(u32, Vec<u8>)],
     streams: &[PdfStream<'_>],
-) -> Result<HashMap<String, ToUnicodeMap>, FormatError> {
-    let mut result = HashMap::new();
+) -> Result<Vec<HashMap<String, ToUnicodeMap>>, FormatError> {
+    let mut result = Vec::new();
     for resources in page_resource_sections(bodies) {
+        let mut page = HashMap::new();
         let Some(font_start) = resources.windows(5).position(|window| window == b"/Font")
         else {
+            result.push(page);
             continue;
         };
         let section = &resources[font_start + 5..];
@@ -130,8 +137,9 @@ pub(crate) fn page_font_maps(
                 }
             });
             apply_font_widths(&mut map, font_body, bodies, streams);
-            result.insert(name, map);
+            page.insert(name, map);
         }
+        result.push(page);
     }
     Ok(result)
 }

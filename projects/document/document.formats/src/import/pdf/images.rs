@@ -20,14 +20,19 @@ fn pdf_image_zlib_limits() -> CodecLimits {
     CodecLimits::new().with_max_output_bytes(MAX_IMAGE_BYTES + 1)
 }
 
+/// Image resource maps keyed by page-tree position.
+///
+/// XObject names are page-scoped, so each page keeps its own `/Im1` binding.
 pub(crate) fn page_images(
     bodies: &[(u32, Vec<u8>)],
     streams: &[PdfStream<'_>],
-) -> Result<HashMap<String, PdfImage>, FormatError> {
-    let mut result = HashMap::new();
+) -> Result<Vec<HashMap<String, PdfImage>>, FormatError> {
+    let mut result = Vec::new();
     for resources in page_resource_sections(bodies) {
+        let mut page = HashMap::new();
         let Some(xobject_start) = resources.windows(8).position(|window| window == b"/XObject")
         else {
+            result.push(page);
             continue;
         };
         for (name, object_id) in resource_font_references(&resources[xobject_start + 8..]) {
@@ -66,8 +71,9 @@ pub(crate) fn page_images(
             else {
                 continue;
             };
-            result.insert(name, image);
+            page.insert(name, image);
         }
+        result.push(page);
     }
     Ok(result)
 }
@@ -289,24 +295,45 @@ fn append_png_chunk(output: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
     }
     output.extend_from_slice(&(crc ^ 0xffff_ffff).to_be_bytes());
 }
-pub(crate) fn parse_inline_jpeg(stream: &[u8], cursor: usize) -> Option<(PdfImage, usize)> {
+/// Offset of the `ID` token that starts inline image data.
+fn inline_image_id(stream: &[u8], cursor: usize) -> Option<usize> {
     let dictionary_start = cursor.checked_add(2)?;
-    let mut id = None;
     for index in dictionary_start..stream.len().saturating_sub(1) {
         if &stream[index..index + 2] == b"ID"
             && (index == dictionary_start || stream[index - 1].is_ascii_whitespace())
             && stream.get(index + 2).is_some_and(|byte| byte.is_ascii_whitespace())
         {
-            id = Some(index);
-            break;
+            return Some(index);
         }
     }
-    let id = id?;
-    let dictionary = &stream[dictionary_start..id];
+    None
+}
+
+/// Skip an inline image that is not a supported JPEG.
+///
+/// Without this the image payload would be walked as page operators, so raw
+/// sample bytes could create text runs. Returns the offset just past `EI`.
+pub(crate) fn skip_inline_image(stream: &[u8], cursor: usize) -> Option<usize> {
+    let data_start = skip_space(stream, inline_image_id(stream, cursor)? + 2);
+    let mut search = data_start;
+    while let Some(relative) = stream[search..].windows(2).position(|window| window == b"EI") {
+        let end = search + relative;
+        if end > 0 && stream[end - 1].is_ascii_whitespace() && stream.get(end + 2).is_none_or(|byte| byte.is_ascii_whitespace())
+        {
+            return Some(end + 2);
+        }
+        search = end + 1;
+    }
+    None
+}
+
+pub(crate) fn parse_inline_jpeg(stream: &[u8], cursor: usize) -> Option<(PdfImage, usize)> {
+    let id = inline_image_id(stream, cursor)?;
+    let data_start = skip_space(stream, id + 2);
+    let dictionary = &stream[cursor + 2..id];
     if !dictionary.windows(9).any(|window| window == b"DCTDecode") {
         return None;
     }
-    let data_start = skip_space(stream, id + 2);
     if !stream.get(data_start..)?.starts_with(&[0xFF, 0xD8]) {
         return None;
     }
