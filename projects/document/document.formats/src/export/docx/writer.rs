@@ -452,9 +452,9 @@ fn write_inline_with_properties(
                     write_inline_with_properties(out, child, graph, rels, &combined)?;
                 }
             }
-            "bold" | "italic" | "underline" | "strike" | "superscript" | "subscript" => {
+            "bold" | "strong" | "italic" | "underline" | "strike" | "superscript" | "subscript" => {
                 let property = match style.as_str() {
-                    "bold" => "<w:b/>",
+                    "bold" | "strong" => "<w:b/>",
                     "italic" => "<w:i/>",
                     "underline" => "<w:u w:val=\"single\"/>",
                     "strike" => "<w:strike/>",

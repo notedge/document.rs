@@ -156,6 +156,22 @@ fn docx_export_round_trips_underline_and_strike_styles() {
 }
 
 #[test]
+fn docx_export_accepts_the_xlsx_strong_style_as_bold() {
+    let mut graph = DocumentGraph::new(DocumentId(55));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Styled { style: "strong".into(), children: vec![Inline::Text { text: "strong".into() }] }],
+    });
+    let exported = export_docx_bytes(&graph).expect("xlsx bold cells must not fail the DOCX export");
+    assert!(String::from_utf8_lossy(&exported).contains("<w:b/>"));
+    let reopened = import_docx_bytes("strong-round.docx", &exported).expect("reopen DOCX");
+    let Block::Paragraph { content } = &reopened.blocks[0].block
+    else {
+        panic!("paragraph expected")
+    };
+    assert!(matches!(&content[0], Inline::Styled { style, .. } if style == "bold"));
+}
+
+#[test]
 fn docx_export_round_trips_vertical_alignment_styles() {
     let mut graph = DocumentGraph::new(DocumentId(56));
     graph.push_block(Block::Paragraph {
