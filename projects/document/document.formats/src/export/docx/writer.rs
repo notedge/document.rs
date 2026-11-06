@@ -10,7 +10,7 @@ use document_ir::{
 use crate::FormatError;
 
 use super::{
-    footnotes::{collect_footnote_catalog, parse_footnote_reference_token, render_footnotes_xml},
+    footnotes::{FootnoteCatalog, collect_footnote_catalog, parse_footnote_reference_token, render_footnotes_xml},
     numbering::{ORDERED_NUM_ID, UNORDERED_NUM_ID},
     page::{DocxPageSetup, twips},
     rels::DocumentRelsRegistry,
@@ -37,10 +37,10 @@ pub fn render_document_xml(graph: &DocumentGraph) -> Result<DocxRenderOutput, Fo
     if !validation.is_valid() {
         return Err(FormatError::invalid_input(format!("invalid DOCX document graph: {:?}", validation.issues)));
     }
-    let footnotes = collect_footnote_catalog(graph);
     let mut body = String::new();
     let uses_numbering = graph.blocks.iter().any(|node| matches!(node.block, Block::List { .. }));
     let mut rels = DocumentRelsRegistry::default();
+    rels.set_footnotes(collect_footnote_catalog(graph));
     let nested_blocks = nested_block_ids(graph);
     for node in &graph.blocks {
         if nested_blocks.contains(&node.id) {
@@ -55,12 +55,12 @@ pub fn render_document_xml(graph: &DocumentGraph) -> Result<DocxRenderOutput, Fo
     }
     body.push_str("<w:sectPr/>");
 
-    let footnotes_xml = if footnotes.is_empty() {
+    let footnotes_xml = if rels.footnotes().is_empty() {
         None
     }
     else {
         rels.ensure_footnotes_rel();
-        Some(render_footnotes_xml(&footnotes)?)
+        Some(render_footnotes_xml(rels.footnotes())?)
     };
 
     Ok(DocxRenderOutput {
@@ -153,14 +153,14 @@ fn write_block(
             // travels as a plain paragraph. Dropping it would delete authored
             // content, while refusing the export would lose the whole document.
             out.push_str("<w:p>");
-            write_literal_text(out, payload_hint, "")?;
+            write_literal_text(out, payload_hint, "", rels.footnotes())?;
             out.push_str("</w:p>");
         }
         Block::RawHtml { html } => {
             // Raw markup cannot be interpreted by the DOCX exporter, but its
             // authored text stays visible as a paragraph instead of failing.
             out.push_str("<w:p>");
-            write_literal_text(out, html, "")?;
+            write_literal_text(out, html, "", rels.footnotes())?;
             out.push_str("</w:p>");
         }
     }
@@ -397,7 +397,7 @@ fn write_inline_with_properties(
     match inline {
         Inline::Text { text } => {
             if properties.is_empty() {
-                write_text_with_footnotes(out, text)?;
+                write_text_with_footnotes(out, text, rels.footnotes())?;
             }
             else {
                 write_run_with_properties(out, text, properties)?;
@@ -486,7 +486,7 @@ fn write_inline_with_properties(
         Inline::Reference { display, .. } => {
             // The referenced target has no DOCX anchor to point at, so the
             // authored display text stays readable in place.
-            write_literal_text(out, display, properties)?;
+            write_literal_text(out, display, properties, rels.footnotes())?;
         }
         Inline::Citation { key, display } => {
             if let Some(display) = display {
@@ -495,7 +495,7 @@ fn write_inline_with_properties(
                 }
             }
             else {
-                write_literal_text(out, &format!("[{key}]"), properties)?;
+                write_literal_text(out, &format!("[{key}]"), properties, rels.footnotes())?;
             }
         }
         Inline::Attributed { children, .. } => {
@@ -504,7 +504,7 @@ fn write_inline_with_properties(
             }
         }
         Inline::RawHtml { html } => {
-            write_literal_text(out, html, properties)?;
+            write_literal_text(out, html, properties, rels.footnotes())?;
         }
         Inline::Link { target, display, title: _ } => {
             let RelationEndpoint::ExternalUri(url) = target
@@ -540,10 +540,14 @@ fn write_inline_with_properties(
             }
         }
         Inline::Note { label, display: _ } => {
-            let token = format!("[^{label}]");
-            let id = parse_footnote_reference_token(&token)
-                .ok_or_else(|| FormatError::unsupported("docx", format!("note reference label `{label}` is not numeric")))?;
-            write_footnote_reference(out, id)?;
+            // WordprocessingML addresses footnotes by integer id only, so a
+            // named label resolves through the catalog that assigned it one.
+            // A reference without any definition keeps its authored token as
+            // visible text instead of failing the whole document.
+            match resolve_footnote_reference(label, rels.footnotes()) {
+                Some(id) => write_footnote_reference(out, id)?,
+                None => write_run_text(out, &format!("[^{label}]"))?,
+            }
         }
         Inline::Break { kind } => match kind {
             BreakKind::Hard => {
@@ -845,39 +849,57 @@ fn image_bytes_for_target(graph: &DocumentGraph, target: &str) -> Option<Vec<u8>
 
 /// Writes one authored string as run content, honoring accumulated run
 /// properties and keeping inline footnote tokens in text without properties.
-fn write_literal_text(out: &mut String, text: &str, properties: &str) -> Result<(), FormatError> {
-    if properties.is_empty() { write_text_with_footnotes(out, text) } else { write_run_with_properties(out, text, properties) }
+fn write_literal_text(out: &mut String, text: &str, properties: &str, notes: &FootnoteCatalog) -> Result<(), FormatError> {
+    if properties.is_empty() {
+        write_text_with_footnotes(out, text, notes)
+    }
+    else {
+        write_run_with_properties(out, text, properties)
+    }
 }
 
-fn write_text_with_footnotes(out: &mut String, text: &str) -> Result<(), FormatError> {
-    if let Some(id) = parse_footnote_reference_token(text) {
+fn write_text_with_footnotes(out: &mut String, text: &str, notes: &FootnoteCatalog) -> Result<(), FormatError> {
+    if let Some(id) = resolve_footnote_token(text, notes) {
         return write_footnote_reference(out, id);
     }
 
     let mut rest = text;
     while !rest.is_empty() {
-        if let Some(start) = rest.find("[^") {
-            if start > 0 {
-                write_run_text(out, &rest[..start])?;
-            }
-            let token_start = &rest[start..];
-            if let Some(end) = token_start.find(']') {
-                let token = &token_start[..=end];
-                if let Some(id) = parse_footnote_reference_token(token) {
-                    write_footnote_reference(out, id)?;
-                    rest = &token_start[end + 1..];
-                    continue;
-                }
-            }
-            write_run_text(out, rest)?;
-            break;
-        }
+        let Some(start) = rest.find("[^")
         else {
             write_run_text(out, rest)?;
             break;
+        };
+        if start > 0 {
+            write_run_text(out, &rest[..start])?;
         }
+        let token_start = &rest[start..];
+        if let Some(end) = token_start.find(']') {
+            let token = &token_start[..=end];
+            if let Some(id) = resolve_footnote_token(token, notes) {
+                write_footnote_reference(out, id)?;
+                rest = &token_start[end + 1..];
+                continue;
+            }
+        }
+        // The token names no footnote, so the opening bracket stays as text and
+        // scanning resumes after it instead of swallowing the remaining text.
+        write_run_text(out, "[^")?;
+        rest = &token_start[2..];
     }
     Ok(())
+}
+
+fn resolve_footnote_token(token: &str, notes: &FootnoteCatalog) -> Option<u32> {
+    let trimmed = token.trim();
+    if !trimmed.starts_with("[^") || !trimmed.ends_with(']') {
+        return None;
+    }
+    resolve_footnote_reference(trimmed[2..trimmed.len() - 1].trim(), notes)
+}
+
+fn resolve_footnote_reference(label: &str, notes: &FootnoteCatalog) -> Option<u32> {
+    notes.id(label).or_else(|| parse_footnote_reference_token(&format!("[^{label}]")))
 }
 
 fn write_run_text(out: &mut String, text: &str) -> Result<(), FormatError> {

@@ -1,6 +1,6 @@
 use document_formats::{
     export::{docx::export_docx_bytes, markdown::export_markdown},
-    import::docx::import_docx_bytes,
+    import::{docx::import_docx_bytes, markdown::import_markdown_bytes},
 };
 use document_ir::{
     Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, ListItem, NodeId, SemanticStatus, TableCell, TableRow,
@@ -442,6 +442,59 @@ fn docx_export_writes_grid_span_and_vertical_merge() {
     assert_eq!(rows[1].cells.len(), 2, "{rows:#?}");
     assert_eq!((rows[1].cells[0].colspan, rows[1].cells[0].rowspan), (1, 2));
     assert_eq!(rows[2].cells.len(), 1, "{rows:#?}");
+}
+
+#[test]
+fn docx_export_assigns_ids_to_named_footnotes() {
+    let graph =
+        import_markdown_bytes("named-footnote.md", "See[^note] and[^1].\n\n[^note]: Named body.\n\n[^1]: Numeric body.\n")
+            .expect("import markdown");
+    let exported = export_docx_bytes(&graph).expect("a named footnote must not fail the export");
+    let payload = String::from_utf8_lossy(&exported);
+    // `w:footnoteReference` only takes integers, so `[^1]` keeps id 1 and the
+    // named label takes the next free id.
+    assert!(payload.contains(r#"<w:footnoteReference w:id="2"/>"#), "the named reference keeps its own id: {payload}");
+    assert!(payload.contains(r#"<w:footnoteReference w:id="1"/>"#), "the numeric reference keeps id 1: {payload}");
+    assert!(
+        payload.contains(r#"<w:footnote w:id="1"><w:p><w:r><w:t>Numeric body.</w:t>"#),
+        "the numeric body stays attached to id 1: {payload}"
+    );
+    assert!(
+        payload.contains(r#"<w:footnote w:id="2"><w:p><w:r><w:t>Named body.</w:t>"#),
+        "the named body stays attached to id 2: {payload}"
+    );
+    let round = import_docx_bytes("named-footnote-round.docx", &exported).expect("reopen docx");
+    let labels: Vec<String> = round
+        .blocks
+        .iter()
+        .flat_map(|node| match &node.block {
+            Block::Paragraph { content } => content
+                .iter()
+                .filter_map(|inline| match inline {
+                    Inline::Note { label, .. } => Some(label.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert_eq!(labels, vec!["2".to_string(), "1".to_string()], "{:?}", round.blocks);
+    let definitions = round
+        .blocks
+        .iter()
+        .filter(|node| matches!(&node.block, Block::Opaque { kind, .. } if kind == "footnote_definition"))
+        .count();
+    assert_eq!(definitions, 2, "{:?}", round.blocks);
+}
+
+#[test]
+fn docx_export_writes_undefined_note_reference_as_text() {
+    let mut graph = DocumentGraph::new(DocumentId(52));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Note { label: "missing".into(), display: None }] });
+    let exported = export_docx_bytes(&graph).expect("an unresolved note must not fail the export");
+    let payload = String::from_utf8_lossy(&exported);
+    assert!(!payload.contains("w:footnoteReference"), "no reference may point at an absent part: {payload}");
+    assert!(payload.contains("[^missing]"), "the authored token stays visible: {payload}");
 }
 
 #[test]

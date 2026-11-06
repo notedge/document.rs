@@ -1,7 +1,14 @@
+use super::footnotes::FootnoteCatalog;
+
 /// Collects hyperlink and image targets for `word/_rels/document.xml.rels`.
+///
+/// It also carries the footnote catalog, because the body references and the
+/// `word/footnotes.xml` part share the ids this registry already manages the
+/// relationship for.
 #[derive(Debug, Default)]
 pub struct DocumentRelsRegistry {
     entries: Vec<RelEntry>,
+    footnotes: FootnoteCatalog,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +55,16 @@ impl DocumentRelsRegistry {
             return;
         }
         self.entries.push(RelEntry::Footnotes);
+    }
+
+    /// Installs the footnote catalog whose ids the body references use.
+    pub fn set_footnotes(&mut self, catalog: FootnoteCatalog) {
+        self.footnotes = catalog;
+    }
+
+    /// The installed footnote catalog.
+    pub fn footnotes(&self) -> &FootnoteCatalog {
+        &self.footnotes
     }
 
     /// Whether any relationships were collected.

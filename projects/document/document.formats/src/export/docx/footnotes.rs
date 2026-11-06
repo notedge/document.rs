@@ -1,39 +1,97 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use document_ir::{Block, DocumentGraph};
 
 use crate::FormatError;
 
-/// Collect footnote bodies from `footnote_definition` opaque blocks.
-pub fn collect_footnote_catalog(graph: &DocumentGraph) -> HashMap<u32, String> {
-    let mut catalog = HashMap::new();
+/// Footnote bodies from `footnote_definition` opaque blocks, keyed by the
+/// authored label, plus the integer id WordprocessingML assigns to each label.
+///
+/// `w:footnoteReference` only accepts integer ids while GFM and the IR address
+/// notes by arbitrary labels such as `[^note]`. Numeric labels keep their own
+/// value so `[^1]` still exports with `w:id="1"`. Every other label takes the
+/// next free id in sorted label order, which keeps the body and the reference
+/// instead of failing the whole document.
+#[derive(Debug, Default, Clone)]
+pub struct FootnoteCatalog {
+    bodies: BTreeMap<String, String>,
+    ids: BTreeMap<String, u32>,
+}
+
+impl FootnoteCatalog {
+    /// Whether any footnote body resolved from the graph.
+    pub fn is_empty(&self) -> bool {
+        self.bodies.is_empty()
+    }
+
+    /// WordprocessingML id for an authored label.
+    pub fn id(&self, label: &str) -> Option<u32> {
+        self.ids.get(label).copied()
+    }
+
+    /// Bodies paired with their ids in ascending id order.
+    pub fn bodies(&self) -> impl Iterator<Item = (u32, &str)> {
+        let mut entries: Vec<(u32, &str)> =
+            self.ids.iter().filter_map(|(label, id)| self.bodies.get(label).map(|body| (*id, body.as_str()))).collect();
+        entries.sort_unstable_by_key(|(id, _)| *id);
+        entries.into_iter()
+    }
+}
+
+/// Collect footnote bodies from `footnote_definition` opaque blocks and assign
+/// the ids that `word/footnotes.xml` and the body references share.
+pub fn collect_footnote_catalog(graph: &DocumentGraph) -> FootnoteCatalog {
+    let mut bodies = BTreeMap::new();
     for node in &graph.blocks {
         if let Block::Opaque { kind, payload_hint, .. } = &node.block {
             if kind == "footnote_definition" {
-                if let Some((id, body)) = parse_footnote_definition(payload_hint) {
-                    catalog.insert(id, body);
+                if let Some((label, body)) = parse_footnote_definition(payload_hint) {
+                    bodies.insert(label, body);
                 }
             }
         }
     }
-    catalog
+
+    let mut used = BTreeSet::new();
+    let mut ids = BTreeMap::new();
+    for label in bodies.keys() {
+        if let Ok(value) = label.parse::<u32>() {
+            if used.insert(value) {
+                ids.insert(label.clone(), value);
+            }
+        }
+    }
+    let mut next = used.last().copied().unwrap_or(0).saturating_add(1);
+    for label in bodies.keys() {
+        if ids.contains_key(label) {
+            continue;
+        }
+        while used.contains(&next) {
+            next = next.saturating_add(1);
+        }
+        used.insert(next);
+        ids.insert(label.clone(), next);
+        next = next.saturating_add(1);
+    }
+
+    FootnoteCatalog { bodies, ids }
 }
 
-/// Parse GFM footnote definition text such as `[^1]: body`.
-pub fn parse_footnote_definition(payload: &str) -> Option<(u32, String)> {
+/// Parse GFM footnote definition text such as `[^1]: body` or `[^note]: body`.
+pub fn parse_footnote_definition(payload: &str) -> Option<(String, String)> {
     let trimmed = payload.trim();
     if !trimmed.starts_with("[^") {
         return None;
     }
     let close = trimmed.find(']')?;
-    let id_text = trimmed[2..close].trim();
-    let id = id_text.parse().ok()?;
+    let label = trimmed[2..close].trim();
     let body =
         trimmed.get(close + 1..).and_then(|rest| rest.strip_prefix(':')).map(str::trim).filter(|body| !body.is_empty())?;
-    Some((id, body.to_string()))
+    Some((label.to_string(), body.to_string()))
 }
 
-/// Parse an inline footnote reference token such as `[^1]`.
+/// Parse an inline footnote reference token such as `[^1]` into a numeric
+/// label. Named labels are resolved through [`FootnoteCatalog::id`] instead.
 pub fn parse_footnote_reference_token(token: &str) -> Option<u32> {
     let trimmed = token.trim();
     if !trimmed.starts_with("[^") || !trimmed.ends_with(']') {
@@ -43,16 +101,12 @@ pub fn parse_footnote_reference_token(token: &str) -> Option<u32> {
 }
 
 /// Render `word/footnotes.xml` for the given catalog.
-pub fn render_footnotes_xml(catalog: &HashMap<u32, String>) -> Result<String, FormatError> {
-    let mut ids: Vec<u32> = catalog.keys().copied().collect();
-    ids.sort_unstable();
-
+pub fn render_footnotes_xml(catalog: &FootnoteCatalog) -> Result<String, FormatError> {
     let mut xml = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">"#,
     );
-    for id in ids {
-        let body = catalog.get(&id).expect("key from ids");
+    for (id, body) in catalog.bodies() {
         xml.push_str("\n  <w:footnote w:id=\"");
         xml.push_str(&id.to_string());
         xml.push_str("\"><w:p><w:r><w:t>");
