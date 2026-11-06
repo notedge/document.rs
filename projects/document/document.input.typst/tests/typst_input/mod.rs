@@ -1,7 +1,7 @@
 //! End-to-end checks for the Typst input adapter.
 
 use document_compose::{Severity, SourceSpan};
-use document_input_typst::{IMPORT_FAILED, MATH_SOURCE_PRESERVED, UNTERMINATED_GROUP, import_path, import_source, render_svg};
+use document_input_typst::{IMPORT_FAILED, MATH_SOURCE_PRESERVED, import_path, import_source, render_svg};
 
 const MINIMAL: &str =
     "= Introduction\n\nHello *world* and _emphasis_ with a [link](https://example.com).\n\n- First item\n- Second item\n";
@@ -25,6 +25,12 @@ const TABLE: &str = "= Title\n\n#table(columns: 2, [a], [b])\n\nTail.\n";
 const PLACE: &str = "= Title\n\n#place(top + right, [note])\n\nBody.\n";
 
 const FLOAT: &str = "= Title\n\n#float(caption: [Chart], rect())\n\nBody.\n";
+
+/// Rendered diagnostics merge the import stage with the layout stage, so
+/// assertions about construct coverage must ignore layout-stage warnings.
+fn without_layout_stage(diagnostics: &[document_compose::Diagnostic]) -> Vec<&document_compose::Diagnostic> {
+    diagnostics.iter().filter(|diagnostic| !diagnostic.code.starts_with("vutex.layout.")).collect()
+}
 
 #[test]
 fn minimal_subset_renders_svg_through_the_layout_chain() {
@@ -67,8 +73,9 @@ fn dynamic_construct_is_opaque_with_an_exact_source_span() {
     assert_eq!(rendered.report.opaque[0].detail, "#set page(width: 10cm)");
 
     let start = DYNAMIC.find("#set page(width: 10cm)").expect("construct exists in source");
-    assert_eq!(rendered.diagnostics.len(), 1, "one construct-level diagnostic: {:?}", rendered.diagnostics);
-    let diagnostic = &rendered.diagnostics[0];
+    let construct_diagnostics = without_layout_stage(&rendered.diagnostics);
+    assert_eq!(construct_diagnostics.len(), 1, "one construct-level diagnostic: {:?}", rendered.diagnostics);
+    let diagnostic = construct_diagnostics[0];
     assert_eq!(diagnostic.code, "import.typst.dynamic_content");
     assert_eq!(diagnostic.severity, Severity::Error);
     assert_eq!(diagnostic.span, Some(SourceSpan { start: start as u32, end: (start + "#set page(width: 10cm)".len()) as u32 }));
@@ -125,21 +132,35 @@ fn documented_subset_lowers_without_loss() {
     assert_eq!(rendered.report.lowered.handled, 7);
     assert!(rendered.report.unsupported.is_empty());
     assert!(rendered.report.opaque.is_empty());
-    assert!(rendered.diagnostics.is_empty(), "no construct-level diagnostics: {:?}", rendered.diagnostics);
+    assert!(
+        without_layout_stage(&rendered.diagnostics).is_empty(),
+        "no construct-level diagnostics: {:?}",
+        rendered.diagnostics
+    );
 }
 
 #[test]
-fn multi_line_dynamic_group_fails_closed() {
-    let error = import_source("figure.typ", MULTILINE_FIGURE).expect_err("the construct body would leak as text");
+fn multi_line_dynamic_group_stays_opaque_but_never_leaks_its_body() {
+    let document = import_source("figure.typ", MULTILINE_FIGURE).expect("the construct stays opaque rather than fatal");
 
-    assert_eq!(error.code(), UNTERMINATED_GROUP);
-    assert_eq!(error.diagnostic.severity, Severity::Error);
-    let start = MULTILINE_FIGURE.find("#figure(").expect("construct exists in source");
-    assert_eq!(error.diagnostic.span, Some(SourceSpan { start: start as u32, end: (start + "#figure(".len()) as u32 }));
+    let group = "#figure(\n  rect(width: 2cm),\n  caption: [A box],\n)";
+    let start = MULTILINE_FIGURE.find(group).expect("construct exists in source");
+    assert_eq!(document.report.opaque.len(), 1);
+    assert_eq!(document.report.opaque[0].code, "typst.expression.figure");
+    assert_eq!(document.report.opaque[0].detail, group);
+    assert_eq!(document.report.unsupported.len(), 1);
+    assert_eq!(document.report.unsupported[0].code, "import.typst.dynamic_content");
 
-    let rendered = render_svg("figure.typ", MULTILINE_FIGURE);
-    assert!(rendered.is_err(), "no approximate page may be produced");
-    assert_eq!(rendered.expect_err("refused").code(), UNTERMINATED_GROUP);
+    assert_eq!(document.diagnostics.len(), 1);
+    assert_eq!(document.diagnostics[0].code, "import.typst.dynamic_content");
+    assert_eq!(document.diagnostics[0].severity, Severity::Error);
+    assert_eq!(document.diagnostics[0].span, Some(SourceSpan { start: start as u32, end: (start + group.len()) as u32 }));
+
+    let rendered = render_svg("figure.typ", MULTILINE_FIGURE).expect("the opaque construct renders without its body");
+    assert!(rendered.svg.contains("Tail text."));
+    for leaked in ["2cm", "A box", "rect("] {
+        assert!(!rendered.svg.contains(leaked), "construct body leaked into the page: {leaked}");
+    }
 }
 
 #[test]
@@ -167,7 +188,11 @@ fn comments_produce_no_text_nodes() {
     assert_eq!(rendered.report.lowered.handled, 2);
     assert!(rendered.report.unsupported.is_empty());
     assert!(rendered.report.opaque.is_empty());
-    assert!(rendered.diagnostics.is_empty(), "comments carry no diagnostics: {:?}", rendered.diagnostics);
+    assert!(
+        without_layout_stage(&rendered.diagnostics).is_empty(),
+        "comments carry no diagnostics: {:?}",
+        rendered.diagnostics
+    );
 }
 
 #[test]
@@ -198,25 +223,36 @@ fn inline_markup_keeps_structured_nodes() {
     assert!(rendered.svg.contains("space"));
     assert!(rendered.report.unsupported.is_empty());
     assert!(rendered.report.opaque.is_empty());
-    assert!(rendered.diagnostics.is_empty(), "markup carries no diagnostics: {:?}", rendered.diagnostics);
+    assert!(
+        without_layout_stage(&rendered.diagnostics).is_empty(),
+        "markup carries no diagnostics: {:?}",
+        rendered.diagnostics
+    );
 }
 
 #[test]
-fn escaped_markup_is_reported_and_never_rendered_as_text() {
+fn escaped_markup_unwraps_literal_characters_without_a_construct_loss() {
     let document = import_source("escapes.typ", ESCAPES).expect("escaped markup imports");
 
-    assert_eq!(document.report.unsupported.len(), 1);
-    assert_eq!(document.report.unsupported[0].code, "import.typst.dynamic_content");
-    assert_eq!(document.report.opaque.len(), 1);
-    assert_eq!(document.report.opaque[0].code, "typst.expression");
-    assert_eq!(document.diagnostics.len(), 1);
-    assert_eq!(document.diagnostics[0].severity, Severity::Error);
-    assert_eq!(document.diagnostics[0].span, Some(SourceSpan { start: 11, end: 53 }));
+    assert!(document.report.unsupported.is_empty(), "escapes are lowered, not reported: {:#?}", document.report);
+    assert!(document.report.opaque.is_empty());
+    assert!(document.diagnostics.is_empty(), "escapes carry no diagnostics: {:?}", document.diagnostics);
+    assert_eq!(document.report.parsed.considered, 2);
+    assert_eq!(document.report.parsed.handled, 2);
 
-    let rendered = render_svg("escapes.typ", ESCAPES).expect("escaped markup renders without the escapes");
-    for leaked in ["hash", "star", "dollar", "under"] {
-        assert!(!rendered.svg.contains(leaked), "escaped source leaked into the page: {leaked}");
-    }
+    let paragraph = document
+        .graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            document_ir::Block::Paragraph { content } => Some(content),
+            _ => None,
+        })
+        .expect("escape paragraph exists");
+    assert_eq!(paragraph, &[document_ir::Inline::Text { text: "A #hash and *star* and $dollar$ and _under_.".to_string() }]);
+
+    let rendered = render_svg("escapes.typ", ESCAPES).expect("escaped markup renders its literal characters");
+    assert!(rendered.svg.contains("A #hash and *star* and $dollar$ and _under_."));
 }
 
 #[test]
@@ -232,8 +268,9 @@ fn single_line_table_is_one_opaque_item() {
     assert_eq!(rendered.report.opaque[0].detail, "#table(columns: 2, [a], [b])");
     assert_eq!(rendered.report.unsupported.len(), 1);
     assert_eq!(rendered.report.unsupported[0].code, "import.typst.dynamic_content");
-    assert_eq!(rendered.diagnostics.len(), 1);
-    assert_eq!(rendered.diagnostics[0].span, Some(SourceSpan { start: 9, end: 37 }));
+    let construct_diagnostics = without_layout_stage(&rendered.diagnostics);
+    assert_eq!(construct_diagnostics.len(), 1, "{:?}", rendered.diagnostics);
+    assert_eq!(construct_diagnostics[0].span, Some(SourceSpan { start: 9, end: 37 }));
 
     assert!(rendered.svg.contains("Tail."));
     assert!(!rendered.svg.contains("columns"), "table payload must not reach the page");
@@ -262,8 +299,9 @@ fn single_line_layout_intent_stays_opaque() {
         let unsupported: Vec<&str> = rendered.report.unsupported.iter().map(|item| item.code.as_str()).collect();
         assert_eq!(unsupported, vec!["import.typst.dynamic_content"], "{label}");
 
-        assert_eq!(rendered.diagnostics.len(), 1, "{label}: {:?}", rendered.diagnostics);
-        let diagnostic = &rendered.diagnostics[0];
+        let construct_diagnostics = without_layout_stage(&rendered.diagnostics);
+        assert_eq!(construct_diagnostics.len(), 1, "{label}: {:?}", rendered.diagnostics);
+        let diagnostic = construct_diagnostics[0];
         assert_eq!(diagnostic.code, "import.typst.dynamic_content", "{label}");
         assert_eq!(diagnostic.severity, Severity::Error, "{label}");
         let start = source.find(payload).expect("layout intent exists in source");

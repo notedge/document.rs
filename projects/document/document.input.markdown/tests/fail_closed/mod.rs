@@ -10,7 +10,7 @@ fn front_matter_fails_closed_with_span() {
     let error = import_source("virtual://front-matter.md", source)
         .expect_err("front matter carries metadata the document model cannot consume");
 
-    assert_eq!(error.code(), codes::OPAQUE_BLOCK);
+    assert_eq!(error.code(), "import.markdown.front_matter_unmapped");
     let diagnostic = error.diagnostics().first().expect("the rejection must carry its diagnostic");
     let span = diagnostic.span.expect("the front matter block must keep its source span");
     assert_eq!(&source[span.start as usize..span.end as usize], "---\ntitle: ignored\n---");
@@ -56,7 +56,7 @@ fn lossy_construct_stays_importable_while_unsupported_construct_is_rejected() {
 
     let unsupported = import_source("virtual://front-matter.md", "---\ntitle: ignored\n---\n\nBody\n")
         .expect_err("an unsupported construct must stop the import");
-    assert_eq!(unsupported.code(), codes::OPAQUE_BLOCK);
+    assert_eq!(unsupported.code(), "import.markdown.front_matter_unmapped");
 }
 
 #[test]

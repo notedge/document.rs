@@ -34,18 +34,18 @@ fn minimal_tex_document_reaches_an_svg_artifact() {
     let document = import_source("minimal.tex", SAMPLE).expect("the minimal subset must import");
     let graph = &document.graph;
 
-    assert_eq!(document.report.parsed.considered, 6, "six blocks reach the report");
+    assert_eq!(document.report.parsed.considered, 7, "six blocks and the unmapped preamble construct reach the report");
     assert_eq!(document.report.parsed.handled, 6);
     assert_eq!(document.report.lowered.considered, 6);
     assert_eq!(document.report.lowered.handled, 5, "the opaque preamble is not lowered");
-    assert!(document.report.unsupported.is_empty(), "the minimal subset must not report unsupported constructs");
+    assert!(
+        document.report.unsupported.iter().any(|item| item.code == "import.tex.unsupported_command"),
+        "the unmapped preamble is reported as an unsupported construct: {:#?}",
+        document.report.unsupported
+    );
     assert_eq!(document.report.opaque.len(), 1);
     assert_eq!(document.report.opaque[0].code, "tex.documentclass");
-    assert!(
-        document.report.lossy.iter().any(|item| item.code == "import.tex.partial_coverage"),
-        "the document-model coverage statement is forwarded once: {:#?}",
-        document.report.lossy
-    );
+    assert!(document.report.lossy.is_empty(), "the minimal subset carries no lossy markers: {:#?}", document.report.lossy);
 
     let preamble = document
         .diagnostics
