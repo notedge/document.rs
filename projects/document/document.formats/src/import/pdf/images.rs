@@ -56,6 +56,13 @@ pub(crate) fn page_images(
                 };
                 PdfImage { bytes, media_type: "image/png", source }
             }
+            else if !image_body.windows(7).any(|window| window == b"/Filter") {
+                let Ok(bytes) = decode_pdf_raw_image_png(image_body, stream.data, bodies)
+                else {
+                    continue;
+                };
+                PdfImage { bytes, media_type: "image/png", source }
+            }
             else {
                 continue;
             };
@@ -65,22 +72,21 @@ pub(crate) fn page_images(
     Ok(result)
 }
 
-pub(crate) fn decode_pdf_image_png(
-    dictionary: &[u8],
-    stream: &[u8],
-    bodies: &[(u32, Vec<u8>)],
-) -> Result<Vec<u8>, FormatError> {
+/// Width, height and color component count shared by compressed and raw
+/// image streams. Both readers must reject the same shapes, so the geometry
+/// checks live in one place.
+fn image_geometry(dictionary: &[u8], bodies: &[(u32, Vec<u8>)]) -> Result<(u32, u32, usize), FormatError> {
     let width = dictionary_value(dictionary, b"/Width")
         .and_then(|value| u32::try_from(value).ok())
-        .ok_or_else(|| FormatError::parse("pdf", "Flate image has invalid /Width"))?;
+        .ok_or_else(|| FormatError::parse("pdf", "image has invalid /Width"))?;
     let height = dictionary_value(dictionary, b"/Height")
         .and_then(|value| u32::try_from(value).ok())
-        .ok_or_else(|| FormatError::parse("pdf", "Flate image has invalid /Height"))?;
+        .ok_or_else(|| FormatError::parse("pdf", "image has invalid /Height"))?;
     let bits = dictionary_value(dictionary, b"/BitsPerComponent").unwrap_or(8);
     let color_position = dictionary
         .windows(11)
         .position(|window| window == b"/ColorSpace")
-        .ok_or_else(|| FormatError::unsupported("pdf", "Flate image requires a direct grayscale or RGB colorspace"))?;
+        .ok_or_else(|| FormatError::unsupported("pdf", "image requires a direct grayscale or RGB colorspace"))?;
     let color_start = skip_space(dictionary, color_position + 11);
     let color_end = dictionary[color_start..]
         .iter()
@@ -103,16 +109,25 @@ pub(crate) fn decode_pdf_image_png(
             b"/DeviceGray" => 1,
             b"/DeviceRGB" => 3,
             _ => {
-                return Err(FormatError::unsupported("pdf", "Flate image requires a direct grayscale or RGB colorspace"));
+                return Err(FormatError::unsupported("pdf", "image requires a direct grayscale or RGB colorspace"));
             }
         }
     };
     if dictionary_value(dictionary, b"/Colors").is_some_and(|value| value != colors) {
-        return Err(FormatError::unsupported("pdf", "Flate image predictor colors disagree with colorspace"));
+        return Err(FormatError::unsupported("pdf", "image predictor colors disagree with colorspace"));
     }
     if width == 0 || height == 0 || bits != 8 || !matches!(colors, 1 | 3) {
-        return Err(FormatError::unsupported("pdf", "Flate image requires non-zero 8-bit grayscale or RGB dimensions"));
+        return Err(FormatError::unsupported("pdf", "image requires non-zero 8-bit grayscale or RGB dimensions"));
     }
+    Ok((width, height, colors))
+}
+
+pub(crate) fn decode_pdf_image_png(
+    dictionary: &[u8],
+    stream: &[u8],
+    bodies: &[(u32, Vec<u8>)],
+) -> Result<Vec<u8>, FormatError> {
+    let (width, height, colors) = image_geometry(dictionary, bodies)?;
     let facts = Zlib::decode(stream, pdf_image_zlib_limits())
         .map_err(|error| FormatError::parse("pdf", format!("invalid Flate image: {error}")))?;
     let filtered = facts.value;
@@ -149,6 +164,29 @@ pub(crate) fn decode_pdf_image_png(
     };
     let raw = rows.into_iter().flatten().collect::<Vec<_>>();
     Ok(encode_png(width, height, colors as u8, &raw))
+}
+
+/// Reopen an image stream that carries no `/Filter`, which is how our own PDF
+/// renderer writes its RGB samples. The raw stream must exactly cover the
+/// declared geometry, so a filtered or truncated stream is rejected here.
+pub(crate) fn decode_pdf_raw_image_png(
+    dictionary: &[u8],
+    stream: &[u8],
+    bodies: &[(u32, Vec<u8>)],
+) -> Result<Vec<u8>, FormatError> {
+    let (width, height, colors) = image_geometry(dictionary, bodies)?;
+    let expected = usize::try_from(width)
+        .ok()
+        .and_then(|value| value.checked_mul(usize::try_from(height).ok()?))
+        .and_then(|value| value.checked_mul(colors))
+        .ok_or_else(|| FormatError::unsupported("pdf", "raw image is too large"))?;
+    if expected > MAX_IMAGE_BYTES as usize {
+        return Err(FormatError::unsupported("pdf", "raw image exceeds the 32 MiB limit"));
+    }
+    if stream.len() != expected {
+        return Err(FormatError::parse("pdf", "raw image data length does not match dimensions"));
+    }
+    Ok(encode_png(width, height, colors as u8, stream))
 }
 
 /// Components declared by an `/ICCBased` colorspace, resolved through its

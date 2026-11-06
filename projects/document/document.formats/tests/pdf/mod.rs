@@ -307,6 +307,18 @@ fn imports_jpeg_xobject_as_ir_asset() {
 }
 
 #[test]
+fn imports_unfiltered_rgb_xobject_as_ir_asset() {
+    // Shape written by document-renderer-pdf: raw RGB samples with no /Filter.
+    let bytes = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Im1 7 0 R >> >> /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 9 >>\nstream\n/Im1 Do\nendstream\nendobj\n7 0 obj\n<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 3 >>\nstream\n\xFF\x00\x00\nendstream\nendobj\n%%EOF";
+    let graph = import_pdf_bytes("raw-image.pdf", bytes).expect("import raw RGB image");
+    let image = graph.assets.iter().find(|asset| asset.media_type.as_deref() == Some("image/png")).expect("raw image asset");
+    assert_eq!(image.source.as_deref(), Some("pdf-object-7"));
+    // PNG magic proves the raw stream was encoded instead of passed through.
+    assert_eq!(image.bytes.as_deref().map(|bytes| &bytes[..4]), Some(&b"\x89PNG"[..]));
+    assert!(graph.blocks.iter().any(|node| format!("{:?}", node.block).contains("pdf-object-7")));
+}
+
+#[test]
 fn imports_jpeg_xobject_from_inherited_page_resources() {
     let bytes = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Resources 8 0 R /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 9 >>\nstream\n/Im1 Do\nendstream\nendobj\n7 0 obj\n<< /Subtype /Image /Filter /DCTDecode /Width 1 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 4 >>\nstream\n\xFF\xD8\x02\xD9\nendstream\nendobj\n8 0 obj\n<< /XObject << /Im1 7 0 R >> >>\nendobj\n%%EOF";
     let graph = import_pdf_bytes("inherited-image.pdf", bytes).expect("import inherited PDF image");
