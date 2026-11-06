@@ -129,11 +129,30 @@ pub struct StoreDoctorIssue {
     pub message: String,
 }
 
+/// Per-namespace usage exposed to the store doctor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreNamespaceStats {
+    /// Namespace prefix such as `cache/response/`.
+    pub prefix: String,
+    /// Records under the prefix.
+    pub record_count: u64,
+    /// Payload bytes under the prefix.
+    pub bytes_used: u64,
+    /// Configured byte quota, when one was set for the prefix.
+    pub quota_max_bytes: Option<u64>,
+    /// TTL records past expiry but not yet evicted.
+    pub ttl_expired_pending: u64,
+}
+
 /// Read-only store diagnostic report.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct StoreDiagnosticReport {
     /// CAS objects without metadata references.
     pub orphan_object_count: u64,
+    /// Commits not yet folded into the main file by a checkpoint.
+    pub checkpoint_lag_records: u64,
+    /// Namespace usage snapshots reported by the backend.
+    pub namespaces: Vec<StoreNamespaceStats>,
     /// Findings requiring attention.
     pub issues: Vec<StoreDoctorIssue>,
 }

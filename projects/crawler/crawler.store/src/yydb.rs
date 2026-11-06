@@ -13,7 +13,10 @@ use std::{
 
 use crawler_types::{FetchArtifact, FrontierItem};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use yydb::{Batch, Connection, Error as YydbError, LeaseExpectation, LeaseToken, ObjectKind, ObjectRef, ReleaseOutcome};
+use yydb::{
+    Batch, Connection, Error as YydbError, EvictionPolicy, LeaseExpectation, LeaseToken, NamespaceQuota, ObjectKind, ObjectRef,
+    ReleaseOutcome,
+};
 
 use crate::{
     Store,
@@ -22,7 +25,7 @@ use crate::{
     session::StoreSession,
     types::{
         ClaimToken, PagePhase, PageTxHandle, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue,
-        StoreDoctorSeverity,
+        StoreDoctorSeverity, StoreNamespaceStats,
     },
 };
 
@@ -69,6 +72,11 @@ struct PageRecord {
 
 #[derive(Debug, Clone, Serialize)]
 struct EventRecord {
+    sequence: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CheckpointRecord {
     sequence: u64,
 }
 
@@ -468,6 +476,14 @@ impl Store for YydbStore {
         Ok(self.read_run_meta(run_id)?.event_count)
     }
 
+    fn save_checkpoint_view(&mut self) -> Result<u64> {
+        let run_id = self.active_run_id.clone().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        let sequence = self.read_run_meta(&run_id)?.event_count;
+        let key = keyspace::checkpoint_entry(&run_id, sequence);
+        self.connection()?.put(&key, encode(&CheckpointRecord { sequence })?).map_err(map_yydb_error)?;
+        Ok(sequence)
+    }
+
     fn page_phase(&self, page_id: &str) -> Result<PagePhase> {
         let run_id = self.active_run_id.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
         if page_id == "auto" {
@@ -507,7 +523,40 @@ impl Store for YydbStore {
                 message: format!("{} orphan objects are not referenced by committed metadata", report.orphan_object_count),
             });
         }
-        Ok(StoreDiagnosticReport { orphan_object_count: report.orphan_object_count, issues })
+        let namespaces = report
+            .namespaces
+            .into_iter()
+            .map(|namespace| StoreNamespaceStats {
+                prefix: namespace.prefix,
+                record_count: namespace.record_count,
+                bytes_used: namespace.bytes_used,
+                quota_max_bytes: namespace.quota_max_bytes,
+                ttl_expired_pending: namespace.ttl_expired_pending,
+            })
+            .collect();
+        // Upstream checkpoint lag resets on every read because `__yydb/meta/*`
+        // is dropped by the pinned format, so the store keeps its own
+        // `run/{run_id}/checkpoint/{sequence}` records as the source of truth.
+        let checkpoint_lag_records = match self.active_run_id.as_ref() {
+            Some(run_id) => {
+                let events = self.read_run_meta(run_id)?.event_count;
+                events.saturating_sub(self.latest_checkpoint_sequence(run_id)?)
+            }
+            None => 0,
+        };
+        if checkpoint_lag_records > 0 {
+            issues.push(StoreDoctorIssue {
+                severity: StoreDoctorSeverity::Warn,
+                code: "store.doctor.checkpoint_stale".into(),
+                message: format!("checkpoint lags commit by {checkpoint_lag_records} records"),
+            });
+        }
+        Ok(StoreDiagnosticReport {
+            orphan_object_count: report.orphan_object_count,
+            checkpoint_lag_records,
+            namespaces,
+            issues,
+        })
     }
 
     fn get_response_cache(&self, cache_key: &str) -> Result<Option<FetchArtifact>> {
@@ -559,6 +608,39 @@ impl YydbStore {
         let orphans = conn.scan_orphans("").map_err(map_yydb_error)?;
         let report = conn.reclaim_orphans(&orphans).map_err(map_yydb_error)?;
         Ok(report.reclaimed_objects)
+    }
+
+    /// Bound a namespace such as `cache/response/` by bytes and records.
+    ///
+    /// YYDB evicts least-recently-used records to stay inside the quota, so a
+    /// cache write can silently displace an older entry instead of growing.
+    pub fn set_namespace_quota(&self, namespace: &str, max_bytes: u64, max_records: u64) -> Result<()> {
+        let quota = NamespaceQuota { max_bytes, max_records, eviction_policy: EvictionPolicy::Lru };
+        self.connection()?.set_namespace_quota(namespace, quota).map_err(map_yydb_error)
+    }
+
+    /// Fold committed records into the main file and reset checkpoint lag.
+    pub fn checkpoint(&self) -> Result<()> {
+        self.connection()?.checkpoint().map_err(map_yydb_error)
+    }
+
+    fn latest_checkpoint_sequence(&self, run_id: &str) -> Result<u64> {
+        let conn = self.connection()?;
+        let prefix = keyspace::checkpoint_prefix(run_id);
+        let mut after: Option<String> = None;
+        let mut latest = 0;
+        loop {
+            let page = conn.scan_prefix(&prefix, after.as_deref(), SCAN_PAGE).map_err(map_yydb_error)?;
+            let fetched = page.len();
+            for (_, bytes) in &page {
+                latest = latest.max(decode::<CheckpointRecord>(bytes, "checkpoint")?.sequence);
+            }
+            after = page.last().map(|(key, _)| key.clone());
+            if fetched < SCAN_PAGE {
+                break;
+            }
+        }
+        Ok(latest)
     }
 }
 

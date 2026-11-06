@@ -63,6 +63,10 @@ impl Store for MemoryStore {
         self.session.event_count()
     }
 
+    fn save_checkpoint_view(&mut self) -> Result<u64> {
+        self.session.save_checkpoint_view()
+    }
+
     fn page_phase(&self, page_id: &str) -> Result<PagePhase> {
         self.session.page_phase(page_id)
     }
@@ -72,7 +76,16 @@ impl Store for MemoryStore {
     }
 
     fn doctor(&self) -> Result<StoreDiagnosticReport> {
-        Ok(StoreDiagnosticReport::default())
+        let checkpoint_lag_records = self.session.checkpoint_lag();
+        let mut issues = Vec::new();
+        if checkpoint_lag_records > 0 {
+            issues.push(crate::StoreDoctorIssue {
+                severity: crate::StoreDoctorSeverity::Warn,
+                code: "store.doctor.checkpoint_stale".into(),
+                message: format!("checkpoint lags commit by {checkpoint_lag_records} records"),
+            });
+        }
+        Ok(StoreDiagnosticReport { checkpoint_lag_records, issues, ..StoreDiagnosticReport::default() })
     }
 
     fn get_response_cache(&self, cache_key: &str) -> Result<Option<crawler_types::FetchArtifact>> {

@@ -19,7 +19,7 @@ pub use memory::{MemoryStore, frontier_item_from_contract};
 pub use store::Store;
 pub use types::{
     ClaimToken, DEFAULT_CLAIM_LEASE, PagePhase, PageTxHandle, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport,
-    StoreDoctorIssue, StoreDoctorSeverity,
+    StoreDoctorIssue, StoreDoctorSeverity, StoreNamespaceStats,
 };
 
 #[cfg(feature = "yydb")]

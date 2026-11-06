@@ -1,5 +1,7 @@
 //! Y-1..Y-8 store contract suite shared by `MemoryStore` and `YydbStore`.
 
+#[cfg(feature = "yydb")]
+mod g4_doctor_quota_lag;
 mod support;
 mod y1_batch_transaction;
 mod y2_single_winner;

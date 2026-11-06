@@ -36,6 +36,8 @@ pub(crate) struct RunState {
     claims: BTreeMap<String, ClaimRecord>,
     pages: BTreeMap<String, PageRecord>,
     event_count: u64,
+    #[serde(default)]
+    checkpoint_sequence: u64,
     next_fencing: u64,
 }
 
@@ -158,6 +160,7 @@ impl StoreSession {
             claims: BTreeMap::new(),
             pages: BTreeMap::new(),
             event_count: 0,
+            checkpoint_sequence: 0,
             next_fencing: 0,
         };
         self.runs.insert(run_id.clone(), run);
@@ -312,6 +315,18 @@ impl StoreSession {
 
     pub(crate) fn event_count(&self) -> Result<u64> {
         Ok(self.active_run()?.event_count)
+    }
+
+    pub(crate) fn save_checkpoint_view(&mut self) -> Result<u64> {
+        let run = self.active_run_mut()?;
+        run.checkpoint_sequence = run.event_count;
+        let sequence = run.event_count;
+        self.persist_snapshot();
+        Ok(sequence)
+    }
+
+    pub(crate) fn checkpoint_lag(&self) -> u64 {
+        self.active_run().map(|run| run.event_count.saturating_sub(run.checkpoint_sequence)).unwrap_or(0)
     }
 
     pub(crate) fn page_phase(&self, page_id: &str) -> Result<PagePhase> {

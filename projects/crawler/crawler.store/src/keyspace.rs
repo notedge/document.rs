@@ -60,6 +60,16 @@ pub fn report_event(run_id: &str, sequence: u64) -> String {
     format!("run/{run_id}/event/{sequence}")
 }
 
+/// Prefix covering every checkpoint view of a run.
+pub fn checkpoint_prefix(run_id: &str) -> String {
+    format!("run/{run_id}/checkpoint/")
+}
+
+/// Checkpoint view key carrying the exported event sequence.
+pub fn checkpoint_entry(run_id: &str, sequence: u64) -> String {
+    format!("run/{run_id}/checkpoint/{sequence}")
+}
+
 /// Response cache record key.
 pub fn response_cache(cache_key: &str) -> String {
     format!("cache/response/{cache_key}")

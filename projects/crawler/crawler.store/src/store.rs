@@ -45,6 +45,9 @@ pub trait Store {
     /// Number of report events appended in the active run.
     fn event_count(&self) -> Result<u64>;
 
+    /// Export a checkpoint view at the current event sequence and return it.
+    fn save_checkpoint_view(&mut self) -> Result<u64>;
+
     /// Read a page phase, or `auto` for the most recent page.
     fn page_phase(&self, page_id: &str) -> Result<PagePhase>;
 
