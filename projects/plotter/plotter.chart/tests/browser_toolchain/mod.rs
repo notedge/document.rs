@@ -46,7 +46,7 @@ fn keep(path: &Path) -> bool {
     let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
     // The gate itself names the forbidden patterns, and it is not a browser
     // driver. Everything else in these trees is scanned.
-    if name == "browser_toolchain.rs" {
+    if name == "browser_toolchain.rs" || path.components().any(|part| part.as_os_str().to_str() == Some("browser_toolchain")) {
         return false;
     }
     if path.components().any(|part| matches!(part.as_os_str().to_str(), Some("node_modules" | "target"))) {
@@ -91,7 +91,7 @@ fn violations_in(text: &str) -> Vec<(&'static str, usize)> {
 fn no_test_or_script_launches_a_system_browser() {
     let root = workspace();
     let mut files = Vec::new();
-    for relative in ["projects/crates", "scripts", ".github/workflows"] {
+    for relative in ["projects", "scripts", ".github/workflows"] {
         collect(&root.join(relative), &mut files);
     }
     assert!(files.len() > 5, "the browser gate scanned {} files, which looks wrong", files.len());

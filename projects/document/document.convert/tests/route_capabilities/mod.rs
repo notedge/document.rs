@@ -1,6 +1,6 @@
-use document_convert::{convert_bytes, supported_routes, supports_route};
+use document_convert::{READERS, WRITERS, convert_bytes, supported_routes, supports_route};
 
-const SOURCES: &[&str] = &["docx", "doc", "pdf", "epub", "html", "markdown", "notedown", "tex", "typst"];
+const SOURCES: &[&str] = &["docx", "doc", "pdf", "epub", "html", "markdown", "notedown", "tex", "typst", "xlsx", "pptx"];
 
 #[test]
 fn every_source_routes_to_deliverable_writers() {
@@ -46,6 +46,7 @@ fn tex_to_markdown_keeps_the_authored_structure() {
 #[test]
 fn supported_routes_is_the_filtered_cross_product() {
     let routes = supported_routes();
-    assert_eq!(routes.len(), SOURCES.len() * 5);
+    assert_eq!(SOURCES.len(), READERS.len(), "the source list must mirror the wired readers");
+    assert_eq!(routes.len(), READERS.len() * WRITERS.len());
     assert!(routes.iter().all(|(from, to)| supports_route(from, to)));
 }

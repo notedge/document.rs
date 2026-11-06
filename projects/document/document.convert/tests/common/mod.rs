@@ -4,10 +4,35 @@
 //! are legitimately unused in another.
 #![allow(dead_code)]
 
-use std::fs;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use document_convert::{ConvertOutput, ConvertProjectOutput, PublishedMarkdownProject, SCHEMA_REPORT};
+use document_fonts::BodyFaceSet;
 use serde_json::Value;
+
+/// Load the host-authored body faces that PDF writing requires.
+///
+/// The pack sits in VuTeX beside this repository locally, and CI points
+/// `VUTEX_FONT_DIR` at a sparse checkout of it. A missing pack fails the test
+/// instead of skipping, matching the writer contract.
+pub fn pdf_body_faces() -> Arc<BodyFaceSet> {
+    let dir = std::env::var_os("VUTEX_FONT_DIR").map(PathBuf::from).unwrap_or_else(|| {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(4)
+            .expect("workspace root")
+            .join("VuTeX")
+            .join("projects")
+            .join("vutex.rs")
+            .join("fonts")
+    });
+    assert!(dir.is_dir(), "PDF tests need the host font pack at {}, set VUTEX_FONT_DIR", dir.display());
+    Arc::new(BodyFaceSet::load_from(&dir).unwrap_or_else(|error| panic!("read body faces from {}: {error}", dir.display())))
+}
 
 /// Assert single-file `convert` report matches IR loss and writer metadata.
 pub fn assert_convert_report(output: &ConvertOutput, writer: &str) {

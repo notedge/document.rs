@@ -1,8 +1,10 @@
-use document_convert::convert_bytes;
+use document_convert::{convert_bytes, convert_bytes_with_body_faces};
 use document_formats::import::markdown::import_markdown_bytes;
 
 use crate::common;
-use common::{assert_convert_report, assert_report_contains_loss_codes, docx_zip, docx_zip_with_footnotes, stored_zip};
+use common::{
+    assert_convert_report, assert_report_contains_loss_codes, docx_zip, docx_zip_with_footnotes, pdf_body_faces, stored_zip,
+};
 
 #[test]
 fn html_to_markdown_convert_report_matches_ir_loss() {
@@ -277,10 +279,12 @@ fn doc_to_markdown_convert_report_lists_partial_coverage() {
 
 #[test]
 fn pdf_to_markdown_convert_report_lists_partial_coverage() {
-    let pdf = convert_bytes("markdown", "pdf", "sample.md", b"# Heading\n\nBody text.\n".to_vec(), None)
-        .expect("write PDF")
-        .binary
-        .expect("PDF bytes");
+    let faces = pdf_body_faces();
+    let pdf =
+        convert_bytes_with_body_faces("markdown", "pdf", "sample.md", b"# Heading\n\nBody text.\n".to_vec(), None, &faces)
+            .expect("write PDF")
+            .binary
+            .expect("PDF bytes");
     let output = convert_bytes("pdf", "markdown", "sample.pdf", pdf, None).expect("convert pdf to markdown");
 
     assert_convert_report(&output, "markdown");

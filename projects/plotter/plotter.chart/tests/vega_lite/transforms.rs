@@ -262,7 +262,7 @@ fn time_unit_labels_do_not_depend_on_the_process_time_zone() {
     let exe = std::env::current_exe().expect("the test binary path");
     let run = |timezone: &str| {
         let output = std::process::Command::new(&exe)
-            .args(["--exact", "transforms::tz_probe_labels", "--nocapture", "--test-threads=1"])
+            .args(["--exact", "vega_lite::transforms::tz_probe_labels", "--nocapture", "--test-threads=1"])
             .env("TZ", timezone)
             .output()
             .expect("the probe test binary runs");

@@ -561,13 +561,20 @@ fn doc_to_markdown_project_writes_index_and_reopens_text() {
 
 #[test]
 fn pdf_to_markdown_project_writes_index_and_reopens_text() {
-    use document_convert::convert_bytes;
+    use document_convert::convert_bytes_with_body_faces;
 
     assert!(supports_markdown_project_source("pdf"));
-    let pdf = convert_bytes("markdown", "pdf", "sample.md", b"# Heading\n\nBody text.\n".to_vec(), None)
-        .expect("write pdf")
-        .binary
-        .expect("pdf bytes");
+    let pdf = convert_bytes_with_body_faces(
+        "markdown",
+        "pdf",
+        "sample.md",
+        b"# Heading\n\nBody text.\n".to_vec(),
+        None,
+        &common::pdf_body_faces(),
+    )
+    .expect("write pdf")
+    .binary
+    .expect("pdf bytes");
 
     let output_dir = std::env::temp_dir().join(format!("panduck-pdf-project-{}", std::process::id()));
     let (output, published) =
