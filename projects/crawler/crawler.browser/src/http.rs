@@ -51,7 +51,7 @@ impl HttpBrowserProvider {
     }
 }
 
-impl super::provider::BrowserProvider for HttpBrowserProvider {
+impl crate::provider::BrowserProvider for HttpBrowserProvider {
     fn capture_snapshot(&self, url: &Url) -> Result<BrowserSnapshot> {
         let request_url = self.snapshot_url(url);
         let transport = HttpTransport::with_config(HttpTransportConfig {

@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, HashSet};
 
-use crate::browser::{BrowserProvider, snapshot_to_fetch_artifact};
 use boost_diagnostic::{DiagnosticSeverity, Message, MessageArg};
+use crawler_browser::{BrowserProvider, snapshot_to_fetch_artifact};
 use crawler_fetch::{FetchClient, FetchRequest, RobotsPolicy, Transport, site_key_for_url};
+use crawler_frontier::{FrontierQueue, frontier_from_links};
 use crawler_types::{
     AdmissionDecision, BrowserFallbackPolicy, BrowserFallbackTrigger, ChallengeOutcome, ChallengePolicy, CrawlBudgetStatus,
     CrawlCheckpoint, CrawlError, CrawlEvent, CrawlReport, CrawlRequest, ExtractBudget, ExtractContext, ExtractResult,
@@ -13,7 +14,6 @@ use document_ir::{Block, DocumentGraph, Inline};
 use crate::{
     admission::{admit_frontier_item, seed_frontier},
     extract::{Extractor, run_extract},
-    frontier::{FrontierQueue, frontier_from_links},
     initial_report, sitemap,
     transaction::commit_page,
 };

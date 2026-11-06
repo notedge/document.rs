@@ -1,6 +1,23 @@
+//! Frontier queue and navigation link admission.
+//!
+//! The crate owns bounded in-memory scheduling and link expansion. It depends
+//! on `crawler-types` only, so the crawl orchestrator can replace the queue
+//! through [`FrontierSink`] without pulling transport or persistence into the
+//! frontier layer.
+
+#![warn(missing_docs)]
+
 use std::collections::HashSet;
 
 use crawler_types::{FrontierItem, LinkCandidate, LinkRelation};
+
+/// Destination for admitted frontier items.
+pub trait FrontierSink {
+    /// Enqueue an item when its request URL is not yet known.
+    ///
+    /// Returns `false` for a duplicate or a rejected item.
+    fn push(&mut self, item: FrontierItem) -> bool;
+}
 
 /// Bounded frontier queue with URL deduplication.
 #[derive(Debug, Clone, Default)]
@@ -58,6 +75,11 @@ impl FrontierQueue {
         self.pending.len()
     }
 
+    /// Whether the queue has no pending items.
+    pub fn is_empty(&self) -> bool {
+        self.pending.is_empty()
+    }
+
     /// Pending frontier items in scheduling order.
     pub fn pending_items(&self) -> &[FrontierItem] {
         &self.pending
@@ -74,9 +96,15 @@ impl FrontierQueue {
     }
 }
 
+impl FrontierSink for FrontierQueue {
+    fn push(&mut self, item: FrontierItem) -> bool {
+        FrontierQueue::push(self, item)
+    }
+}
+
 /// Convert navigation link candidates into frontier items.
-pub fn frontier_from_links(
-    queue: &mut FrontierQueue,
+pub fn frontier_from_links<S: FrontierSink + ?Sized>(
+    queue: &mut S,
     source: &FrontierItem,
     links: &[LinkCandidate],
     max_depth: u32,

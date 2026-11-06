@@ -1,3 +1,12 @@
+//! Browser snapshots, provider stack, and snapshot extraction.
+//!
+//! The crate depends on `crawler-types` and `crawler-extract` only. The crawl
+//! orchestrator selects a [`BrowserProvider`] instead of owning one, so the
+//! provider, the fixture/HTTP stack, and snapshot I/O stay orthogonal to the
+//! crawl loop.
+
+#![warn(missing_docs)]
+
 mod extract;
 mod http;
 mod provider;

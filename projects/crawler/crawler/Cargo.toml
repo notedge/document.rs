@@ -23,10 +23,11 @@ crawler-types = { workspace = true }
 crawler-extract = { workspace = true }
 crawler-fetch = { workspace = true }
 crawler-store = { workspace = true }
+crawler-frontier = { workspace = true }
+crawler-browser = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 url = { workspace = true }
-boost-http = { workspace = true }
 oak-xml = { workspace = true }
 
 [dev-dependencies]

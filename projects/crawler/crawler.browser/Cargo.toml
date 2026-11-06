@@ -1,0 +1,22 @@
+[package]
+name = "crawler-browser"
+version.workspace = true
+authors.workspace = true
+description = "Crawler browser snapshots, provider stack, and snapshot extraction"
+readme = "readme.md"
+homepage = "https://github.com/notedge/document.rs"
+repository = "https://github.com/notedge/document.rs"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+crawler-types = { workspace = true }
+crawler-extract = { workspace = true }
+boost-diagnostic = { workspace = true }
+boost-http = { workspace = true }
+serde_json = { workspace = true }
+url = { workspace = true }

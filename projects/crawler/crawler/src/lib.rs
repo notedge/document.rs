@@ -27,10 +27,8 @@ pub mod store {
 
 mod admission;
 mod assets;
-mod browser;
 mod crawl;
 mod extract;
-mod frontier;
 mod input;
 mod inspect;
 mod markdown_project;
@@ -40,26 +38,26 @@ mod transaction;
 
 pub use admission::{admit_frontier_item, seed_frontier};
 pub use assets::{fingerprint, hydrate_assets};
-pub use browser::{
+pub use crawl::{
+    CrawlOptions, CrawlOutput, CrawlState, LOW_YIELD_MIN_CONTENT_BLOCKS, LOW_YIELD_MIN_TEXT_CHARS, LOW_YIELD_SCRIPT_MIN_BYTES,
+    LOW_YIELD_SCRIPT_TEXT_RATIO, PageYield, resume_crawl_from_checkpoint, run_crawl, run_crawl_with_options,
+};
+pub use crawler_browser::{
     BrowserProvider, BrowserProviderStack, ChallengeBlocked, DEFAULT_SNAPSHOT_DOCUMENT_BUDGET_BYTES,
     DEFAULT_SNAPSHOT_TRANSFER_BUDGET_BYTES, FixtureBrowserProvider, HttpBrowserProvider, build_browser_stack,
     load_fixture_provider_from_dir, load_fixture_provider_from_dirs, load_snapshot_json, parse_browser_dirs,
     path_looks_like_snapshot, run_extract_from_snapshot, save_snapshot_json, snapshot_to_fetch_artifact,
-};
-pub use crawl::{
-    CrawlOptions, CrawlOutput, CrawlState, LOW_YIELD_MIN_CONTENT_BLOCKS, LOW_YIELD_MIN_TEXT_CHARS, LOW_YIELD_SCRIPT_MIN_BYTES,
-    LOW_YIELD_SCRIPT_TEXT_RATIO, PageYield, resume_crawl_from_checkpoint, run_crawl, run_crawl_with_options,
 };
 pub use crawler_fetch::{
     DEFAULT_FETCH_BODY_BUDGET_BYTES, DiskResponseCache, FetchClient, FetchRequest, FileTransport, HttpTransport, MemoryEntry,
     MemoryTransport, ResponseCache, RobotsPolicy, SeedTransport, Transport, build_artifact, fetch_url, map_transport_error,
     transport_for_url,
 };
+pub use crawler_frontier::{FrontierQueue, frontier_from_links};
 #[cfg(feature = "yydb")]
 pub use crawler_store::YydbResponseCache;
 pub use crawler_types::{BrowserSnapshot, PageChallengeState};
 pub use extract::{Extractor, HtmlExtractor, run_extract, select_extractor};
-pub use frontier::{FrontierQueue, frontier_from_links};
 pub use input::{InputFormat, LoadedInput, load_input, load_input_with_source, parse_input_format};
 pub use inspect::{inspect_artifact, inspect_snapshot};
 pub use markdown_project::{PublishedPageProject, publish_extracted_page};

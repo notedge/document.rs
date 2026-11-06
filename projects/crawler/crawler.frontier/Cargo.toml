@@ -1,0 +1,20 @@
+[package]
+name = "crawler-frontier"
+version.workspace = true
+authors.workspace = true
+description = "Crawler frontier queue and navigation link admission"
+readme = "readme.md"
+homepage = "https://github.com/notedge/document.rs"
+repository = "https://github.com/notedge/document.rs"
+license.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+crawler-types = { workspace = true }
+
+[dev-dependencies]
+url = { workspace = true }

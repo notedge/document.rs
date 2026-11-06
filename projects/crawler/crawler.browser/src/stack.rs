@@ -2,7 +2,7 @@ use boost_diagnostic::{DiagnosticSeverity, Message, MessageArg};
 use crawler_types::{BrowserSnapshot, CrawlError, Result, diagnostics as pd};
 use url::Url;
 
-use super::{
+use crate::{
     http::HttpBrowserProvider,
     provider::{BrowserProvider, FixtureBrowserProvider},
     snapshot_io::{load_fixture_provider_from_dirs, parse_browser_dirs},

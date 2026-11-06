@@ -353,10 +353,11 @@ dependencies = [
  "acorn-codec",
  "blake3",
  "boost-diagnostic",
- "boost-http",
  "boost-log",
+ "crawler-browser",
  "crawler-extract",
  "crawler-fetch",
+ "crawler-frontier",
  "crawler-store",
  "crawler-types",
  "document-formats",
@@ -365,6 +366,18 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "url",
+]
+
+[[package]]
+name = "crawler-browser"
+version = "0.1.0"
+dependencies = [
+ "boost-diagnostic",
+ "boost-http",
+ "crawler-extract",
+ "crawler-types",
+ "serde_json",
  "url",
 ]
 
@@ -389,6 +402,14 @@ dependencies = [
  "crawler-types",
  "serde",
  "serde_json",
+ "url",
+]
+
+[[package]]
+name = "crawler-frontier"
+version = "0.1.0"
+dependencies = [
+ "crawler-types",
  "url",
 ]
 

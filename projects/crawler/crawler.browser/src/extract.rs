@@ -1,12 +1,10 @@
+use crawler_extract::{Extractor, run_extract};
 use crawler_types::{
     BrowserSnapshot, ChallengeOutcome, ChallengePolicy, ExtractBudget, ExtractContext, ExtractResult, PageChallengeState,
     apply_challenge_policy,
 };
 
-use crate::{
-    browser::snapshot_to_fetch_artifact,
-    extract::{Extractor, run_extract},
-};
+use crate::snapshot_to_fetch_artifact;
 
 /// Extraction blocked by challenge policy before IR construction.
 #[derive(Debug, Clone, PartialEq, Eq)]

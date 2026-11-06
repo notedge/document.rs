@@ -3,7 +3,7 @@ use std::path::Path;
 use boost_diagnostic::{DiagnosticSeverity, Message, MessageArg};
 use crawler_types::{BrowserSnapshot, CrawlError, FetchArtifact, Result, diagnostics as pd};
 
-use crate::browser::{load_snapshot_json, path_looks_like_snapshot};
+use crawler_browser::{load_snapshot_json, path_looks_like_snapshot};
 use crawler_fetch::{FetchRequest, FileTransport, Transport};
 
 /// Input format selector for extract and inspect commands.

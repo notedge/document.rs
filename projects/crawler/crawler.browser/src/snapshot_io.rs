@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use boost_diagnostic::{DiagnosticSeverity, Message, MessageArg};
 use crawler_types::{BrowserSnapshot, CrawlError, Result, diagnostics as pd};
 
-use super::provider::FixtureBrowserProvider;
+use crate::provider::FixtureBrowserProvider;
 
 fn map_snapshot_io(action: &str, path: &Path, error: std::io::Error) -> CrawlError {
     let diag = boost_diagnostic::Diagnostic::new(
