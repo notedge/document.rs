@@ -1,5 +1,5 @@
 use document_formats::{export::markdown::export_markdown, import::epub::import_epub_bytes};
-use document_ir::{Block, Inline};
+use document_ir::{Block, Inline, SemanticStatus, SourceKind};
 
 fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut archive = Vec::new();
@@ -900,3 +900,61 @@ mod import_ast_lowering;
 mod import_navigation;
 mod import_xhtml;
 mod query_gate;
+
+#[test]
+fn epub_import_records_package_member_provenance() {
+    let graph = import_epub_bytes("book.epub", &minimal_epub_zip()).expect("import epub");
+    assert!(!graph.blocks.is_empty());
+
+    for node in &graph.blocks {
+        let sources = graph.sources_for(node.id);
+        assert_eq!(sources.len(), 1, "each spine block records exactly one package member source");
+        assert!(
+            matches!(&sources[0].kind, SourceKind::PackageMember { path } if path == "OEBPS/chapter.xhtml"),
+            "unexpected source: {:?}",
+            sources[0].kind
+        );
+        assert_eq!(sources[0].precision, SemanticStatus::Partial);
+    }
+    assert!(graph.validate().is_valid());
+}
+
+#[cfg(feature = "docx")]
+fn paragraph_with_text<'a>(graph: &'a document_ir::DocumentGraph, text: &str) -> &'a document_ir::BlockNode {
+    graph
+        .blocks
+        .iter()
+        .find(|node| {
+            matches!(&node.block, Block::Paragraph { content }
+                if matches!(content.as_slice(), [Inline::Text { text: authored }] if authored == text))
+        })
+        .expect("shared paragraph")
+}
+
+#[cfg(feature = "docx")]
+#[test]
+fn docx_and_epub_cross_import_share_content_but_not_provenance() {
+    use document_formats::import::docx::import_docx_bytes;
+
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t>Hello EPUB</w:t></w:r></w:p></w:body>
+</w:document>"#;
+    let from_docx = import_docx_bytes("cross.docx", &stored_zip(&[("word/document.xml", document_xml)]))
+        .expect("import docx");
+    let from_epub = import_epub_bytes("cross.epub", &minimal_epub_zip()).expect("import epub");
+
+    let docx_paragraph = paragraph_with_text(&from_docx, "Hello EPUB");
+    let epub_paragraph = paragraph_with_text(&from_epub, "Hello EPUB");
+    assert_eq!(docx_paragraph.block, epub_paragraph.block);
+
+    let docx_sources = from_docx.sources_for(docx_paragraph.id);
+    let epub_sources = from_epub.sources_for(epub_paragraph.id);
+    assert_eq!(docx_sources.len(), 1);
+    assert_eq!(epub_sources.len(), 1);
+    assert!(matches!(&docx_sources[0].kind, SourceKind::XmlRange { path } if path == "word/document.xml"));
+    assert!(
+        matches!(&epub_sources[0].kind, SourceKind::PackageMember { path } if path == "OEBPS/chapter.xhtml")
+    );
+    assert_ne!(docx_sources[0].kind, epub_sources[0].kind);
+}

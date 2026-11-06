@@ -1,5 +1,5 @@
 use document_formats::{export::markdown::export_markdown, import::docx::import_docx_bytes};
-use document_ir::{Block, BreakKind, Inline, SemanticStatus};
+use document_ir::{Block, BreakKind, Inline, SemanticStatus, SourceKind};
 
 fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut archive = Vec::new();
@@ -638,3 +638,49 @@ mod export;
 mod import_xml_extensions;
 mod inspect;
 mod query_gate;
+
+#[test]
+fn docx_import_records_body_xml_part_provenance() {
+    let graph = import_docx_bytes("provenance.docx", &minimal_docx_zip()).expect("import docx");
+    assert!(!graph.blocks.is_empty());
+
+    for node in &graph.blocks {
+        let sources = graph.sources_for(node.id);
+        assert_eq!(sources.len(), 1, "each body block records exactly one XML part source");
+        assert!(
+            matches!(&sources[0].kind, SourceKind::XmlRange { path } if path == "word/document.xml"),
+            "unexpected source: {:?}",
+            sources[0].kind
+        );
+        assert_eq!(sources[0].precision, SemanticStatus::Partial);
+    }
+    assert!(graph.validate().is_valid());
+}
+
+#[test]
+fn docx_import_records_footnotes_part_provenance() {
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:footnoteReference w:id="1"/></w:r></w:p></w:body>
+</w:document>"#;
+    let footnotes_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:footnote w:id="1"><w:p><w:r><w:t>Footnote body.</w:t></w:r></w:p></w:footnote>
+</w:footnotes>"#;
+    let graph = import_docx_bytes("footnotes.docx", &docx_zip_with_footnotes(document_xml, footnotes_xml))
+        .expect("import docx");
+
+    let definition = graph
+        .blocks
+        .iter()
+        .find(|node| matches!(&node.block, Block::Opaque { kind, .. } if kind == "footnote_definition"))
+        .expect("footnote definition block");
+    let sources = graph.sources_for(definition.id);
+    assert_eq!(sources.len(), 1);
+    assert!(
+        matches!(&sources[0].kind, SourceKind::XmlRange { path } if path == "word/footnotes.xml"),
+        "unexpected source: {:?}",
+        sources[0].kind
+    );
+    assert_eq!(sources[0].precision, SemanticStatus::Partial);
+}

@@ -2,7 +2,7 @@ use std::{fs, path::Path};
 
 use acorn_core::{Budget, BudgetTracker};
 use acorn_docx::{OpcPackage, resolve_opc_target};
-use document_ir::{AssetKind, DocumentGraph, DocumentMetadata, LossMarker, SemanticStatus};
+use document_ir::{AssetKind, DocumentGraph, DocumentMetadata, LossMarker, SemanticStatus, SourceKind, SourceRef};
 
 use super::{
     footnotes::{FootnoteCatalog, append_footnote_definitions, footnotes_part_path, parse_footnotes_xml_lossy},
@@ -48,8 +48,12 @@ pub fn import_docx_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
     let footnotes = read_footnote_catalog(&package, &mut ledger);
     let style_defaults = read_style_defaults(&package, &mut ledger);
     let mut graph = xml::new_graph(label);
+    let body_start = graph.blocks.len();
     let referenced_footnotes = xml::parse_document_xml(&xml, &rels, &numbering, &footnotes, &style_defaults, &mut graph)?;
+    attach_xml_part_source(&mut graph, body_start, &document_part);
+    let footnote_start = graph.blocks.len();
     append_footnote_definitions(&mut graph, &footnotes, &referenced_footnotes);
+    attach_xml_part_source(&mut graph, footnote_start, footnotes_part_path());
     hydrate_embedded_assets(&package, &mut ledger, &mut graph);
     hydrate_core_metadata(&package, &mut ledger, &mut graph);
     graph.push_loss(LossMarker {
@@ -58,6 +62,23 @@ pub fn import_docx_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
         status: SemanticStatus::Partial,
     });
     Ok(graph)
+}
+
+/// Record the source XML part for blocks appended since `start`.
+///
+/// DOCX lowering works from a typed XML view without authored byte ranges, so
+/// the provenance is the part path only and stays `Partial`. `XmlRange` is used
+/// instead of `PackageMember` because WordprocessingML body blocks are XML
+/// subtrees, and `PackageMember` is the EPUB spine grouping signal.
+fn attach_xml_part_source(graph: &mut DocumentGraph, start: usize, part_path: &str) {
+    let nodes: Vec<_> = graph.blocks[start..].iter().map(|node| node.id).collect();
+    for node in nodes {
+        graph.attach_source(SourceRef {
+            node,
+            kind: SourceKind::XmlRange { path: part_path.to_string() },
+            precision: SemanticStatus::Partial,
+        });
+    }
 }
 
 fn hydrate_core_metadata(package: &OpcPackage, ledger: &mut BudgetTracker, graph: &mut DocumentGraph) {
