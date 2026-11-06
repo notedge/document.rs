@@ -4,6 +4,26 @@ use crawler_store::RunSpec;
 
 use crate::contract::support::{HOST, TEST_LEASE, assert_both, item};
 
+#[cfg(feature = "yydb")]
+#[test]
+fn y2_compare_exchange_has_a_single_winner() {
+    use yydb::Connection;
+
+    let conn = Connection::open_in_memory().expect("open in memory");
+    let key = "run/cas/only";
+    assert!(conn.compare_exchange(key, None, Some(b"first")).expect("first create"));
+    assert!(
+        !conn.compare_exchange(key, None, Some(b"second")).expect("second create"),
+        "only one creator may win"
+    );
+    assert!(
+        !conn.compare_exchange(key, Some(b"stale"), Some(b"third")).expect("stale value"),
+        "stale value must not overwrite"
+    );
+    assert!(conn.compare_exchange(key, Some(b"first"), Some(b"winner")).expect("matched swap"));
+    assert_eq!(conn.get(key).expect("get").as_deref(), Some(b"winner".as_slice()));
+}
+
 #[test]
 fn y2_claim_has_single_winner_and_is_idempotent_per_worker() {
     assert_both!("y2", TEST_LEASE, |store| {

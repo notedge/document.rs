@@ -4,6 +4,30 @@ use crawler_store::{PagePhase, RunSpec, StoreError};
 
 use crate::contract::support::{HOST, LONG_LEASE, assert_both, item};
 
+#[cfg(feature = "yydb")]
+#[test]
+fn y1_batch_commits_many_keys_and_abort_leaves_none() {
+    use yydb::{Batch, Connection};
+
+    const KEYS: usize = 64;
+    let conn = Connection::open_in_memory().expect("open in memory");
+
+    let mut batch = Batch::new();
+    for index in 0..KEYS {
+        batch.put(format!("scale/{index:03}"), format!("value-{index}"));
+    }
+    batch.commit(&conn).expect("commit batch");
+    let committed = conn.scan_prefix("scale/", None, KEYS).expect("scan committed");
+    assert_eq!(committed.len(), KEYS, "one batch must expose every key");
+
+    let mut aborted = Batch::new();
+    for index in 0..KEYS {
+        aborted.put(format!("ghost/{index:03}"), format!("ghost-{index}"));
+    }
+    aborted.abort();
+    assert!(conn.scan_prefix("ghost/", None, KEYS).expect("scan aborted").is_empty(), "abort must not write");
+}
+
 #[test]
 fn y1_page_commit_is_one_batch_and_abort_leaves_no_ghost() {
     assert_both!("y1", LONG_LEASE, |store| {

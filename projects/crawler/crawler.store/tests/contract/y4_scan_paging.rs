@@ -8,6 +8,39 @@ use crate::contract::support::{HOST, LONG_LEASE, assert_both, item};
 
 const ITEMS: usize = 20;
 
+#[cfg(feature = "yydb")]
+#[test]
+fn y4_prefix_scan_pages_ten_thousand_records() {
+    use yydb::{Batch, Connection};
+
+    const KEYS: usize = 10_000;
+    const PAGE: usize = 128;
+    let conn = Connection::open_in_memory().expect("open in memory");
+    let mut batch = Batch::new();
+    for index in 0..KEYS {
+        batch.put(format!("run/scale/frontier/{index:05}"), format!("{index}"));
+    }
+    batch.commit(&conn).expect("commit batch");
+
+    let mut seen = BTreeSet::new();
+    let mut after: Option<String> = None;
+    loop {
+        let page = conn.scan_prefix("run/scale/frontier/", after.as_deref(), PAGE).expect("scan page");
+        assert!(page.len() <= PAGE, "page must respect the limit");
+        let Some(last_key) = page.last().map(|(key, _)| key.clone()) else {
+            break;
+        };
+        for (key, _) in page {
+            assert!(seen.insert(key), "paged scan must not repeat a record");
+        }
+        after = Some(last_key);
+        if seen.len() == KEYS {
+            break;
+        }
+    }
+    assert_eq!(seen.len(), KEYS, "paged scan must recover every record");
+}
+
 #[test]
 fn y4_paged_scan_claims_every_item_exactly_once() {
     assert_both!("y4", LONG_LEASE, |store| {
