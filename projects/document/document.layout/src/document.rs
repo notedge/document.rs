@@ -561,6 +561,9 @@ struct PageBuilder<'a> {
     asset_sources: HashMap<AssetId, String>,
     /// Intrinsic width over height for assets whose bytes were materialized.
     asset_aspects: HashMap<AssetId, f64>,
+    /// Page index and zero-based heading level of every heading that started a
+    /// section, in document order, so chrome can switch per section.
+    section_starts: Vec<(usize, usize)>,
     /// Top edge of the next line box, in page coordinates.
     cursor: f64,
     /// Degradations the pass applied, such as a math glyph without an outline.
@@ -583,6 +586,7 @@ impl<'a> PageBuilder<'a> {
             diagrams,
             asset_sources,
             asset_aspects,
+            section_starts: Vec::new(),
             cursor: hint.margin.top,
             diagnostics: Vec::new(),
         }
@@ -695,6 +699,7 @@ impl<'a> PageBuilder<'a> {
         self.pad(tokens.heading_gap_before[index]);
         // Keep the heading on the same page as its first body line.
         self.ensure_space(line_box * 2.0 + self.line_box(base));
+        self.section_starts.push((self.pages.len().saturating_sub(1), index));
         let face = if tokens.heading_bold { TextFace { family: SERIF, style: FontStyle::Bold } } else { BODY_FACE };
         let atoms = self.compose_atoms(title, size, indent, face, ImageMode::AltText);
         self.emit_inline_lines_aligned(atoms, size, indent, tokens.heading_align);
@@ -1405,11 +1410,36 @@ impl<'a> PageBuilder<'a> {
         self.pad(size * 0.5);
     }
 
+    /// Resolve a chrome header source into the text one page paints.
+    ///
+    /// `Title` prefers the document metadata title and falls back to the first
+    /// level-1 section title, so a template that switches headers per section
+    /// never has to invent the document title itself.
+    fn chrome_header_text(&self, source: ChromeHeader, graph: &DocumentGraph) -> Option<String> {
+        match source {
+            ChromeHeader::None => None,
+            ChromeHeader::Literal(text) => Some(text.to_string()),
+            ChromeHeader::Title => graph.metadata.title.as_deref().map(str::trim).filter(|title| !title.is_empty()).map(str::to_string).or_else(
+                || {
+                    graph.blocks.iter().find_map(|node| match &node.block {
+                        Block::Section { level: 1, title, .. } => {
+                            let text = title.iter().map(Inline::plain_text).collect::<String>();
+                            (!text.trim().is_empty()).then_some(text)
+                        }
+                        _ => None,
+                    })
+                },
+            ),
+        }
+    }
+
     /// Add the running header and folio to every page after the first.
     ///
     /// Chrome lives inside the page margins, so it never moves body text. A
     /// theme that turns chrome off, such as the legacy traditional preset, gets
-    /// no extra runs and keeps its old page count.
+    /// no extra runs and keeps its old page count. When a template declares
+    /// per-level section chrome, the entry of the deepest heading that started
+    /// on or before a page replaces the top-level header and folio for that page.
     fn emit_page_chrome(&mut self, graph: &DocumentGraph) {
         let tokens = self.hint.style;
         if !tokens.chrome {
@@ -1419,26 +1449,22 @@ impl<'a> PageBuilder<'a> {
         let page_height = self.hint.page_height;
         let left = self.hint.margin.left;
         let right = page_width - self.hint.margin.right;
-        let header = match self.hint.chrome.header {
-            ChromeHeader::None => None,
-            ChromeHeader::Literal(text) => Some(text.to_string()),
-            ChromeHeader::Title => {
-                graph.metadata.title.as_deref().map(str::trim).filter(|title| !title.is_empty()).map(str::to_string).or_else(
-                    || {
-                        graph.blocks.iter().find_map(|node| match &node.block {
-                            Block::Section { level: 1, title, .. } => {
-                                let text = title.iter().map(Inline::plain_text).collect::<String>();
-                                (!text.trim().is_empty()).then_some(text)
-                            }
-                            _ => None,
-                        })
-                    },
-                )
-            }
-        };
+        let base_header = self.chrome_header_text(self.hint.chrome.header, graph);
+        let base_folio = self.hint.chrome.folio;
         let start = self.hint.chrome.start_page.saturating_sub(1);
-        let folio = self.hint.chrome.folio;
+        let mut section: Option<usize> = None;
+        let mut next_section = 0usize;
         for index in start..self.pages.len() {
+            while next_section < self.section_starts.len() && self.section_starts[next_section].0 <= index {
+                section = Some(self.section_starts[next_section].1);
+                next_section += 1;
+            }
+            let override_ = section.and_then(|level| self.hint.chrome.sections[level]);
+            let header = match override_.and_then(|entry| entry.header) {
+                Some(source) => self.chrome_header_text(source, graph),
+                None => base_header.clone(),
+            };
+            let folio = override_.and_then(|entry| entry.folio).unwrap_or(base_folio);
             if let Some(title) = header.as_deref() {
                 let width = self.text.measure(title, tokens.header_size, BODY_FACE);
                 let x = match tokens.header_align {
@@ -1977,7 +2003,7 @@ fn wrap_text(widths: &TextMeasure<'_>, text: &str, size: f64, max_width: f64) ->
 #[cfg(test)]
 mod kerning_tests {
     use super::*;
-    use crate::hint::ChromeHint;
+    use crate::hint::{ChromeHint, SectionChrome};
 
     /// Body bytes are host-owned, so read the VuTeX pack beside this
     /// repository, or the directory named by `VUTEX_FONT_DIR`. A missing pack
@@ -2085,11 +2111,7 @@ mod kerning_tests {
     #[test]
     fn template_section_break_starts_the_next_heading_on_a_new_page() {
         fn section(level: u8, title: &str) -> Block {
-            Block::Section {
-                level,
-                title: vec![Inline::Text { text: title.to_string() }],
-                children: Vec::new(),
-            }
+            Block::Section { level, title: vec![Inline::Text { text: title.to_string() }], children: Vec::new() }
         }
         let metrics = metrics();
         let mut graph = DocumentGraph::new(document_ir::DocumentId(11));
@@ -2106,17 +2128,11 @@ mod kerning_tests {
         let (broken_plan, _) = layout_with_metrics(&graph, &broken, &Diagrams::new(), &metrics);
         assert_eq!(broken_plan.pages.len(), 2, "the second H1 opens a new page");
         assert!(
-            broken_plan.pages[0]
-                .items
-                .iter()
-                .any(|item| matches!(item, LayoutItem::TextRun(run) if run.text == "One")),
+            broken_plan.pages[0].items.iter().any(|item| matches!(item, LayoutItem::TextRun(run) if run.text == "One")),
             "the first section keeps the opening page"
         );
         assert!(
-            broken_plan.pages[1]
-                .items
-                .iter()
-                .any(|item| matches!(item, LayoutItem::TextRun(run) if run.text == "Two")),
+            broken_plan.pages[1].items.iter().any(|item| matches!(item, LayoutItem::TextRun(run) if run.text == "Two")),
             "the second section starts the new page"
         );
     }
@@ -2128,7 +2144,12 @@ mod kerning_tests {
         graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Body".to_string() }] });
 
         let mut hint = LayoutHint::a4();
-        hint.chrome = ChromeHint { header: ChromeHeader::Literal("ACME REPORT"), folio: false, start_page: 1 };
+        hint.chrome = ChromeHint {
+            header: ChromeHeader::Literal("ACME REPORT"),
+            folio: false,
+            start_page: 1,
+            sections: [None; 4],
+        };
         let (plan, _) = layout_with_metrics(&graph, &hint, &Diagrams::new(), &metrics);
 
         let runs: Vec<&TextRun> = plan.pages[0]
@@ -2144,6 +2165,51 @@ mod kerning_tests {
             "the template header paints on page one"
         );
         assert!(!runs.iter().any(|run| run.artifact && run.numeric), "folio is off for this template");
+    }
+
+    #[test]
+    fn template_section_chrome_switches_header_and_folio_per_heading_level() {
+        fn section(level: u8, title: &str) -> Block {
+            Block::Section { level, title: vec![Inline::Text { text: title.to_string() }], children: Vec::new() }
+        }
+        let metrics = metrics();
+        let mut graph = DocumentGraph::new(document_ir::DocumentId(14));
+        graph.push_block(section(1, "One"));
+        graph.push_block(section(2, "Sub"));
+        graph.push_block(section(1, "Two"));
+
+        let mut hint = LayoutHint::a4();
+        hint.section_breaks = [true, true, false, false];
+        hint.chrome = ChromeHint {
+            header: ChromeHeader::Literal("TOP"),
+            folio: true,
+            start_page: 1,
+            sections: [None; 4],
+        };
+        hint.chrome.sections[0] =
+            Some(SectionChrome { header: Some(ChromeHeader::Literal("PART ONE")), folio: Some(false) });
+        hint.chrome.sections[1] =
+            Some(SectionChrome { header: Some(ChromeHeader::Literal("SUBSECTION")), folio: Some(true) });
+
+        let (plan, _) = layout_with_metrics(&graph, &hint, &Diagrams::new(), &metrics);
+        assert_eq!(plan.pages.len(), 3, "each forced heading opens a page");
+        let chrome = |page: usize| -> Vec<(String, bool)> {
+            plan.pages[page]
+                .items
+                .iter()
+                .filter_map(|item| match item {
+                    LayoutItem::TextRun(run) if run.artifact => Some((run.text.clone(), run.numeric)),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(chrome(0), vec![("PART ONE".to_string(), false)], "H1 chrome paints without a folio");
+        assert_eq!(
+            chrome(1),
+            vec![("SUBSECTION".to_string(), false), ("2".to_string(), true)],
+            "H2 chrome replaces the H1 entry and turns the folio back on"
+        );
+        assert_eq!(chrome(2), vec![("PART ONE".to_string(), false)], "the next H1 returns to the H1 entry");
     }
 
     #[test]

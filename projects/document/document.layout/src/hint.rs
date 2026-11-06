@@ -16,6 +16,20 @@ pub enum ChromeHeader {
     Literal(&'static str),
 }
 
+/// Chrome a template switches on when a heading of one level starts.
+///
+/// Entries are indexed by heading level, H1 to H4. The entry of the deepest
+/// heading that has started on or before a page wins until a heading of another
+/// level with an entry takes over, so a template can give H1 sections one
+/// header and their H2 subsections another without restating theme tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SectionChrome {
+    /// Header source for pages in this section, or `None` to keep the top-level one.
+    pub header: Option<ChromeHeader>,
+    /// Whether pages in this section carry a folio, or `None` to keep the top-level setting.
+    pub folio: Option<bool>,
+}
+
 /// Template overrides for the page chrome the theme enables.
 ///
 /// The theme decides whether chrome exists and how it looks. This hint only
@@ -29,12 +43,14 @@ pub struct ChromeHint {
     pub folio: bool,
     /// 1-based page index where chrome starts; earlier pages stay bare.
     pub start_page: usize,
+    /// Per-level overrides, indexed H1 to H4; `None` keeps the top-level chrome.
+    pub sections: [Option<SectionChrome>; 4],
 }
 
 impl ChromeHint {
     /// Theme behaviour: document title and folio from page two on.
     pub const fn themed() -> Self {
-        Self { header: ChromeHeader::Title, folio: true, start_page: 2 }
+        Self { header: ChromeHeader::Title, folio: true, start_page: 2, sections: [None; 4] }
     }
 }
 
