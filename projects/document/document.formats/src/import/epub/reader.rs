@@ -28,7 +28,9 @@ pub fn import_epub_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
 
     let package = OcfPackage::open(label.to_string(), bytes.to_vec()).map_err(map_ocf_error)?;
     let mut ledger = BudgetTracker::new(Budget::default());
-    let opf = package.read_opf(&mut ledger).map_err(map_ocf_error)?;
+    let opf_xml = package.read_member(package.root_opf_path(), &mut ledger).map_err(map_ocf_error)?;
+    let opf =
+        acorn_epub::parse_opf_xml(package.root_opf_path(), &opf_xml).map_err(|error| FormatError::parse("epub", error))?;
 
     let mut graph = DocumentGraph::new(document_id_for(label));
     graph.metadata = DocumentMetadata {
@@ -37,6 +39,17 @@ pub fn import_epub_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
         authors: opf.metadata.creators.clone(),
         tags: Vec::new(),
     };
+    let unmapped_metadata = unmapped_metadata_fields(&opf_xml);
+    if !unmapped_metadata.is_empty() {
+        graph.push_loss(LossMarker {
+            code: "import.epub.metadata_unmapped".into(),
+            message: format!(
+                "OPF metadata outside `title`, `language` and `creator` is not carried into `notedown-ir`: `{}`",
+                unmapped_metadata.join("`, `")
+            ),
+            status: SemanticStatus::Partial,
+        });
+    }
 
     let nav_manifest_id = find_nav_manifest_item(&opf).map(|item| item.id.clone());
     if let Some(cover_item) = find_cover_manifest_item(&opf) {
@@ -119,6 +132,45 @@ pub fn import_epub_bytes(label: &str, bytes: &[u8]) -> Result<DocumentGraph, For
 
 fn looks_like_zip(bytes: &[u8]) -> bool {
     bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06")
+}
+
+/// Collect OPF metadata elements the IR does not model.
+///
+/// Acorn's `OpfMetadata` exposes only `title`, `language` and `creator`, so the
+/// reader reports the remaining elements by name instead of letting them
+/// disappear silently. A `<meta>` element is reported through its `property`
+/// or `name` attribute, which is how EPUB3 metadata such as
+/// `dcterms:modified` is written.
+fn unmapped_metadata_fields(opf_xml: &[u8]) -> Vec<String> {
+    let Ok(value) = acorn_epub::parse_xml_bytes(opf_xml)
+    else {
+        return Vec::new();
+    };
+    let Ok(root) = acorn_epub::document_root(&value)
+    else {
+        return Vec::new();
+    };
+    let Some(metadata) = acorn_epub::elements_by_local_name(root, "metadata").into_iter().next()
+    else {
+        return Vec::new();
+    };
+
+    let mut fields = Vec::new();
+    for child in metadata.children.iter().filter_map(oak_xml::ast::XmlValue::as_element) {
+        let name = if acorn_epub::element_is(child, "meta") {
+            acorn_epub::attribute_value(child, "property")
+                .or_else(|| acorn_epub::attribute_value(child, "name"))
+                .unwrap_or_else(|| "meta".to_string())
+        }
+        else {
+            child.name.rsplit_once(':').map(|(_, local)| local).unwrap_or(&child.name).to_string()
+        };
+        if matches!(name.as_str(), "title" | "language" | "creator") || fields.contains(&name) {
+            continue;
+        }
+        fields.push(name);
+    }
+    fields
 }
 
 fn document_id_for(label: &str) -> DocumentId {

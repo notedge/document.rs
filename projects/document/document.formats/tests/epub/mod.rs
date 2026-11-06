@@ -111,6 +111,60 @@ fn epub_import_maps_metadata_and_spine_xhtml() {
     assert!(markdown.contains("Hello EPUB"));
 }
 
+fn epub_with_extended_metadata_zip() -> Vec<u8> {
+    let container = br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#;
+    let opf = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Metadata Book</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="uid">urn:uuid:1a2b3c4d</dc:identifier>
+    <dc:publisher>Example Press</dc:publisher>
+    <dc:subject>Reference</dc:subject>
+    <meta property="dcterms:modified">2026-11-06T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+    stored_zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container),
+        ("OEBPS/content.opf", opf),
+        (
+            "OEBPS/chapter.xhtml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><p>Body text</p></body>
+</html>"#,
+        ),
+    ])
+}
+
+#[test]
+fn epub_import_reports_metadata_it_cannot_model() {
+    let graph = import_epub_bytes("metadata.epub", &epub_with_extended_metadata_zip()).expect("import epub");
+    let loss = graph.coverage.loss.iter().find(|loss| loss.code == "import.epub.metadata_unmapped").expect("metadata loss");
+    assert_eq!(loss.status, document_ir::SemanticStatus::Partial);
+    for field in ["identifier", "publisher", "subject", "dcterms:modified"] {
+        assert!(loss.message.contains(field), "{}", loss.message);
+    }
+}
+
+#[test]
+fn epub_import_keeps_modelled_metadata_loss_free() {
+    let graph = import_epub_bytes("book.epub", &minimal_epub_zip()).expect("import epub");
+    assert!(!graph.coverage.loss.iter().any(|loss| loss.code == "import.epub.metadata_unmapped"));
+}
+
 fn epub_with_nav_zip() -> Vec<u8> {
     let container = br#"<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
