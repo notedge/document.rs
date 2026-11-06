@@ -6,6 +6,8 @@ mod chart_block;
 mod diagram_fidelity;
 #[cfg(all(feature = "markdown", feature = "html"))]
 mod diagram_scene;
+#[cfg(all(feature = "epub", feature = "html", feature = "markdown"))]
+mod epub_html_roundtrip;
 #[cfg(all(feature = "markdown", feature = "docx"))]
 mod markdown_to_docx;
 #[cfg(all(feature = "markdown", feature = "epub"))]

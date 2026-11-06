@@ -90,7 +90,12 @@ pub fn export_html_with_diagrams(
     let mut out = String::new();
     out.push_str(r#"<article class="notedown-document">"#);
     if let Some(title) = &graph.metadata.title {
-        out.push_str("<header><h1>");
+        // The title is document metadata, not body content. The marker lets the
+        // HTML importer keep it in `metadata.title` instead of lowering the
+        // heading into the body, which used to duplicate it in round trips.
+        out.push_str(r#"<header class="notedown-document-title" data-document-title=""#);
+        escape_attribute(&mut out, title);
+        out.push_str(r#""><h1>"#);
         escape_text(&mut out, title);
         out.push_str("</h1></header>");
     }

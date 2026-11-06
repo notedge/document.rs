@@ -89,6 +89,18 @@ pub fn import_html_with_links(label: &str, text: &str) -> Result<HtmlImport, For
             graph.metadata.title = Some(title);
         }
     }
+    if graph.metadata.title.is_none() {
+        // A document title exported as a marked header stays metadata. Its
+        // heading must not also become a body section, or a round trip repeats
+        // the title as the first body block.
+        if let Some(header) = document.nodes.iter().filter_map(as_element).find_map(find_document_title_header) {
+            let title = attribute(header, "data-document-title").unwrap_or_default().trim().to_string();
+            let title = if title.is_empty() { text_content(header).trim().to_string() } else { title };
+            if !title.is_empty() {
+                graph.metadata.title = Some(title);
+            }
+        }
+    }
     let base_href = document
         .nodes
         .iter()
@@ -191,6 +203,9 @@ fn lower_children(children: &[HtmlNode], graph: &mut DocumentGraph, source: &str
     let mut pending_span: Option<std::ops::Range<usize>> = None;
     for child in children {
         match child {
+            HtmlNode::Element(element) if is_document_title_header(element) => {
+                flush_inline_run(&mut result, &mut pending, &mut pending_span);
+            }
             HtmlNode::Element(element) if is_block_element(element) || is_display_math(element) => {
                 flush_inline_run(&mut result, &mut pending, &mut pending_span);
                 result.extend(lower_blocks(element, graph, source));
@@ -261,6 +276,17 @@ fn find_element<'a>(element: &'a Element, tag: &str) -> Option<&'a Element> {
         return Some(element);
     }
     element.children.iter().filter_map(as_element).find_map(|child| find_element(child, tag))
+}
+
+fn is_document_title_header(element: &Element) -> bool {
+    element.tag_name.eq_ignore_ascii_case("header") && attribute(element, "data-document-title").is_some()
+}
+
+fn find_document_title_header(element: &Element) -> Option<&Element> {
+    if is_document_title_header(element) {
+        return Some(element);
+    }
+    element.children.iter().filter_map(as_element).find_map(find_document_title_header)
 }
 
 fn collect_unsupported_losses(document: &HtmlDocument, graph: &mut DocumentGraph) {
