@@ -428,6 +428,20 @@ fn docx_export_writes_grid_span_and_vertical_merge() {
     let continuation = exported_xml.find("<w:vMerge/>").expect("continuation cell");
     let trailing = exported_xml.find("R2C2").expect("second row cell content");
     assert!(continuation < trailing, "the continuation slot must precede the row's own cell: {exported_xml}");
+    // Reopening rebuilds the same spans: `gridSpan` becomes `colspan`, and a
+    // continuation cell extends the origin cell's `rowspan` instead of adding a
+    // fifth cell to the table.
+    let round = import_docx_bytes("spans.docx", &exported).expect("re-import spanned docx");
+    let Block::Table { rows, .. } = &round.blocks[0].block
+    else {
+        panic!("expected a table, got {:#?}", round.blocks[0].block);
+    };
+    assert_eq!(rows.len(), 3, "{rows:#?}");
+    assert_eq!(rows[0].cells.len(), 1, "{rows:#?}");
+    assert_eq!((rows[0].cells[0].colspan, rows[0].cells[0].rowspan), (2, 1));
+    assert_eq!(rows[1].cells.len(), 2, "{rows:#?}");
+    assert_eq!((rows[1].cells[0].colspan, rows[1].cells[0].rowspan), (1, 2));
+    assert_eq!(rows[2].cells.len(), 1, "{rows:#?}");
 }
 
 #[test]

@@ -188,6 +188,48 @@ fn points_from_twips(value: Option<String>) -> Option<f64> {
     value?.trim().parse::<f64>().ok().map(|twips| twips / 20.0).filter(|points| *points > 0.0)
 }
 
+/// Vertical merge state of a `w:tc`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VerticalMerge {
+    None,
+    Restart,
+    Continue,
+}
+
+fn cell_vertical_merge(cell: &XmlElement) -> VerticalMerge {
+    let Some(properties) = child_element(cell, "tcPr")
+    else {
+        return VerticalMerge::None;
+    };
+    let Some(merge) = child_element(properties, "vMerge")
+    else {
+        return VerticalMerge::None;
+    };
+    match attribute_value(merge, "val").as_deref() {
+        Some(value) if value.eq_ignore_ascii_case("restart") => VerticalMerge::Restart,
+        _ => VerticalMerge::Continue,
+    }
+}
+
+fn cell_grid_span(cell: &XmlElement) -> u32 {
+    child_element(cell, "tcPr")
+        .and_then(|properties| child_element(properties, "gridSpan"))
+        .and_then(|span| u32_attribute(span, "val"))
+        .filter(|span| *span > 0)
+        .unwrap_or(1)
+}
+
+/// Marks `column..column + colspan` as covered by `origin` in the next row.
+fn mark_open(open: &mut Vec<Option<(usize, usize)>>, column: usize, colspan: usize, origin: Option<(usize, usize)>) {
+    let width = column + colspan;
+    if open.len() < width {
+        open.resize(width, None);
+    }
+    for slot in &mut open[column..width] {
+        *slot = origin;
+    }
+}
+
 fn parse_table_element(
     table_element: &XmlElement,
     rels: &HashMap<String, String>,
@@ -196,23 +238,45 @@ fn parse_table_element(
     referenced_footnotes: &mut HashSet<u32>,
 ) -> TableState {
     let mut table = TableState::default();
+    // Grid columns whose `rowspan` the previous row still covers. A
+    // continuation cell extends that origin cell instead of becoming its own.
+    let mut open: Vec<Option<(usize, usize)>> = Vec::new();
     for row in table_element.children.iter().filter_map(XmlValue::as_element).filter(|child| element_is(child, "tr")) {
-        let mut current_row = Vec::new();
+        let mut current_row: Vec<TableCell> = Vec::new();
+        let mut next_open: Vec<Option<(usize, usize)>> = Vec::new();
+        let mut column = 0usize;
         for cell in row.children.iter().filter_map(XmlValue::as_element).filter(|child| element_is(child, "tc")) {
-            let mut current_cell = Vec::new();
-            for paragraph in cell.children.iter().filter_map(XmlValue::as_element).filter(|child| element_is(child, "p")) {
-                let paragraph = parse_paragraph_element(paragraph, rels, graph, footnotes, referenced_footnotes);
-                let mut content = paragraph_inlines(&paragraph).unwrap_or_default();
-                content.extend(math_block_inlines(&paragraph));
-                if !content.is_empty() {
-                    append_cell_paragraph(&mut current_cell, &content);
-                }
+            let colspan = cell_grid_span(cell) as usize;
+            let merge = cell_vertical_merge(cell);
+            let origin = match merge {
+                VerticalMerge::Continue => open.get(column).copied().flatten(),
+                VerticalMerge::None | VerticalMerge::Restart => None,
+            };
+            if let Some((origin_row, origin_cell)) = origin {
+                table.rows[origin_row][origin_cell].rowspan += 1;
+                mark_open(&mut next_open, column, colspan, Some((origin_row, origin_cell)));
             }
-            current_row.push(TableCell { content: current_cell, colspan: 1, rowspan: 1 });
+            else {
+                let mut current_cell = Vec::new();
+                for paragraph in cell.children.iter().filter_map(XmlValue::as_element).filter(|child| element_is(child, "p")) {
+                    let paragraph = parse_paragraph_element(paragraph, rels, graph, footnotes, referenced_footnotes);
+                    let mut content = paragraph_inlines(&paragraph).unwrap_or_default();
+                    content.extend(math_block_inlines(&paragraph));
+                    if !content.is_empty() {
+                        append_cell_paragraph(&mut current_cell, &content);
+                    }
+                }
+                let cell_index = current_row.len();
+                current_row.push(TableCell { content: current_cell, colspan: colspan as u32, rowspan: 1 });
+                let origin = (merge == VerticalMerge::Restart).then_some((table.rows.len(), cell_index));
+                mark_open(&mut next_open, column, colspan, origin);
+            }
+            column += colspan;
         }
         if !current_row.is_empty() {
             table.rows.push(current_row);
         }
+        open = next_open;
     }
     table
 }
