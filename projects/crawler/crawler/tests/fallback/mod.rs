@@ -90,6 +90,7 @@ fn snapshot_for(url: &Url, document_html: &str) -> BrowserSnapshot {
         browser_engine: "fixture-chromium".into(),
         profile_id: "fixture".into(),
         challenge_state: PageChallengeState::Normal,
+        boundary: Default::default(),
     }
 }
 
@@ -284,6 +285,74 @@ fn worker_413_reports_provider_code() {
     assert!(failure.3.contains("413"));
 
     println!("worker_413: diagnostic={} provider_code={:?} reason={}", failure.1, failure.2, failure.3);
+}
+
+fn browser_crash_error() -> crawler::types::CrawlError {
+    use boost_diagnostic::{Diagnostic, DiagnosticSeverity, Message};
+
+    crawler::types::CrawlError::from(Diagnostic::new(
+        crawler::types::diagnostics::code(crawler::types::diagnostics::BROWSER_UNAVAILABLE),
+        DiagnosticSeverity::Error,
+        crawler::types::diagnostics::origin_browser(),
+        Message::new("crawler.diagnostic.browserCrash").with_fallback("browser process crashed"),
+    ))
+}
+
+#[test]
+fn browser_crash_fails_closed_and_restart_recovers_once() {
+    let url = Url::parse("https://example.test/js-shell.html").expect("url");
+
+    let mut crashed = FixtureBrowserProvider::new();
+    crashed.insert_failure(&url, browser_crash_error());
+    let options = CrawlOptions {
+        browser: Some(&crashed),
+        browser_fallback: BrowserFallbackPolicy::OnFetchFailure,
+        ..CrawlOptions::default()
+    };
+    let first = run_crawl_with_options(request_for(&url), html_transport(&url, JS_SHELL), &[&HtmlExtractor], options)
+        .expect("crashed crawl");
+
+    assert_eq!(first.report.committed, 0, "a crashed browser must not commit a page");
+    assert_eq!(first.report.failed, 1, "a crashed browser fails closed without retrying");
+    assert_eq!(fallback_count(&first), 0, "a crashed browser must not report a successful fallback");
+    assert_eq!(
+        first.report.events.events().iter().filter(|event| matches!(event, CrawlEvent::Committed { .. })).count(),
+        0,
+        "a crashed browser must not start a page transaction"
+    );
+    let failures =
+        first.report.events.events().iter().filter(|event| matches!(event, CrawlEvent::BrowserFallbackFailed { .. })).count();
+    assert_eq!(failures, 1, "crash is terminal for the item, not retried in place");
+    let failure = first
+        .report
+        .events
+        .events()
+        .iter()
+        .find_map(|event| match event {
+            CrawlEvent::BrowserFallbackFailed { diagnostic_code, reason, .. } => Some((diagnostic_code, reason)),
+            _ => None,
+        })
+        .expect("browser_fallback_failed event");
+    assert_eq!(failure.0.as_str(), "crawler.browser.unavailable");
+    assert!(failure.1.contains("browser process crashed"));
+
+    let mut restarted = FixtureBrowserProvider::new();
+    restarted.insert(snapshot_for(&url, RENDERED_ARTICLE));
+    let options = CrawlOptions {
+        browser: Some(&restarted),
+        browser_fallback: BrowserFallbackPolicy::OnFetchFailure,
+        ..CrawlOptions::default()
+    };
+    let second = run_crawl_with_options(request_for(&url), html_transport(&url, JS_SHELL), &[&HtmlExtractor], options)
+        .expect("restarted crawl");
+
+    assert_eq!(second.report.committed, 1, "a healthy restart commits the page exactly once");
+    assert_eq!(second.artifacts.len(), 1);
+    assert_eq!(
+        second.report.events.events().iter().filter(|event| matches!(event, CrawlEvent::Committed { .. })).count(),
+        1,
+        "restart must not replay the page transaction"
+    );
 }
 
 fn crawler_fetch_artifact(url: &Url, html: &str) -> FetchArtifact {

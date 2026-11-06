@@ -54,6 +54,7 @@ fn resume_rejects_browser_fallback_strategy_mismatch() {
         browser_engine: "fixture".into(),
         profile_id: "test".into(),
         challenge_state: PageChallengeState::ChallengeRequired,
+        boundary: Default::default(),
     });
     let request = CrawlRequest::from_seed(seed.as_str()).expect("seed");
     let html = HtmlExtractor;
@@ -254,6 +255,7 @@ fn browser_fallback_commits_when_http_fetch_missing() {
         browser_engine: "fixture".into(),
         profile_id: "test".into(),
         challenge_state: PageChallengeState::Normal,
+        boundary: Default::default(),
     });
 
     let request = CrawlRequest::from_seed("https://example.com/js-page").expect("seed");
@@ -287,6 +289,7 @@ fn browser_fallback_skips_challenge_page_when_policy_allows() {
         browser_engine: "fixture".into(),
         profile_id: "test".into(),
         challenge_state: PageChallengeState::LoginRequired,
+        boundary: Default::default(),
     });
 
     let request = CrawlRequest::from_seed("https://example.com/private").expect("seed");
@@ -325,6 +328,7 @@ fn browser_fallback_fails_challenge_page_when_policy_stops() {
         browser_engine: "fixture".into(),
         profile_id: "test".into(),
         challenge_state: PageChallengeState::LoginRequired,
+        boundary: Default::default(),
     });
 
     let request = CrawlRequest::from_seed("https://example.com/private").expect("seed");
@@ -364,6 +368,7 @@ fn browser_fallback_pauses_and_resumes_after_operator_snapshot() {
         browser_engine: "fixture".into(),
         profile_id: "test".into(),
         challenge_state: PageChallengeState::ChallengeRequired,
+        boundary: Default::default(),
     });
 
     let request = CrawlRequest::from_seed(seed.as_str()).expect("seed");
@@ -392,6 +397,7 @@ fn browser_fallback_pauses_and_resumes_after_operator_snapshot() {
         browser_engine: "fixture".into(),
         profile_id: "test".into(),
         challenge_state: PageChallengeState::Normal,
+        boundary: Default::default(),
     });
 
     let resumed = resume_crawl_from_store(

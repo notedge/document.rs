@@ -100,6 +100,7 @@ impl crate::provider::BrowserProvider for HttpBrowserProvider {
             );
             CrawlError::from(diag)
         })?;
+        crate::provider::validate_browser_boundary(&snapshot)?;
         Ok(snapshot)
     }
 }

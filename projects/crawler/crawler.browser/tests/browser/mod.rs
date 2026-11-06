@@ -1,5 +1,7 @@
 //! Browser provider stack smoke.
 
+mod boundaries;
+
 use crawler_browser::{BrowserProvider, BrowserProviderStack, FixtureBrowserProvider, HttpBrowserProvider};
 use crawler_types::{BrowserSnapshot, PageChallengeState};
 use url::Url;
@@ -15,6 +17,7 @@ fn fixture_provider_wins_before_http_worker() {
         browser_engine: "fixture".into(),
         profile_id: "test".into(),
         challenge_state: PageChallengeState::Normal,
+        boundary: Default::default(),
     });
     let http = HttpBrowserProvider::new(Url::parse("http://127.0.0.1:1/unreachable").expect("url"));
     let stack = BrowserProviderStack::new().with_fixture(fixture).with_http(http);

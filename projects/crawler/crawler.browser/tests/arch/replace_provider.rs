@@ -20,6 +20,7 @@ impl BrowserProvider for StaticProvider {
             browser_engine: "static".into(),
             profile_id: "replace".into(),
             challenge_state: PageChallengeState::Normal,
+            boundary: Default::default(),
         })
     }
 }

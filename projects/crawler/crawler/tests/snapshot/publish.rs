@@ -17,6 +17,7 @@ fn save_snapshot_json_publishes_atomically() {
         browser_engine: "fixture".into(),
         profile_id: "test".into(),
         challenge_state: PageChallengeState::Normal,
+        boundary: Default::default(),
     };
 
     save_snapshot_json(&path, &snapshot).expect("save snapshot");

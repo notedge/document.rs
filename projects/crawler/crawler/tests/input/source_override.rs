@@ -69,6 +69,7 @@ fn source_url_override_never_touches_snapshots() {
             browser_engine: "fixture".into(),
             profile_id: "test".into(),
             challenge_state: crawler_types::PageChallengeState::Normal,
+            boundary: Default::default(),
         })
         .expect("json"),
     )

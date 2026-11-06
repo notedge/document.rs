@@ -15,6 +15,7 @@ fn snapshot(state: PageChallengeState) -> BrowserSnapshot {
         browser_engine: "fixture".into(),
         profile_id: "test".into(),
         challenge_state: state,
+        boundary: Default::default(),
     }
 }
 

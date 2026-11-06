@@ -13,6 +13,7 @@ fn snapshot_produces_html_artifact() {
         browser_engine: "fixture".into(),
         profile_id: "test".into(),
         challenge_state: PageChallengeState::Normal,
+        boundary: Default::default(),
     };
     let artifact = snapshot_to_fetch_artifact(&snapshot);
     assert_eq!(artifact.content_type.as_deref(), Some("text/html"));

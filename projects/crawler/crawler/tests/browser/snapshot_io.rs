@@ -22,6 +22,7 @@ fn load_fixture_provider_reads_snapshot_directory() {
             browser_engine: "fixture".into(),
             profile_id: "test".into(),
             challenge_state: PageChallengeState::Normal,
+            boundary: Default::default(),
         })
         .expect("json"),
     )
@@ -49,6 +50,7 @@ fn load_fixture_provider_from_dirs_later_dir_overrides_url() {
         browser_engine: "fixture".into(),
         profile_id: "first".into(),
         challenge_state: PageChallengeState::Normal,
+        boundary: Default::default(),
     };
     let second_snapshot = BrowserSnapshot {
         requested_url: url.clone(),
@@ -58,6 +60,7 @@ fn load_fixture_provider_from_dirs_later_dir_overrides_url() {
         browser_engine: "fixture".into(),
         profile_id: "second".into(),
         challenge_state: PageChallengeState::Normal,
+        boundary: Default::default(),
     };
     save_snapshot_json(first.join("page.snapshot.json"), &first_snapshot).expect("write first");
     save_snapshot_json(second.join("page.snapshot.json"), &second_snapshot).expect("write second");

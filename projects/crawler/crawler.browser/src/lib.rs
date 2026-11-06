@@ -15,7 +15,7 @@ mod stack;
 
 pub use extract::{ChallengeBlocked, run_extract_from_snapshot};
 pub use http::{DEFAULT_SNAPSHOT_DOCUMENT_BUDGET_BYTES, DEFAULT_SNAPSHOT_TRANSFER_BUDGET_BYTES, HttpBrowserProvider};
-pub use provider::{BrowserProvider, FixtureBrowserProvider};
+pub use provider::{BrowserProvider, FixtureBrowserProvider, validate_browser_boundary};
 pub use snapshot_io::{
     load_fixture_provider_from_dir, load_fixture_provider_from_dirs, load_snapshot_json, parse_browser_dirs,
     path_looks_like_snapshot, save_snapshot_json,

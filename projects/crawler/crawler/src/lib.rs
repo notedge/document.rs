@@ -49,6 +49,7 @@ pub use crawler_browser::{
     DEFAULT_SNAPSHOT_TRANSFER_BUDGET_BYTES, FixtureBrowserProvider, HttpBrowserProvider, build_browser_stack,
     load_fixture_provider_from_dir, load_fixture_provider_from_dirs, load_snapshot_json, parse_browser_dirs,
     path_looks_like_snapshot, run_extract_from_snapshot, save_snapshot_json, snapshot_to_fetch_artifact,
+    validate_browser_boundary,
 };
 pub use crawler_fetch::{
     DEFAULT_FETCH_BODY_BUDGET_BYTES, FetchClient, FetchRequest, FileTransport, HttpTransport, MemoryEntry, MemoryTransport,

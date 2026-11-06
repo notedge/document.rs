@@ -19,7 +19,8 @@ mod url;
 pub use crate::{
     artifact::{BodyStorage, FetchArtifact, HttpStatus, RedirectHop, TransportProvenance},
     browser::{
-        AuthProfile, BrowserActionKind, BrowserSnapshot, ChallengePolicy, CredentialRef, PageChallengeState, SessionPersistence,
+        AuthProfile, BrowserActionKind, BrowserBoundary, BrowserDownload, BrowserFrame, BrowserShadowRoot, BrowserSnapshot,
+        ChallengePolicy, CredentialRef, PageChallengeState, SessionPersistence,
     },
     challenge::{ChallengeOutcome, apply_challenge_policy},
     diagnostics::{

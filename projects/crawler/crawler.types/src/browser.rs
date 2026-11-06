@@ -59,6 +59,8 @@ pub enum PageChallengeState {
     UnstableRender,
     /// The browser flow is unsupported by the current profile.
     UnsupportedBrowserFlow,
+    /// The authenticated session expired and must be re-established.
+    SessionExpired,
 }
 
 /// Policy for responding to challenge states.
@@ -97,6 +99,66 @@ pub enum BrowserActionKind {
     Capture,
 }
 
+/// One iframe captured inside a browser snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserFrame {
+    /// Frame document URL.
+    pub url: Url,
+    /// Whether the frame shares the top-level document origin.
+    pub same_origin: bool,
+    /// Rendered frame DOM.
+    ///
+    /// Cross-origin frames must never carry DOM bytes, because the browser
+    /// same-origin policy does not allow the worker to read them.
+    #[serde(default)]
+    pub document_html: Option<String>,
+}
+
+/// One shadow root observed on a rendered page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserShadowRoot {
+    /// Host element path or selector used as provenance.
+    pub host: String,
+    /// Whether the root is open.
+    ///
+    /// Closed roots can never be read by page script or the worker.
+    pub open: bool,
+    /// Captured root DOM, always absent for closed roots.
+    #[serde(default)]
+    pub document_html: Option<String>,
+}
+
+/// One download triggered while rendering a page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserDownload {
+    /// Download target URL.
+    pub url: Url,
+    /// Suggested filename from the download event.
+    #[serde(default)]
+    pub filename: Option<String>,
+    /// Declared byte size when the browser reported one.
+    #[serde(default)]
+    pub declared_bytes: Option<u64>,
+}
+
+/// Browser boundaries observed outside the top-level document.
+///
+/// The crawl extracts the top-level document by default. Frame, shadow-root and
+/// download entries are provenance for an explicit boundary profile, never
+/// silently merged into the page document.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BrowserBoundary {
+    /// Captured iframe tree in document order.
+    #[serde(default)]
+    pub frames: Vec<BrowserFrame>,
+    /// Shadow roots observed on the page.
+    #[serde(default)]
+    pub shadow_roots: Vec<BrowserShadowRoot>,
+    /// Downloads triggered while rendering the page.
+    #[serde(default)]
+    pub downloads: Vec<BrowserDownload>,
+}
+
 /// Browser snapshot handed from `BrowserProvider` to Crawler extractors.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrowserSnapshot {
@@ -114,4 +176,7 @@ pub struct BrowserSnapshot {
     pub profile_id: String,
     /// Detected challenge state for the page.
     pub challenge_state: PageChallengeState,
+    /// Frame, shadow-root and download provenance outside the top document.
+    #[serde(default)]
+    pub boundary: BrowserBoundary,
 }
