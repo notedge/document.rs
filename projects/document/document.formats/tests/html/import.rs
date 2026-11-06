@@ -709,6 +709,41 @@ fn html_import_lowers_definition_list_to_paragraphs_with_a_loss_code() {
 }
 
 #[test]
+fn nested_table_rows_do_not_leak_into_the_outer_table() {
+    let graph = import_html_text(
+        "nested-table.html",
+        concat!(
+            "<body><table><tr><th>Head</th></tr>",
+            "<tr><td>outer<table><tr><td>inner-one</td></tr><tr><td>inner-two</td></tr></table></td></tr>",
+            "</table></body>"
+        ),
+    )
+    .expect("import html");
+    let Block::Table { rows, .. } = &graph.blocks[0].block
+    else {
+        panic!("table expected, got {:?}", graph.blocks)
+    };
+    assert_eq!(rows.len(), 2, "inner rows must not become outer rows");
+    assert_eq!(rows[1].cells.len(), 1);
+    let text = rows[1].cells[0].content.iter().map(Inline::plain_text).collect::<String>();
+    assert_eq!(text, "outerinner-oneinner-two");
+    assert!(
+        graph
+            .coverage
+            .loss
+            .iter()
+            .any(|loss| loss.code == "import.html.table_nested" && loss.status == SemanticStatus::Partial),
+        "{:?}",
+        graph.coverage.loss
+    );
+
+    let html = export_html(&graph).expect("export html");
+    assert_eq!(html.matches("<table").count(), 1, "{html}");
+    assert_eq!(html.matches("<tr").count(), 2, "{html}");
+    assert_eq!(html.matches("inner-one").count(), 1, "nested content must be copied once, not twice: {html}");
+}
+
+#[test]
 fn html_import_records_flattened_table_cell_blocks() {
     let graph = import_html_text(
         "cell-blocks.html",

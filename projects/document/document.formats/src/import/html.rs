@@ -775,7 +775,8 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
             // survives as a flattened inline run, so this is a recorded partial
             // loss rather than a silent downgrade.
             let mut flattened_cell_blocks = false;
-            let rows: Vec<document_ir::TableRow> = descendants(element, "tr")
+            let mut flattened_nested_tables = false;
+            let rows: Vec<document_ir::TableRow> = table_rows(element)
                 .into_iter()
                 .map(|row| {
                     let mut is_header = false;
@@ -787,6 +788,9 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                         .map(|cell| {
                             if cell.tag_name.eq_ignore_ascii_case("th") {
                                 is_header = true;
+                            }
+                            if !descendants(cell, "table").is_empty() {
+                                flattened_nested_tables = true;
                             }
                             if cell.children.iter().filter_map(as_element).any(is_block_element) {
                                 flattened_cell_blocks = true;
@@ -801,6 +805,18 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                     document_ir::TableRow { is_header, cells }
                 })
                 .collect();
+            if flattened_nested_tables {
+                graph.push_loss_at(
+                    LossMarker {
+                        code: "import.html.table_nested".into(),
+                        message:
+                            "a nested table is flattened into its parent cell inline run, so the inner table rows are not represented"
+                                .into(),
+                        status: SemanticStatus::Partial,
+                    },
+                    element_source_span(element),
+                );
+            }
             if flattened_cell_blocks {
                 graph.push_loss_at(
                     LossMarker {
@@ -1303,6 +1319,20 @@ fn lower_list_item_inlines(item: &Element, graph: &mut DocumentGraph, source: &s
         }
     }
     result
+}
+
+fn table_rows<'a>(table: &'a Element) -> Vec<&'a Element> {
+    let mut rows = Vec::new();
+    for child in table.children.iter().filter_map(as_element) {
+        if child.tag_name.eq_ignore_ascii_case("tr") {
+            rows.push(child);
+            continue;
+        }
+        if matches!(child.tag_name.to_ascii_lowercase().as_str(), "thead" | "tbody" | "tfoot") {
+            rows.extend(child.children.iter().filter_map(as_element).filter(|row| row.tag_name.eq_ignore_ascii_case("tr")));
+        }
+    }
+    rows
 }
 
 fn descendants<'a>(element: &'a Element, tag: &str) -> Vec<&'a Element> {
