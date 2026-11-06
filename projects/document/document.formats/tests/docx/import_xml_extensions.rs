@@ -13,7 +13,7 @@ fn xpath_collects_descendant_elements_by_local_name() {
 </w:numbering>"#;
     let value = parse_xml_bytes(xml).expect("parse");
     let root = document_root(&value).expect("root");
-    let matches = elements_by_local_name(root, "abstractNum");
+    let matches = elements_by_local_name(root, "abstractNum").expect("query");
     assert_eq!(matches.len(), 1);
     let levels = elements_by_xpath(matches[0], "//lvl").expect("xpath");
     assert_eq!(levels.len(), 1);

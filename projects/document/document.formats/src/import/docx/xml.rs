@@ -32,15 +32,15 @@ pub fn parse_document_xml(
     let root = document_root(&value)?;
     let body = child_element(root, "body").ok_or_else(|| FormatError::parse("docx", "word/document.xml is missing w:body"))?;
 
-    if !elements_by_local_name(root, "ins").is_empty() || !elements_by_local_name(root, "del").is_empty() {
+    if !elements_by_local_name(root, "ins")?.is_empty() || !elements_by_local_name(root, "del")?.is_empty() {
         graph.push_loss(LossMarker {
             code: "reader.docx.tracked_changes".into(),
             message: "tracked changes are projected to current visible text where possible. Deleted runs are omitted and revision identity is not retained".into(),
             status: SemanticStatus::Partial,
         });
     }
-    if !elements_by_local_name(root, "commentReference").is_empty()
-        || !elements_by_local_name(root, "commentRangeStart").is_empty()
+    if !elements_by_local_name(root, "commentReference")?.is_empty()
+        || !elements_by_local_name(root, "commentRangeStart")?.is_empty()
     {
         graph.push_loss(LossMarker {
             code: "reader.docx.comments".into(),
@@ -49,7 +49,15 @@ pub fn parse_document_xml(
             status: SemanticStatus::Partial,
         });
     }
-    if ["fldChar", "instrText", "delInstrText"].iter().any(|name| !elements_by_local_name(root, name).is_empty()) {
+    let has_any = |names: &[&str]| -> Result<bool, FormatError> {
+        for name in names {
+            if !elements_by_local_name(root, name)?.is_empty() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    if has_any(&["fldChar", "instrText", "delInstrText"])? {
         graph.push_loss(LossMarker {
             code: "reader.docx.fields".into(),
             message: "field boundaries and field instructions are detected but dynamic field semantics are not represented in notedown-ir"
@@ -57,7 +65,7 @@ pub fn parse_document_xml(
             status: SemanticStatus::Partial,
         });
     }
-    if ["object", "oleObject", "pict", "AlternateContent"].iter().any(|name| !elements_by_local_name(root, name).is_empty()) {
+    if has_any(&["object", "oleObject", "pict", "AlternateContent"])? {
         graph.push_loss(LossMarker {
             code: "reader.docx.embedded_objects".into(),
             message:
@@ -66,7 +74,7 @@ pub fn parse_document_xml(
             status: SemanticStatus::Partial,
         });
     }
-    let unsupported_run_properties = elements_by_local_name(root, "rPr")
+    let unsupported_run_properties = elements_by_local_name(root, "rPr")?
         .into_iter()
         .flat_map(|r_pr| {
             r_pr.children.iter().filter_map(XmlValue::as_element).filter(|child| {
@@ -85,7 +93,7 @@ pub fn parse_document_xml(
             status: SemanticStatus::Partial,
         });
     }
-    if elements_by_local_name(root, "br")
+    if elements_by_local_name(root, "br")?
         .iter()
         .any(|element| matches!(attribute_value(element, "type").as_deref(), Some("page" | "column")))
     {
@@ -96,8 +104,8 @@ pub fn parse_document_xml(
             status: SemanticStatus::Partial,
         });
     }
-    if !elements_by_local_name(root, "pageBreakBefore").is_empty()
-        || !elements_by_local_name(root, "lastRenderedPageBreak").is_empty()
+    if !elements_by_local_name(root, "pageBreakBefore")?.is_empty()
+        || !elements_by_local_name(root, "lastRenderedPageBreak")?.is_empty()
     {
         graph.push_loss(LossMarker {
             code: "reader.docx.page_breaks".into(),
@@ -106,9 +114,15 @@ pub fn parse_document_xml(
             status: SemanticStatus::Partial,
         });
     }
-    if elements_by_local_name(root, "sectPr").iter().any(|element| {
-        ["docGrid", "headerReference", "footerReference"].iter().any(|name| !elements_by_local_name(element, name).is_empty())
-    }) {
+    let mut layout_loss = false;
+    for element in elements_by_local_name(root, "sectPr")? {
+        for name in ["docGrid", "headerReference", "footerReference"] {
+            if !elements_by_local_name(element, name)?.is_empty() {
+                layout_loss = true;
+            }
+        }
+    }
+    if layout_loss {
         graph.push_loss(LossMarker {
             code: "reader.docx.section_layout".into(),
             message:
@@ -128,11 +142,11 @@ pub fn parse_document_xml(
     for child in body.children.iter().filter_map(XmlValue::as_element) {
         if element_is(child, "tbl") {
             flush_pending_list(graph, &mut body_state, numbering);
-            let table = parse_table_element(child, rels, graph, footnotes, &mut referenced_footnotes);
+            let table = parse_table_element(child, rels, graph, footnotes, &mut referenced_footnotes)?;
             push_table_block(graph, table);
         }
         else if element_is(child, "p") {
-            let paragraph = parse_paragraph_element(child, rels, graph, footnotes, &mut referenced_footnotes);
+            let paragraph = parse_paragraph_element(child, rels, graph, footnotes, &mut referenced_footnotes)?;
             finish_paragraph(graph, &mut body_state, &paragraph, numbering);
         }
     }
@@ -158,7 +172,8 @@ pub fn parse_document_xml(
 /// defaults from `word/styles.xml` fill the body size and line height the
 /// section does not declare.
 fn section_page_setup(body: &XmlElement, defaults: &StyleDefaults) -> PageSetup {
-    let section = child_element(body, "sectPr").or_else(|| elements_by_local_name(body, "sectPr").last().copied());
+    let section = child_element(body, "sectPr")
+        .or_else(|| elements_by_local_name(body, "sectPr").ok().and_then(|elements| elements.last().copied()));
     let mut page = PageSetup::default();
     if let Some(section) = section {
         if let Some(size) = child_element(section, "pgSz") {
@@ -236,7 +251,7 @@ fn parse_table_element(
     graph: &mut DocumentGraph,
     footnotes: &FootnoteCatalog,
     referenced_footnotes: &mut HashSet<u32>,
-) -> TableState {
+) -> Result<TableState, FormatError> {
     let mut table = TableState::default();
     // Grid columns whose `rowspan` the previous row still covers. A
     // continuation cell extends that origin cell instead of becoming its own.
@@ -259,7 +274,7 @@ fn parse_table_element(
             else {
                 let mut current_cell = Vec::new();
                 for paragraph in cell.children.iter().filter_map(XmlValue::as_element).filter(|child| element_is(child, "p")) {
-                    let paragraph = parse_paragraph_element(paragraph, rels, graph, footnotes, referenced_footnotes);
+                    let paragraph = parse_paragraph_element(paragraph, rels, graph, footnotes, referenced_footnotes)?;
                     let mut content = paragraph_inlines(&paragraph).unwrap_or_default();
                     content.extend(math_block_inlines(&paragraph));
                     if !content.is_empty() {
@@ -278,7 +293,7 @@ fn parse_table_element(
         }
         open = next_open;
     }
-    table
+    Ok(table)
 }
 
 fn parse_paragraph_element(
@@ -287,7 +302,7 @@ fn parse_paragraph_element(
     graph: &mut DocumentGraph,
     footnotes: &FootnoteCatalog,
     referenced_footnotes: &mut HashSet<u32>,
-) -> ParagraphState {
+) -> Result<ParagraphState, FormatError> {
     let mut paragraph = ParagraphState::default();
     if let Some(p_pr) = child_element(paragraph_element, "pPr") {
         if let Some(p_style) = child_element(p_pr, "pStyle") {
@@ -306,15 +321,15 @@ fn parse_paragraph_element(
 
     for child in paragraph_element.children.iter().filter_map(XmlValue::as_element) {
         if element_is(child, "hyperlink") {
-            let link = parse_hyperlink_element(child, rels, graph, footnotes, referenced_footnotes);
+            let link = parse_hyperlink_element(child, rels, graph, footnotes, referenced_footnotes)?;
             paragraph.push_hyperlink(&link, rels, graph);
         }
         else if element_is(child, "r") {
-            append_paragraph_run(child, &mut paragraph, rels, graph, footnotes, referenced_footnotes);
+            append_paragraph_run(child, &mut paragraph, rels, graph, footnotes, referenced_footnotes)?;
         }
         else if element_is(child, "ins") {
-            for run in elements_by_local_name(child, "r") {
-                append_paragraph_run(run, &mut paragraph, rels, graph, footnotes, referenced_footnotes);
+            for run in elements_by_local_name(child, "r")? {
+                append_paragraph_run(run, &mut paragraph, rels, graph, footnotes, referenced_footnotes)?;
             }
         }
         else if element_is(child, "del") {
@@ -334,7 +349,7 @@ fn parse_paragraph_element(
         }
     }
 
-    paragraph
+    Ok(paragraph)
 }
 
 fn lower_docx_math(graph: &mut DocumentGraph, element: &XmlElement, display: MathDisplay) -> Block {
@@ -354,7 +369,7 @@ fn append_paragraph_run(
     graph: &mut DocumentGraph,
     footnotes: &FootnoteCatalog,
     referenced_footnotes: &mut HashSet<u32>,
-) {
+) -> Result<(), FormatError> {
     let mut run = parse_run_element(element);
     run.text.clear();
     for child in element.children.iter().filter_map(XmlValue::as_element) {
@@ -377,8 +392,8 @@ fn append_paragraph_run(
         else if element_is(child, "drawing") {
             paragraph.push_run(&run);
             run.text.clear();
-            let doc_prs = elements_by_local_name(child, "docPr");
-            for (index, blip) in elements_by_local_name(child, "blip").iter().enumerate() {
+            let doc_prs = elements_by_local_name(child, "docPr")?;
+            for (index, blip) in elements_by_local_name(child, "blip")?.iter().enumerate() {
                 if let Some(rel_id) = attribute_value(blip, "embed") {
                     paragraph.pending_image_alt = doc_prs.get(index).and_then(|doc_pr| attribute_value(doc_pr, "descr"));
                     paragraph.push_image(&rel_id, rels, graph);
@@ -392,6 +407,7 @@ fn append_paragraph_run(
         }
     }
     paragraph.push_run(&run);
+    Ok(())
 }
 
 fn parse_hyperlink_element(
@@ -400,19 +416,19 @@ fn parse_hyperlink_element(
     graph: &mut DocumentGraph,
     footnotes: &FootnoteCatalog,
     referenced_footnotes: &mut HashSet<u32>,
-) -> HyperlinkState {
+) -> Result<HyperlinkState, FormatError> {
     let mut link = HyperlinkState { rel_id: attribute_value(element, "id"), inlines: Vec::new() };
     for child in element.children.iter().filter_map(XmlValue::as_element) {
         if element_is(child, "r") {
             let mut paragraph = ParagraphState::default();
-            append_paragraph_run(child, &mut paragraph, rels, graph, footnotes, referenced_footnotes);
+            append_paragraph_run(child, &mut paragraph, rels, graph, footnotes, referenced_footnotes)?;
             link.inlines.extend(paragraph.inlines);
         }
         else if element_is(child, "footnoteReference") {
             push_footnote_reference(graph, &mut link.inlines, footnotes, referenced_footnotes, u32_attribute(child, "id"));
         }
     }
-    link
+    Ok(link)
 }
 
 fn parse_run_element(element: &XmlElement) -> RunState {

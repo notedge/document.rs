@@ -596,3 +596,4 @@ fn docx_import_reports_paragraph_and_section_layout_breaks() {
 mod export;
 mod import_xml_extensions;
 mod inspect;
+mod query_gate;

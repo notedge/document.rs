@@ -58,6 +58,7 @@ impl ConversionBudgets {
         let budget = InspectBudget {
             max_decoded_bytes: u64::MAX,
             max_container_members: self.container_entries.unwrap_or(default.max_container_members),
+            ..default
         };
         let inspect = inspect_docx_bytes(label, bytes, None, false, budget).map_err(format_error::map_format_error)?;
         self.check_declared("docx", inspect.parts.iter().map(|part| part.uncompressed_size))

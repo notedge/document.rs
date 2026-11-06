@@ -80,6 +80,7 @@ fn hydrate_core_metadata(package: &OpcPackage, ledger: &mut BudgetTracker, graph
     };
     let text = |name: &str| {
         elements_by_local_name(root, name)
+            .unwrap_or_default()
             .first()
             .map(|element| element_text(element).trim().to_owned())
             .filter(|value| !value.is_empty())

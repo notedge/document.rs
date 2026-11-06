@@ -7,12 +7,16 @@ mod error;
 pub mod export;
 pub mod import;
 pub mod inspect;
+#[cfg(any(feature = "docx", feature = "epub", feature = "html"))]
+mod query_gate;
 #[cfg(feature = "tex")]
 pub mod tex_corpus;
 
 pub use capability::{FormatCapability, FormatDirection, FormatStatus};
 pub use error::{FormatError, NAMESPACE as DIAGNOSTIC_NAMESPACE, codes as diagnostic_codes, from_format_error, origin_formats};
-pub use inspect::{DocumentInspect, InspectBudget, InspectedPart};
+pub use inspect::{ContainerLayout, DocumentInspect, DocxVerification, InspectBudget, InspectedPart, LayoutSpan};
+#[cfg(any(feature = "docx", feature = "epub", feature = "html"))]
+pub use query_gate::QueryLimits;
 
 /// Lower a standalone TeX formula source into the document math semantics.
 #[cfg(feature = "tex")]
@@ -20,6 +24,8 @@ pub use import::lower_tex_formula_source;
 
 #[cfg(feature = "docx")]
 pub use inspect::inspect_docx_bytes;
+#[cfg(feature = "docx")]
+pub use inspect::verify_docx_bytes;
 
 /// Registered format capabilities for tooling probes.
 ///

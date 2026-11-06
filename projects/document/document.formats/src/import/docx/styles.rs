@@ -45,7 +45,7 @@ pub fn parse_styles_xml_lossy(xml: &[u8]) -> StyleDefaults {
     else {
         return StyleDefaults::default();
     };
-    let Some(defaults) = elements_by_local_name(root, "docDefaults").first().copied()
+    let Some(defaults) = elements_by_local_name(root, "docDefaults").unwrap_or_default().first().copied()
     else {
         return StyleDefaults::default();
     };

@@ -1,4 +1,4 @@
-use document_formats::{FormatError, InspectBudget, inspect_docx_bytes};
+use document_formats::{FormatError, InspectBudget, inspect_docx_bytes, verify_docx_bytes};
 
 fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut archive = Vec::new();
@@ -102,9 +102,59 @@ fn inspect_decodes_single_part_filter() {
 
 #[test]
 fn inspect_reports_budget_exhaustion() {
-    let budget = InspectBudget { max_decoded_bytes: 4, max_container_members: 8 };
+    let budget = InspectBudget { max_decoded_bytes: 4, ..InspectBudget::default() };
     let error = inspect_docx_bytes("sample.docx", &minimal_docx_zip(), None, true, budget).expect_err("budget");
     assert!(matches!(error, FormatError::Budget { .. }));
+}
+
+#[test]
+fn inspect_admits_container_bytes_before_indexing() {
+    let bytes = minimal_docx_zip();
+    let budget = InspectBudget { max_container_bytes: bytes.len() as u64 - 1, ..InspectBudget::default() };
+    let error = inspect_docx_bytes("sample.docx", &bytes, None, false, budget).expect_err("container bytes");
+    assert!(matches!(error, FormatError::Budget { .. }), "{error:?}");
+}
+
+#[test]
+fn inspect_admits_declared_uncompressed_bytes_before_decoding() {
+    let budget = InspectBudget { max_declared_uncompressed_bytes: 1, ..InspectBudget::default() };
+    let error = inspect_docx_bytes("sample.docx", &minimal_docx_zip(), None, false, budget).expect_err("declared");
+    assert!(matches!(error, FormatError::Budget { .. }), "{error:?}");
+}
+
+#[test]
+fn inspect_indexes_the_container_layout() {
+    let bytes = minimal_docx_zip();
+    let inspect = inspect_docx_bytes("sample.docx", &bytes, None, false, InspectBudget::default()).expect("inspect");
+    let layout = inspect.layout.expect("zip layout");
+    assert_eq!(layout.source_len, bytes.len() as u64);
+    assert!(layout.central_directory.is_some());
+    assert!(layout.spans.len() >= inspect.parts.len());
+    assert!(layout.spans.iter().all(|span| span.start + span.length <= layout.source_len));
+}
+
+#[test]
+fn verification_reopens_the_written_package() {
+    let verification = verify_docx_bytes("sample.docx", &minimal_docx_zip(), InspectBudget::default()).expect("verify package");
+    assert_eq!(verification.members, 1);
+    assert_eq!(verification.parsed_xml_members, 1);
+    assert!(verification.main_part_present);
+}
+
+#[test]
+fn verification_reports_a_missing_main_part() {
+    let verification =
+        verify_docx_bytes("sample.docx", &stored_zip(&[("[Content_Types].xml", b"<Types/>")]), InspectBudget::default())
+            .expect("verify package");
+    assert!(!verification.main_part_present);
+}
+
+#[test]
+fn verification_rejects_unparseable_xml_members() {
+    let error =
+        verify_docx_bytes("sample.docx", &stored_zip(&[("word/document.xml", b"<not-closed>")]), InspectBudget::default())
+            .expect_err("unparseable xml");
+    assert!(matches!(error, FormatError::Parse { .. }), "{error:?}");
 }
 
 #[test]

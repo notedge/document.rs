@@ -27,7 +27,7 @@ pub fn parse_footnotes_xml_lossy(xml: &[u8]) -> FootnoteCatalog {
     };
     let mut catalog = FootnoteCatalog::new();
 
-    for footnote in elements_by_local_name(root, "footnote") {
+    for footnote in elements_by_local_name(root, "footnote").unwrap_or_default() {
         let id = u32_attribute(footnote, "id");
         if id.is_none_or(|id| id == 0) {
             continue;

@@ -1,11 +1,14 @@
-use oak_core::{Builder, SourceText, parser::session::ParseSession, query::QueryBudget};
+use oak_core::{Builder, SourceText, parser::session::ParseSession};
 use oak_html::{
     HtmlBuilder, HtmlLanguage,
     ast::{Element, HtmlDocument, HtmlNode, Text},
     query::{HtmlDocumentView, select_css_elements},
 };
 
-use crate::FormatError;
+use crate::{
+    FormatError,
+    query_gate::{QueryLimits, ensure_complete},
+};
 
 /// Parses XHTML or HTML bytes into a typed `oak-html` document.
 pub fn parse_html_bytes(html: &[u8]) -> Result<HtmlDocument, FormatError> {
@@ -138,9 +141,23 @@ pub fn first_descendant_element<'a>(element: &'a Element, expected: &str) -> Opt
 
 /// Selects elements in a document using a CSS selector subset.
 pub fn select_css<'a>(document: &'a HtmlDocument, selector: &str) -> Result<Vec<&'a Element>, FormatError> {
+    select_css_with_limits(document, selector, "epub", QueryLimits::package_member())
+}
+
+/// Selects elements with explicit query limits and an importer label.
+///
+/// A selector that stops at the query budget is reported as a format error
+/// instead of returning a truncated element list.
+pub fn select_css_with_limits<'a>(
+    document: &'a HtmlDocument,
+    selector: &str,
+    format: &str,
+    limits: QueryLimits,
+) -> Result<Vec<&'a Element>, FormatError> {
     let view = HtmlDocumentView::from_document(document);
-    let (_, elements) = select_css_elements(&view, selector, QueryBudget::default())
-        .map_err(|error| FormatError::parse("epub", error.to_string()))?;
+    let (result, elements) =
+        select_css_elements(&view, selector, limits.budget()).map_err(|error| FormatError::parse(format, error.to_string()))?;
+    ensure_complete(format, selector, result.outcome, result.matches.len())?;
     Ok(elements)
 }
 

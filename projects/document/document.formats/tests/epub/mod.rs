@@ -741,3 +741,4 @@ fn epub_import_lowers_tables_and_nested_lists() {
 mod import_ast_lowering;
 mod import_navigation;
 mod import_xhtml;
+mod query_gate;

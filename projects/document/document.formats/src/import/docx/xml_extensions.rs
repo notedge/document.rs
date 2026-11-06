@@ -1,10 +1,12 @@
-use oak_core::query::QueryBudget;
 use oak_xml::{
     ast::{XmlElement, XmlValue},
     query::{XmlDocumentView, select_xpath_elements},
 };
 
-use crate::FormatError;
+use crate::{
+    FormatError,
+    query_gate::{QueryLimits, ensure_complete},
+};
 
 /// Parses UTF-8 XML bytes through `oak-xml`.
 ///
@@ -171,17 +173,41 @@ pub fn child_element<'a>(element: &'a XmlElement, expected: &str) -> Option<&'a 
 }
 
 /// Collects descendant elements whose local tag name matches `expected`.
-pub fn elements_by_local_name<'a>(element: &'a XmlElement, expected: &str) -> Vec<&'a XmlElement> {
+///
+/// The selector runs with the package-member budget and fails closed when the
+/// query cannot complete. A partial match list would drop runs, footnotes or
+/// table cells without any record, so it is never returned.
+pub fn elements_by_local_name<'a>(element: &'a XmlElement, expected: &str) -> Result<Vec<&'a XmlElement>, FormatError> {
     let xpath = format!("//{expected}");
-    elements_by_xpath(element, &xpath).unwrap_or_default()
+    elements_by_xpath(element, &xpath)
 }
 
 /// Collects elements matched by an Oak XPath subset rooted at `element`.
 pub fn elements_by_xpath<'a>(element: &'a XmlElement, xpath: &str) -> Result<Vec<&'a XmlElement>, FormatError> {
+    elements_by_xpath_with_limits(element, xpath, QueryLimits::package_member())
+}
+
+/// Collects elements matched by XPath with explicit query limits.
+pub fn elements_by_xpath_with_limits<'a>(
+    element: &'a XmlElement,
+    xpath: &str,
+    limits: QueryLimits,
+) -> Result<Vec<&'a XmlElement>, FormatError> {
     let view = XmlDocumentView::from_element(element);
-    let (_result, elements) = select_xpath_elements(&view, xpath, QueryBudget::default())
-        .map_err(|error| FormatError::parse("docx", error.to_string()))?;
+    let (result, elements) =
+        select_xpath_elements(&view, xpath, limits.budget()).map_err(|error| FormatError::parse("docx", error.to_string()))?;
+    ensure_complete("docx", xpath, result.outcome, result.matches.len())?;
     Ok(elements)
+}
+
+/// Returns whether an element declares `xml:space="preserve"`.
+///
+/// WordprocessingML uses the attribute to mark leading, trailing and repeated
+/// spaces as authored. The reader keeps text exactly as authored regardless of
+/// the attribute, so the helper exists to assert that choice instead of
+/// collapsing whitespace a writer marked significant.
+pub fn xml_space_preserved(element: &XmlElement) -> bool {
+    attribute_value(element, "space").is_some_and(|value| value.trim().eq_ignore_ascii_case("preserve"))
 }
 
 /// Returns trimmed text content for an element.

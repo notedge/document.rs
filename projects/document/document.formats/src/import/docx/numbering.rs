@@ -30,12 +30,12 @@ pub fn parse_numbering_xml(xml: &[u8]) -> Result<NumberingCatalog, FormatError> 
     let root = document_root(&value)?;
     let mut catalog = NumberingCatalog::default();
 
-    for abstract_num in elements_by_local_name(root, "abstractNum") {
+    for abstract_num in elements_by_local_name(root, "abstractNum")? {
         let Some(abstract_id) = u32_attribute(abstract_num, "abstractNumId")
         else {
             continue;
         };
-        for lvl in elements_by_local_name(abstract_num, "lvl") {
+        for lvl in elements_by_local_name(abstract_num, "lvl")? {
             let Some(ilvl) = u32_attribute(lvl, "ilvl")
             else {
                 continue;
@@ -48,7 +48,7 @@ pub fn parse_numbering_xml(xml: &[u8]) -> Result<NumberingCatalog, FormatError> 
         }
     }
 
-    for num in elements_by_local_name(root, "num") {
+    for num in elements_by_local_name(root, "num")? {
         let Some(num_id) = u32_attribute(num, "numId")
         else {
             continue;

@@ -29,7 +29,7 @@ pub fn export_docx_bytes(graph: &DocumentGraph) -> Result<Vec<u8>, FormatError> 
 pub fn export_docx_bytes_with_page_setup(graph: &DocumentGraph, setup: &DocxPageSetup) -> Result<Vec<u8>, FormatError> {
     let rendered = writer::render_document_xml(graph)?;
     let document_xml = page::apply_page_setup(&rendered.document_xml, setup);
-    Ok(package::build_minimal_opc_package(
+    let bytes = package::build_minimal_opc_package(
         &document_xml,
         rendered.include_numbering,
         &rendered.document_rels_xml,
@@ -38,7 +38,12 @@ pub fn export_docx_bytes_with_page_setup(graph: &DocumentGraph, setup: &DocxPage
         rendered.footnotes_xml.as_deref(),
         metadata_xml(graph).as_deref(),
         &page::styles_xml(setup, &diagram_style_ids(graph)),
-    ))
+    );
+    let verification = crate::inspect::verify_docx_bytes("export.docx", &bytes, crate::InspectBudget::default())?;
+    if !verification.main_part_present {
+        return Err(FormatError::parse("docx", "written package is missing word/document.xml"));
+    }
+    Ok(bytes)
 }
 
 /// Paragraph style ids the body references for diagrams and charts.
