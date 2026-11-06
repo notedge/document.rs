@@ -1014,7 +1014,14 @@ fn markdown_raw_html_block_is_preserved() {
     );
 
     assert!(graph.validate().is_valid());
-    assert!(graph.coverage.loss.is_empty(), "{:#?}", graph.coverage.loss);
+    // The block is preserved verbatim, but the semantic SVG/PDF reflow does not
+    // lay raw HTML out, so the loss stays truthful instead of being cleared.
+    assert!(
+        graph.coverage.loss.iter().any(|loss| loss.code == "import.markdown.raw_html_unrendered"
+            && loss.status == SemanticStatus::Partial),
+        "the unrendered raw HTML block must surface a structured loss: {:#?}",
+        graph.coverage.loss
+    );
 }
 mod export_project;
 mod roundtrip;

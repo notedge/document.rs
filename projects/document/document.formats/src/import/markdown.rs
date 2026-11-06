@@ -218,13 +218,14 @@ fn lower_markdown_tree(
             let span = node.span();
             let site = Some(SourceSpan { start: span.start as u32, end: span.end as u32 });
             // The definition keeps its authored payload for the writers that
-            // place it at document end. Only a flow-only import records the loss,
-            // because only a flow target drops the body.
+            // place it at document end, so the block itself is resolved. Only a
+            // flow-only import records the loss, because only a flow target
+            // drops the body.
             graph.push_block_at(
                 Block::Opaque {
                     kind: "footnote_definition".into(),
                     payload_hint: node.text(source).into_owned(),
-                    status: SemanticStatus::Partial,
+                    status: SemanticStatus::Resolved,
                 },
                 site,
             );
