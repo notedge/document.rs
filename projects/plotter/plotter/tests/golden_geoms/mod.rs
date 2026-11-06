@@ -6,9 +6,11 @@
 
 use std::{fs, path::PathBuf};
 
-use apollo::{
-    AestheticExpr, ColumnTable, CompileOptions, LayerSpec, Mapping, PlotSpec, SceneNodeKind, compile_plot, render_rgba8,
-    render_svg,
+use plotter::{
+    data::ColumnTable,
+    grammar::{AestheticExpr, CompileOptions, LayerSpec, Mapping, PlotSpec, compile_plot},
+    renderer::{render_rgba8, svg::render_svg},
+    view::SceneNodeKind,
 };
 
 fn golden_dir() -> Option<PathBuf> {

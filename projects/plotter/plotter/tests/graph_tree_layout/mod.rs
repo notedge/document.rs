@@ -1,9 +1,14 @@
 //! 图 / 树布局 → Scene → CPU/SVG。
 
-use apollo::{
-    CircularLayout, CompileOptions, CoordinateSpec, ForceLayout, GraphData, GraphEdge, GraphLayout, GraphLayoutKind, GraphNode,
-    GridLayout, LayerSpec, LayeredLayout, LayoutOptions, PlotSpec, RadialTreeLayout, SceneNodeKind, TidyTreeLayout, TreeData,
-    TreeLayout, TreeLayoutKind, TreeNode, compile_plot, render_rgba8, render_svg,
+use plotter::{
+    data::{GraphData, GraphEdge, GraphNode, TreeData, TreeNode},
+    grammar::{CompileOptions, CoordinateSpec, GraphLayoutKind, LayerSpec, PlotSpec, TreeLayoutKind, compile_plot},
+    layout::{
+        CircularLayout, ForceLayout, GraphLayout, GridLayout, LayeredLayout, LayoutOptions, RadialTreeLayout, TidyTreeLayout,
+        TreeLayout,
+    },
+    renderer::{render_rgba8, svg::render_svg},
+    view::SceneNodeKind,
 };
 
 fn sample_graph() -> GraphData {

@@ -1,8 +1,10 @@
 //! 门面级冒烟：构造、编译并渲染 2D 折线图。
 
-use apollo::{
-    ColumnTable, CompileOptions, LayerSpec, Mapping, PlotSpec, SceneNodeKind, compile_plot, render_rgba8, render_svg,
-    validate_plot,
+use plotter::{
+    data::ColumnTable,
+    grammar::{CompileOptions, LayerSpec, Mapping, PlotSpec, compile_plot, validate_plot},
+    renderer::{render_rgba8, svg::render_svg},
+    view::SceneNodeKind,
 };
 
 #[test]
@@ -35,7 +37,7 @@ fn facade_renders_cpu_and_svg() {
 #[cfg(feature = "wgpu")]
 #[test]
 fn facade_renders_wgpu_when_available() {
-    use apollo::{WgpuRenderer, render_rgba8_wgpu};
+    use plotter::renderer::wgpu::{WgpuRenderer, render_rgba8_wgpu};
     if !WgpuRenderer::is_available() {
         return;
     }

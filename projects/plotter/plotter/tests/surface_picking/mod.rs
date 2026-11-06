@@ -1,8 +1,10 @@
 //! surface / point cloud / picking。
 
-use apollo::{
-    ColumnTable, CompileOptions, CoordinateSpec, GridData, LayerSpec, Mapping, PlotSpec, SceneNodeKind, compile_plot, pick_at,
-    render_rgba8, render_svg,
+use plotter::{
+    data::{ColumnTable, GridData},
+    grammar::{CompileOptions, CoordinateSpec, LayerSpec, Mapping, PlotSpec, compile_plot},
+    renderer::{render_rgba8, svg::render_svg},
+    view::{SceneNodeKind, pick_at},
 };
 
 fn sample_grid() -> GridData {
