@@ -1022,5 +1022,35 @@ fn markdown_raw_html_block_is_preserved() {
         graph.coverage.loss
     );
 }
+#[test]
+fn markdown_front_matter_is_reported_as_an_unmapped_loss_with_provenance() {
+    let source = "---\ntitle: Notes\n---\n\nBody.\n";
+    let graph = import_markdown_bytes("front.md", source).expect("import markdown");
+    let index = graph
+        .coverage
+        .loss
+        .iter()
+        .position(|loss| loss.code == "import.markdown.front_matter_unmapped")
+        .expect("front matter loss");
+    assert_eq!(graph.coverage.loss[index].status, SemanticStatus::Unsupported);
+    assert!(!graph.coverage.complete);
+    let span = graph.loss_span(index).expect("front matter span");
+    let authored = &source[span.start as usize..span.end as usize];
+    assert!(authored.contains("title: Notes"), "{authored:?}");
+    // The block keeps the authored bytes so a metadata-aware consumer can still
+    // read them, while the Markdown writer stays fail-closed until the IR grows
+    // a metadata field.
+    assert!(
+        matches!(
+            &graph.blocks[0].block,
+            Block::Opaque { kind, payload_hint, status }
+                if kind == "front_matter" && payload_hint.contains("title: Notes") && *status == SemanticStatus::Unsupported
+        ),
+        "{:?}",
+        graph.blocks
+    );
+    assert!(export_markdown(&graph).is_err(), "front matter export stays fail-closed");
+}
+
 mod export_project;
 mod roundtrip;

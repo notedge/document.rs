@@ -216,6 +216,16 @@ fn lower_markdown_tree(
                 Block::Opaque { kind: "front_matter".into(), payload_hint: payload, status: SemanticStatus::Unsupported },
                 Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
             );
+            graph.push_loss_at(
+                LossMarker {
+                    code: "import.markdown.front_matter_unmapped".into(),
+                    message:
+                        "front matter carries metadata that the IR has no field for, so it stays an unsupported opaque block"
+                            .into(),
+                    status: SemanticStatus::Unsupported,
+                },
+                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+            );
             pending_footnote = None;
             continue;
         }

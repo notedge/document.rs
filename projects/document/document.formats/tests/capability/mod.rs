@@ -15,6 +15,9 @@ fn capabilities_do_not_overstate_partial_formats() {
     assert!(caps.iter().any(|cap| {
         cap.id == "markdown" && cap.direction == FormatDirection::Export && cap.status == FormatStatus::Partial
     }));
+    // GFM is an `oak-markdown` profile, so it must never appear as a second
+    // format id in the capability table.
+    assert!(!caps.iter().any(|cap| cap.id.eq_ignore_ascii_case("gfm")));
     #[cfg(feature = "docx")]
     assert!(
         caps.iter()
