@@ -18,7 +18,7 @@ fn html_to_markdown_convert_report_matches_ir_loss() {
     .expect("convert html to markdown");
 
     assert_convert_report(&output, "markdown");
-    assert_report_contains_loss_codes(&output.report_json, &["import.html.partial_coverage", "import.html.unsupported_script"]);
+    assert_report_contains_loss_codes(&output.report_json, &["import.html.partial_coverage", "import.html.raw_script"]);
     let reopened = import_markdown_bytes("round.md", &output.markdown).expect("reopen markdown");
     assert!(reopened.validate().is_valid());
 }

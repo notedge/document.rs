@@ -438,14 +438,14 @@ fn html_to_markdown_project_writes_index_and_reopens_semantics() {
 }
 
 #[test]
-fn html_to_markdown_project_reports_unsupported_elements_in_panduck_report() {
+fn html_to_markdown_project_reports_raw_passthrough_elements_in_panduck_report() {
     let output_dir = std::env::temp_dir().join(format!("panduck-html-loss-project-{}", std::process::id()));
     let html = br#"<html><body><h1>Title</h1><p>Before script.</p><script>alert(1)</script></body></html>"#.to_vec();
     let (output, published) =
         convert_to_markdown_project("html", "page.html", html, &output_dir, None).expect("convert html project");
 
     assert_convert_project_report(&output, &published);
-    assert_report_contains_loss_codes(&output.report_json, &["import.html.partial_coverage", "import.html.unsupported_script"]);
+    assert_report_contains_loss_codes(&output.report_json, &["import.html.partial_coverage", "import.html.raw_script"]);
 
     let _ = fs::remove_dir_all(&output_dir);
 }

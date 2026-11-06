@@ -110,7 +110,9 @@ pub fn import_html_with_links(label: &str, text: &str) -> Result<HtmlImport, For
         .map(|href| href.trim().to_string())
         .filter(|href| !href.is_empty());
     let links = collect_links(&document);
-    for (block, span) in lower_children(body_children(&document), &mut graph, authored) {
+    let mut lowered = head_raw_blocks(&document, authored);
+    lowered.extend(lower_children(body_children(&document), &mut graph, authored));
+    for (block, span) in lowered {
         push_block_with_source(&mut graph, block, span);
     }
     register_image_assets(&mut graph);
@@ -124,7 +126,7 @@ pub fn import_html_with_links(label: &str, text: &str) -> Result<HtmlImport, For
     }
     graph.push_loss(LossMarker {
         code: "import.html.partial_coverage".into(),
-        message: "HTML import preserves common document blocks, inline links/images, and MathML formulas, but not CSS layout, scripts, forms, or arbitrary DOM semantics".into(),
+        message: "HTML import preserves common document blocks, inline links/images, MathML formulas, and raw `<style>`/`<script>`/`<form>` markup, but not CSS layout, script execution, form semantics, or arbitrary DOM semantics".into(),
         status: SemanticStatus::Partial,
     });
     Ok(HtmlImport { document: graph, base_href, links })
@@ -195,6 +197,21 @@ fn body_children(document: &HtmlDocument) -> &[HtmlNode] {
     body.map(|element| element.children.as_slice()).unwrap_or_else(|| document.nodes.as_slice())
 }
 
+/// CSS and scripts authored under `<head>` are metadata to a browser, but
+/// keeping their exact markup is the only fidelity path for html → html.
+fn head_raw_blocks(document: &HtmlDocument, source: &str) -> Vec<(Block, std::ops::Range<usize>)> {
+    let Some(head) = document.nodes.iter().filter_map(as_element).find_map(|element| find_element(element, "head"))
+    else {
+        return Vec::new();
+    };
+    head.children
+        .iter()
+        .filter_map(as_element)
+        .filter(|element| matches!(element.tag_name.to_ascii_lowercase().as_str(), "style" | "script"))
+        .map(|element| (Block::RawHtml { html: raw_element_markup(element, source) }, element.span.clone().into()))
+        .collect()
+}
+
 /// Lower sibling nodes in document order without dropping authored inline
 /// content that sits directly under a container element.
 fn lower_children(children: &[HtmlNode], graph: &mut DocumentGraph, source: &str) -> Vec<(Block, std::ops::Range<usize>)> {
@@ -221,6 +238,14 @@ fn lower_children(children: &[HtmlNode], graph: &mut DocumentGraph, source: &str
             HtmlNode::Element(element) if is_block_element(element) || is_display_math(element) => {
                 flush_inline_run(&mut result, &mut pending, &mut pending_span);
                 result.extend(lower_blocks(element, graph, source));
+            }
+            HtmlNode::Element(element) if is_raw_preserved_element(element) => {
+                // CSS, scripts and forms have no notedown-ir shape. Keeping their
+                // exact authored markup is the only faithful path for html → html,
+                // and the loss markers still name every construct that other
+                // writers cannot reproduce.
+                flush_inline_run(&mut result, &mut pending, &mut pending_span);
+                result.push((Block::RawHtml { html: raw_element_markup(element, source) }, element.span.clone().into()));
             }
             HtmlNode::Element(element) if is_unsupported_element(element) => {}
             HtmlNode::Element(element) if element.tag_name.eq_ignore_ascii_case("template") => {
@@ -330,10 +355,32 @@ fn collect_unsupported_element_losses(element: &Element, graph: &mut DocumentGra
             status: SemanticStatus::Partial,
         });
     }
-    if matches!(
-        tag.as_str(),
-        "script" | "style" | "form" | "input" | "select" | "textarea" | "button" | "canvas" | "video" | "audio" | "iframe"
-    ) {
+    if is_raw_preserved_element(element) {
+        let (code, message) = match tag.as_str() {
+            "style" => (
+                "import.html.raw_style",
+                "`<style>` keeps its authored CSS as raw HTML, but the CSS is not applied or represented in notedown-ir",
+            ),
+            "script" => (
+                "import.html.raw_script",
+                "`<script>` keeps its authored source as raw HTML, but it is not executed and not represented in notedown-ir",
+            ),
+            "form" => (
+                "import.html.raw_form",
+                "`<form>` keeps its authored markup as raw HTML, but form semantics are not represented in notedown-ir",
+            ),
+            _ => (
+                "import.html.raw_form_control",
+                "a form control keeps its authored markup as raw HTML, but its control semantics are not represented in notedown-ir",
+            ),
+        };
+        graph.push_loss(LossMarker {
+            code: code.into(),
+            message: format!("{message} (`<{tag}>`)"),
+            status: SemanticStatus::Partial,
+        });
+    }
+    if matches!(tag.as_str(), "canvas" | "video" | "audio" | "iframe") {
         graph.push_loss(LossMarker {
             code: format!("import.html.unsupported_{tag}"),
             message: format!("HTML element `<{tag}>` is not represented in notedown-ir"),
@@ -1113,7 +1160,10 @@ fn lower_inlines(element: &Element, graph: &mut DocumentGraph, source: &str) -> 
         match child {
             HtmlNode::Text(text) => push_text(&mut result, text.content.clone()),
             HtmlNode::Element(child) => {
-                if !is_unsupported_element(child) {
+                if is_raw_preserved_element(child) {
+                    result.push(Inline::RawHtml { html: raw_element_markup(child, source) });
+                }
+                else if !is_unsupported_element(child) {
                     result.extend(lower_inline_element(child, graph, source));
                 }
             }
@@ -1124,9 +1174,16 @@ fn lower_inlines(element: &Element, graph: &mut DocumentGraph, source: &str) -> 
 }
 
 fn is_unsupported_element(element: &Element) -> bool {
+    matches!(element.tag_name.to_ascii_lowercase().as_str(), "canvas" | "video" | "audio" | "iframe")
+}
+
+/// Elements kept verbatim as raw HTML because notedown-ir has no shape for
+/// them. `<style>`, `<script>` and `<form>` own their whole subtree, so the
+/// raw slice preserves controls and text without a second HTML parser.
+fn is_raw_preserved_element(element: &Element) -> bool {
     matches!(
         element.tag_name.to_ascii_lowercase().as_str(),
-        "script" | "style" | "form" | "input" | "select" | "textarea" | "button" | "canvas" | "video" | "audio" | "iframe"
+        "script" | "style" | "form" | "input" | "select" | "textarea" | "button"
     )
 }
 

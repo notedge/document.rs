@@ -272,7 +272,8 @@ mod html_structure_smoke {
         let source = "<script>if (a < b) { x() }</script><p>after</p>";
         let output = html(source);
         assert!(output.contains("<p>after</p>"), "{output}");
-        assert!(loss_codes(source).contains(&"import.html.unsupported_script".to_string()));
+        assert!(output.contains("<script>if (a < b) { x() }</script>"), "{output}");
+        assert!(loss_codes(source).contains(&"import.html.raw_script".to_string()));
     }
 }
 

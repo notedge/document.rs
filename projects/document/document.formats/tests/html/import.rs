@@ -16,6 +16,33 @@ fn html_diagram_round_trips_through_the_diagram_attribute() {
 }
 
 #[test]
+fn html_round_trips_style_script_and_form_markup() {
+    let source = concat!(
+        "<html><head><title>Styled</title>",
+        "<style>.lead { color: rebeccapurple }</style>",
+        "<script>window.flag = true</script>",
+        "</head><body>",
+        "<p class=\"lead\">Intro</p>",
+        "<form action=\"/search\"><input name=\"q\"/><button type=\"submit\">Go</button></form>",
+        "<script>if (a < b) { console.log(\"lt\") }</script>",
+        "<p>after</p></body></html>"
+    );
+    let imported = import_html_text("styled.html", source).expect("import html");
+    assert_eq!(imported.metadata.title.as_deref(), Some("Styled"));
+    let html = export_html(&imported).expect("export html");
+    assert!(html.contains("<style>.lead { color: rebeccapurple }</style>"), "{html}");
+    assert!(html.contains("<script>window.flag = true</script>"), "{html}");
+    assert!(html.contains("<form action=\"/search\"><input name=\"q\"/><button type=\"submit\">Go</button></form>"), "{html}");
+    assert!(html.contains("<script>if (a < b) { console.log(\"lt\") }</script>"), "{html}");
+    assert!(html.contains("<p>after</p>"), "{html}");
+    let codes: Vec<&str> = imported.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    for code in ["import.html.raw_style", "import.html.raw_script", "import.html.raw_form", "import.html.raw_form_control"] {
+        assert!(codes.contains(&code), "missing {code}: {codes:?}");
+    }
+    assert!(!codes.contains(&"import.html.unsupported_style"), "{codes:?}");
+}
+
+#[test]
 fn html_import_reads_rendered_diagram_figures_without_leaking_svg_text() {
     let source = "flowchart TD\n  A[Start] --> B{Done?}\n  B -->|yes| C[Stop]";
     let hex = source.bytes().map(|byte| format!("{byte:02x}")).collect::<String>();
@@ -404,12 +431,22 @@ fn html_import_lowers_common_blocks_and_reports_partial_surface() {
 }
 
 #[test]
-fn html_import_reports_unsupported_interactive_elements() {
+fn html_import_keeps_interactive_markup_as_raw_html() {
     let graph = import_html_text("interactive.html", "<body><script>alert(1)</script><form><input></form></body>")
         .expect("import html");
-    assert!(graph.coverage.loss.iter().any(|loss| loss.code == "import.html.unsupported_script"));
-    assert!(graph.coverage.loss.iter().any(|loss| loss.code == "import.html.unsupported_form"));
-    assert!(graph.coverage.loss.iter().any(|loss| loss.code == "import.html.unsupported_input"));
+    for code in ["import.html.raw_script", "import.html.raw_form", "import.html.raw_form_control"] {
+        assert!(graph.coverage.loss.iter().any(|loss| loss.code == code), "missing {code}: {:?}", graph.coverage.loss);
+    }
+    let raw: Vec<&str> = graph
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::RawHtml { html } => Some(html.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(raw.iter().any(|html| html.contains("<script>alert(1)</script>")), "{raw:?}");
+    assert!(raw.iter().any(|html| html.contains("<form><input></form>")), "{raw:?}");
 }
 
 #[test]
