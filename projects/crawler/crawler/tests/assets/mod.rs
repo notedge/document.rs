@@ -3,11 +3,11 @@
 use crawler::{fingerprint, hydrate_assets};
 use crawler_fetch::{FetchClient, FetchRequest, MemoryEntry, MemoryTransport, RobotsPolicy, Transport, build_artifact};
 use crawler_types::{BodyStorage, FetchArtifact, Result, TransportProvenance};
-use document_ir::{
-    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, NodeId, SemanticStatus,
+use document_ir::{Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, NodeId, SemanticStatus};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::{Arc, Mutex},
 };
-use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Arc, Mutex};
 
 fn document_with_asset(source: &str) -> DocumentGraph {
     let mut document = DocumentGraph::new(DocumentId(1));
@@ -115,7 +115,8 @@ impl Transport for SequencedTransport {
             let mut responses = self.responses.lock().expect("responses");
             if responses.len() > 1 {
                 responses.pop_front().expect("queued response")
-            } else {
+            }
+            else {
                 responses.front().expect("final response").clone()
             }
         };
@@ -141,11 +142,7 @@ fn retryable_asset_status_is_retried_before_resolving() {
     let transport = SequencedTransport {
         attempts: attempts.clone(),
         responses: Mutex::new(VecDeque::from([
-            MemoryEntry {
-                status: 503,
-                headers: BTreeMap::from([("retry-after".into(), "0".into())]),
-                body: b"busy".to_vec(),
-            },
+            MemoryEntry { status: 503, headers: BTreeMap::from([("retry-after".into(), "0".into())]), body: b"busy".to_vec() },
             MemoryEntry {
                 status: 200,
                 headers: BTreeMap::from([("content-type".into(), "image/png".into())]),

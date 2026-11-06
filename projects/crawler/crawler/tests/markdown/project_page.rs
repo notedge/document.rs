@@ -175,14 +175,10 @@ fn live_publish_lock_reports_conflict() {
 
     let output_dir = unique_temp_dir("crawler-live-lock");
     fs::create_dir_all(&output_dir).expect("create output dir");
-    let lock_path = output_dir
-        .parent()
-        .expect("parent")
-        .join(format!(".{}.lock", output_dir.file_name().expect("name").to_string_lossy()));
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
+    let lock_path =
+        output_dir.parent().expect("parent").join(format!(".{}.lock", output_dir.file_name().expect("name").to_string_lossy()));
+    let now =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|duration| duration.as_secs()).unwrap_or(0);
     fs::write(&lock_path, format!(r#"{{"pid":1,"started_at_epoch":{now}}}"#)).expect("write lock");
     fs::write(output_dir.join("index.md"), "old").expect("write old output");
 
@@ -207,10 +203,8 @@ fn stale_publish_lock_is_reclaimed() {
 
     let output_dir = unique_temp_dir("crawler-stale-lock");
     fs::create_dir_all(&output_dir).expect("create output dir");
-    let lock_path = output_dir
-        .parent()
-        .expect("parent")
-        .join(format!(".{}.lock", output_dir.file_name().expect("name").to_string_lossy()));
+    let lock_path =
+        output_dir.parent().expect("parent").join(format!(".{}.lock", output_dir.file_name().expect("name").to_string_lossy()));
     fs::write(&lock_path, r#"{"pid":999999,"started_at_epoch":0}"#).expect("write stale lock");
 
     publish_extracted_page(&output_dir, "reclaimed.html", &result).expect("stale lock must be reclaimed");
@@ -221,10 +215,8 @@ fn stale_publish_lock_is_reclaimed() {
 }
 
 fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
+    let nanos =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|duration| duration.as_nanos()).unwrap_or(0);
     std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()))
 }
 

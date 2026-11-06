@@ -246,13 +246,16 @@ fn try_write_lock(lock_path: &Path) -> Result<bool> {
 }
 
 fn is_stale_lock(lock_path: &Path) -> bool {
-    let Ok(payload) = fs::read_to_string(lock_path) else {
+    let Ok(payload) = fs::read_to_string(lock_path)
+    else {
         return true;
     };
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload) else {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&payload)
+    else {
         return true;
     };
-    let Some(started) = parsed.get("started_at_epoch").and_then(|value| value.as_u64()) else {
+    let Some(started) = parsed.get("started_at_epoch").and_then(|value| value.as_u64())
+    else {
         return true;
     };
     now_epoch_seconds().saturating_sub(started) > LOCK_STALE_AFTER.as_secs()
@@ -513,7 +516,14 @@ mod tests {
 
     #[test]
     fn unsafe_asset_paths_are_rejected() {
-        for path in ["assets/../escape.png", "assets/a:b.png", "assets/a\u{0007}.png", "assets/a.png ", "/assets/a.png", "assets/a.png/"] {
+        for path in [
+            "assets/../escape.png",
+            "assets/a:b.png",
+            "assets/a\u{0007}.png",
+            "assets/a.png ",
+            "/assets/a.png",
+            "assets/a.png/",
+        ] {
             let dir = temp_dir("crawler-publish-unsafe");
             let mut bad = project("bad");
             bad.assets = vec![asset(path)];
