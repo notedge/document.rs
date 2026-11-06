@@ -24,8 +24,8 @@ use crate::{
     keyspace,
     session::StoreSession,
     types::{
-        ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
-        StoreDiagnosticReport, StoreDoctorIssue, StoreDoctorSeverity, StoreNamespaceStats,
+        CheckpointClaim, CheckpointView, ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle,
+        RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue, StoreDoctorSeverity, StoreNamespaceStats,
     },
 };
 
@@ -79,11 +79,6 @@ struct EventRecord {
     sequence: u64,
     #[serde(default)]
     event: Option<CrawlEvent>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CheckpointRecord {
-    sequence: u64,
 }
 
 /// Page transaction staged in process memory until one fenced batch commit.
@@ -634,10 +629,21 @@ impl Store for YydbStore {
 
     fn save_checkpoint_view(&mut self) -> Result<u64> {
         let run_id = self.active_run_id.clone().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
-        let sequence = self.read_run_meta(&run_id)?.event_count;
-        let key = keyspace::checkpoint_entry(&run_id, sequence);
-        self.connection()?.put(&key, encode(&CheckpointRecord { sequence })?).map_err(map_yydb_error)?;
-        Ok(sequence)
+        let view = self.build_checkpoint_view(&run_id)?;
+        let key = keyspace::checkpoint_entry(&run_id, view.last_commit_sequence);
+        self.connection()?.put(&key, encode(&view)?).map_err(map_yydb_error)?;
+        Ok(view.last_commit_sequence)
+    }
+
+    fn checkpoint_view(&self) -> Result<Option<CheckpointView>> {
+        let run_id = self.active_run_id.as_ref().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        self.latest_checkpoint_view(run_id)
+    }
+
+    fn checkpoint_view_json(&self) -> Result<Option<String>> {
+        self.checkpoint_view()?
+            .map(|view| serde_json::to_string(&view).map_err(|error| StoreError::StoreCorrupt(error.to_string())))
+            .transpose()
     }
 
     fn page_phase(&self, page_id: &str) -> Result<PagePhase> {
@@ -787,23 +793,55 @@ impl YydbStore {
         self.connection()?.checkpoint().map_err(map_yydb_error)
     }
 
-    fn latest_checkpoint_sequence(&self, run_id: &str) -> Result<u64> {
+    /// Derive a checkpoint view from the native records at this instant.
+    ///
+    /// The view is a projection, not a fact source: pages, frontier records,
+    /// claims and the event counter stay authoritative.
+    fn build_checkpoint_view(&self, run_id: &str) -> Result<CheckpointView> {
+        let meta = self.read_run_meta(run_id)?;
+        Ok(CheckpointView {
+            run_id: run_id.to_owned(),
+            seed_url: meta.seed_url,
+            last_commit_sequence: meta.event_count,
+            committed_pages: self.collect_committed(run_id)?.len() as u64,
+            pending_frontier: self.pending_frontier_count()?,
+            open_claims: self
+                .collect_claims(run_id)?
+                .into_iter()
+                .map(|(item_id, claim)| CheckpointClaim {
+                    item_id,
+                    worker_id: claim.worker_id,
+                    fencing_token: claim.fencing_token,
+                    lease_until_ms: claim.lease_until_ms,
+                })
+                .collect(),
+        })
+    }
+
+    /// Latest exported view, chosen by `last_commit_sequence`.
+    fn latest_checkpoint_view(&self, run_id: &str) -> Result<Option<CheckpointView>> {
         let conn = self.connection()?;
         let prefix = keyspace::checkpoint_prefix(run_id);
         let mut after: Option<String> = None;
-        let mut latest = 0;
+        let mut latest: Option<CheckpointView> = None;
         loop {
             let page = conn.scan_prefix(&prefix, after.as_deref(), SCAN_PAGE).map_err(map_yydb_error)?;
             let fetched = page.len();
             for (_, bytes) in &page {
-                latest = latest.max(decode::<CheckpointRecord>(bytes, "checkpoint")?.sequence);
+                let view: CheckpointView = decode(bytes, "checkpoint")?;
+                if latest.as_ref().map_or(true, |current| current.last_commit_sequence < view.last_commit_sequence) {
+                    latest = Some(view);
+                }
+            }
+            if fetched < SCAN_PAGE {
+                return Ok(latest);
             }
             after = page.last().map(|(key, _)| key.clone());
-            if fetched < SCAN_PAGE {
-                break;
-            }
         }
-        Ok(latest)
+    }
+
+    fn latest_checkpoint_sequence(&self, run_id: &str) -> Result<u64> {
+        Ok(self.latest_checkpoint_view(run_id)?.map_or(0, |view| view.last_commit_sequence))
     }
 }
 

@@ -6,7 +6,7 @@ use crate::{
     error::{Result, StoreError},
     session::StoreSession,
     types::{
-        ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
+        CheckpointView, ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig,
         StoreDiagnosticReport,
     },
 };
@@ -96,6 +96,17 @@ impl Store for MemoryStore {
 
     fn save_checkpoint_view(&mut self) -> Result<u64> {
         self.session.save_checkpoint_view()
+    }
+
+    fn checkpoint_view(&self) -> Result<Option<CheckpointView>> {
+        self.session.checkpoint_view()
+    }
+
+    fn checkpoint_view_json(&self) -> Result<Option<String>> {
+        self.session
+            .checkpoint_view()?
+            .map(|view| serde_json::to_string(&view).map_err(|error| StoreError::StoreCorrupt(error.to_string())))
+            .transpose()
     }
 
     fn page_phase(&self, page_id: &str) -> Result<PagePhase> {

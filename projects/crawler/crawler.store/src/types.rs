@@ -76,6 +76,45 @@ pub struct PageTxHandle {
     pub page_id: String,
 }
 
+/// One open claim recorded in a checkpoint view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckpointClaim {
+    /// Frontier item held by the claim.
+    pub item_id: String,
+    /// Worker that holds the claim.
+    pub worker_id: String,
+    /// Store-visible fencing token.
+    pub fencing_token: u64,
+    /// Lease expiry in epoch milliseconds.
+    pub lease_until_ms: u64,
+}
+
+/// Derived checkpoint view exported from the store records.
+///
+/// A checkpoint is never the source of truth: the view is recomputed from
+/// frontier, claim and page records, and JSON is only an export artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckpointView {
+    /// Active run identity.
+    #[serde(default)]
+    pub run_id: String,
+    /// Seed URL of the run.
+    #[serde(default)]
+    pub seed_url: String,
+    /// Last committed report event sequence.
+    #[serde(default, alias = "sequence")]
+    pub last_commit_sequence: u64,
+    /// Pages already committed in this run.
+    #[serde(default)]
+    pub committed_pages: u64,
+    /// Frontier records still queued or claimed.
+    #[serde(default)]
+    pub pending_frontier: u64,
+    /// Claims that are still open at view time.
+    #[serde(default)]
+    pub open_claims: Vec<CheckpointClaim>,
+}
+
 /// Page transaction lifecycle phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::{Result, StoreError},
     keyspace::{item_id_from_url, run_id_from_seed},
-    types::{ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec},
+    types::{
+        CheckpointClaim, CheckpointView, ClaimToken, PageAssetBinding, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle,
+        RunSpec,
+    },
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +47,8 @@ pub(crate) struct RunState {
     event_count: u64,
     #[serde(default)]
     checkpoint_sequence: u64,
+    #[serde(default)]
+    last_checkpoint_view: Option<CheckpointView>,
     next_fencing: u64,
 }
 
@@ -167,6 +172,7 @@ impl StoreSession {
             pages: BTreeMap::new(),
             event_count: 0,
             checkpoint_sequence: 0,
+            last_checkpoint_view: None,
             next_fencing: 0,
         };
         self.runs.insert(run_id.clone(), run);
@@ -411,11 +417,40 @@ impl StoreSession {
     }
 
     pub(crate) fn save_checkpoint_view(&mut self) -> Result<u64> {
-        let run = self.active_run_mut()?;
-        run.checkpoint_sequence = run.event_count;
-        let sequence = run.event_count;
+        let run_id = self.active_run_id.clone().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        let sequence = {
+            let run = self.active_run_mut()?;
+            run.checkpoint_sequence = run.event_count;
+            let view = Self::view_from_run(&run_id, run);
+            run.last_checkpoint_view = Some(view);
+            run.event_count
+        };
         self.persist_snapshot();
         Ok(sequence)
+    }
+
+    fn view_from_run(run_id: &str, run: &RunState) -> CheckpointView {
+        CheckpointView {
+            run_id: run_id.to_owned(),
+            seed_url: run.seed_url.clone(),
+            last_commit_sequence: run.checkpoint_sequence,
+            committed_pages: run.pages.values().filter(|page| page.phase == PagePhase::Committed).count() as u64,
+            pending_frontier: run.frontier.len() as u64,
+            open_claims: run
+                .claims
+                .iter()
+                .map(|(item_id, claim)| CheckpointClaim {
+                    item_id: item_id.clone(),
+                    worker_id: claim.worker_id.clone(),
+                    fencing_token: claim.fencing_token,
+                    lease_until_ms: claim.lease_until_ms,
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn checkpoint_view(&self) -> Result<Option<CheckpointView>> {
+        Ok(self.active_run()?.last_checkpoint_view.clone())
     }
 
     pub(crate) fn checkpoint_lag(&self) -> u64 {
