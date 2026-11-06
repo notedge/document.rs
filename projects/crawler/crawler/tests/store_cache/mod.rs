@@ -4,9 +4,9 @@ use std::{cell::Cell, collections::BTreeMap, rc::Rc};
 
 use crawler::{Extractor, HtmlExtractor, run_crawl_with_store};
 use crawler_fetch::{FetchRequest, MemoryEntry, MemoryTransport, Transport};
-use crawler_store::{MemoryStore, Store, StoreConfig};
 #[cfg(feature = "yydb")]
 use crawler_store::YydbStore;
+use crawler_store::{MemoryStore, Store, StoreConfig};
 use crawler_types::{CrawlEvent, CrawlRequest, FetchArtifact, Result};
 
 #[derive(Clone)]
@@ -45,10 +45,7 @@ fn transport(fetches: &Rc<Cell<usize>>) -> CountingTransport {
 
 #[cfg(feature = "yydb")]
 fn temp_db_path(label: &str) -> std::path::PathBuf {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
     std::env::temp_dir().join(format!("crawler-{label}-{}-{nanos}.yydb", std::process::id()))
 }
 
@@ -77,8 +74,8 @@ fn yydb_store_backed_caches_survive_a_restart_without_refetching() {
     assert_eq!(fetches.get(), 2, "robots and page must be fetched once");
 
     store.reopen().expect("restart");
-    let second = run_crawl_with_store(request, transport(&fetches), &extractors, Default::default(), &mut store)
-        .expect("second crawl");
+    let second =
+        run_crawl_with_store(request, transport(&fetches), &extractors, Default::default(), &mut store).expect("second crawl");
     assert_eq!(second.report.committed, 1);
     assert_eq!(fetches.get(), 2, "restart must reuse stored robots and response");
 

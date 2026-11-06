@@ -15,7 +15,7 @@ use crawler_types::{FetchArtifact, FrontierItem};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use yydb::{
     Batch, Connection, Error as YydbError, EvictionPolicy, LeaseExpectation, LeaseToken, NamespaceQuota, ObjectKind, ObjectRef,
-    ReleaseOutcome,
+    ReleaseOutcome as YydbReleaseOutcome,
 };
 
 use crate::{
@@ -24,8 +24,8 @@ use crate::{
     keyspace,
     session::StoreSession,
     types::{
-        ClaimToken, PagePhase, PageTxHandle, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport, StoreDoctorIssue,
-        StoreDoctorSeverity, StoreNamespaceStats,
+        ClaimToken, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport,
+        StoreDoctorIssue, StoreDoctorSeverity, StoreNamespaceStats,
     },
 };
 
@@ -157,6 +157,30 @@ impl YydbStore {
         }
     }
 
+    /// Validate a worker token against the stored claim and rebuild its lease handle.
+    ///
+    /// The upstream lease record is not trusted for fencing because the pinned
+    /// YYDB revision drops `__yydb/meta/*` on read, so the check uses the claim
+    /// record this layer wrote at claim time.
+    fn active_lease(&self, token: &ClaimToken) -> Result<(String, ClaimRecord, LeaseToken)> {
+        let run_id = self.active_run_id.clone().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        let claim_key = keyspace::claim_state(&run_id, &token.item_id);
+        let record = self.read_claim(&claim_key)?.ok_or(StoreError::StoreFencingMismatch)?;
+        if record.worker_id != token.worker_id || record.fencing_token != token.fencing_token {
+            return Err(StoreError::StoreFencingMismatch);
+        }
+        if record.lease_until_ms <= now_millis() {
+            return Err(StoreError::StoreLeaseExpired);
+        }
+        let lease = LeaseToken {
+            key: claim_key.clone(),
+            worker_id: record.worker_id.clone(),
+            fencing_token: record.lease_fencing_token,
+            lease_until: record.lease_until_ms,
+        };
+        Ok((claim_key, record, lease))
+    }
+
     fn read_page(&self, run_id: &str, page_id: &str) -> Result<Option<PageRecord>> {
         match self.connection()?.get(&keyspace::page_state(run_id, page_id)).map_err(map_yydb_error)? {
             Some(bytes) => Ok(Some(decode(&bytes, "page")?)),
@@ -268,7 +292,7 @@ impl YydbStore {
                             lease_until_ms: lease.lease_until,
                         };
                         if let Err(error) = conn.put(&claim_key, encode(&record)?) {
-                            let _ = conn.release_lease(&lease, ReleaseOutcome::Requeue);
+                            let _ = conn.release_lease(&lease, YydbReleaseOutcome::Requeue);
                             return Err(map_yydb_error(error));
                         }
                         return Ok(Some(ClaimToken { item_id, worker_id: worker_id.to_owned(), fencing_token: fencing }));
@@ -377,6 +401,47 @@ impl Store for YydbStore {
             .ok_or_else(|| StoreError::StoreCorrupt("claim key does not match its prefix".into()))?
             .to_owned();
         self.last_claim = Some(ClaimToken { item_id, worker_id: worker_id.to_owned(), fencing_token: 0 });
+        Ok(())
+    }
+
+    fn renew_claim(&mut self, token: &ClaimToken) -> Result<u64> {
+        let (claim_key, mut record, lease) = self.active_lease(token)?;
+        let now = now_millis();
+        let until = now.saturating_add(self.claim_lease.as_millis() as u64);
+        self.connection()?.renew_lease(&lease, until).map_err(map_yydb_error)?;
+        record.lease_until_ms = until;
+        self.connection()?.put(&claim_key, encode(&record)?).map_err(map_yydb_error)?;
+        Ok(until)
+    }
+
+    fn release_claim(&mut self, token: &ClaimToken, outcome: ReleaseOutcome) -> Result<()> {
+        let run_id = self.active_run_id.clone().ok_or_else(|| StoreError::StoreInvalidState("no active run".into()))?;
+        let (claim_key, _record, lease) = self.active_lease(token)?;
+        let release = match outcome {
+            ReleaseOutcome::Done => YydbReleaseOutcome::Failed { reason: "done".into() },
+            ReleaseOutcome::Requeue => YydbReleaseOutcome::Requeue,
+        };
+        self.connection()?.release_lease(&lease, release).map_err(map_yydb_error)?;
+        let item_key = keyspace::frontier_item(&run_id, &token.item_id);
+        let mut batch = Batch::new();
+        batch.delete(claim_key);
+        match outcome {
+            ReleaseOutcome::Done => batch.delete(item_key),
+            ReleaseOutcome::Requeue => {
+                let bytes = self
+                    .connection()?
+                    .get(&item_key)
+                    .map_err(map_yydb_error)?
+                    .ok_or_else(|| StoreError::StoreNotFound(token.item_id.clone()))?;
+                let mut item: FrontierItem = decode(&bytes, "frontier item")?;
+                item.attempts = item.attempts.saturating_add(1);
+                batch.put(item_key, encode(&item)?);
+            }
+        }
+        batch.commit(self.connection()?).map_err(map_yydb_error)?;
+        if self.last_claim.as_ref() == Some(token) {
+            self.last_claim = None;
+        }
         Ok(())
     }
 

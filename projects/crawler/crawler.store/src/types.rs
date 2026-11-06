@@ -57,6 +57,16 @@ pub struct ClaimToken {
     pub fencing_token: u64,
 }
 
+/// What happens to a claimed frontier item when its worker releases the lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReleaseOutcome {
+    /// The item is finished and leaves the frontier.
+    Done,
+    /// The attempt failed and the item returns to pending with a higher attempt count.
+    Requeue,
+}
+
 /// In-flight page transaction handle.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PageTxHandle {

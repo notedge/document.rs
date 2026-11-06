@@ -5,7 +5,7 @@ use crate::{
     Store,
     error::{Result, StoreError},
     session::StoreSession,
-    types::{ClaimToken, PagePhase, PageTxHandle, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport},
+    types::{ClaimToken, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport},
 };
 
 /// In-memory `Store` backend for deterministic contract tests.
@@ -37,6 +37,14 @@ impl Store for MemoryStore {
 
     fn second_worker_claim(&mut self, worker_id: &str) -> Result<()> {
         self.session.second_worker_claim(worker_id)
+    }
+
+    fn renew_claim(&mut self, token: &ClaimToken) -> Result<u64> {
+        self.session.renew_claim(token)
+    }
+
+    fn release_claim(&mut self, token: &ClaimToken, outcome: ReleaseOutcome) -> Result<()> {
+        self.session.release_claim(token, outcome)
     }
 
     fn begin_page_tx(&mut self, worker_id: &str) -> Result<PageTxHandle> {

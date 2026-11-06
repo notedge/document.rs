@@ -7,6 +7,7 @@ mod assets;
 mod browser;
 mod crawl;
 mod frontier;
+mod frontier_scheduler;
 mod html_import;
 mod input;
 mod logger_transport;

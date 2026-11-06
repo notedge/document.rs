@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::{Result, StoreError},
     keyspace::{item_id_from_url, run_id_from_seed},
-    types::{ClaimToken, PagePhase, PageTxHandle, RunHandle, RunSpec},
+    types::{ClaimToken, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +229,50 @@ impl StoreSession {
         let item_id =
             run.claims.keys().next().cloned().ok_or_else(|| StoreError::StoreInvalidState("no claimed item".into()))?;
         self.last_claim = Some(ClaimToken { item_id, worker_id: worker_id.to_owned(), fencing_token: 0 });
+        Ok(())
+    }
+
+    pub(crate) fn renew_claim(&mut self, token: &ClaimToken) -> Result<u64> {
+        let now = Self::now_millis();
+        let lease_millis = self.claim_lease.as_millis() as u64;
+        let run = self.active_run_mut()?;
+        let claim = run.claims.get_mut(&token.item_id).ok_or(StoreError::StoreFencingMismatch)?;
+        if claim.worker_id != token.worker_id || claim.fencing_token != token.fencing_token {
+            return Err(StoreError::StoreFencingMismatch);
+        }
+        if claim.lease_until_ms <= now {
+            return Err(StoreError::StoreLeaseExpired);
+        }
+        claim.lease_until_ms = now + lease_millis;
+        let until = claim.lease_until_ms;
+        self.persist_snapshot();
+        Ok(until)
+    }
+
+    pub(crate) fn release_claim(&mut self, token: &ClaimToken, outcome: ReleaseOutcome) -> Result<()> {
+        let run = self.active_run_mut()?;
+        let claim = run.claims.get(&token.item_id).ok_or(StoreError::StoreFencingMismatch)?;
+        if claim.worker_id != token.worker_id || claim.fencing_token != token.fencing_token {
+            return Err(StoreError::StoreFencingMismatch);
+        }
+        if claim.lease_until_ms <= Self::now_millis() {
+            return Err(StoreError::StoreLeaseExpired);
+        }
+        run.claims.remove(&token.item_id);
+        match outcome {
+            ReleaseOutcome::Done => {
+                run.frontier.remove(&token.item_id);
+            }
+            ReleaseOutcome::Requeue => {
+                if let Some(item) = run.frontier.get_mut(&token.item_id) {
+                    item.attempts = item.attempts.saturating_add(1);
+                }
+            }
+        }
+        if self.last_claim.as_ref() == Some(token) {
+            self.last_claim = None;
+        }
+        self.persist_snapshot();
         Ok(())
     }
 

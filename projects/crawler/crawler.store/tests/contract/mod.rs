@@ -6,6 +6,7 @@ mod support;
 mod y1_batch_transaction;
 mod y2_single_winner;
 mod y3_lease_fencing;
+mod y3b_release_renew;
 mod y4_scan_paging;
 mod y5_ttl_reopen;
 mod y6_objects;

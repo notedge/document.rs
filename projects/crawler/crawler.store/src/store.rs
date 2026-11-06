@@ -2,7 +2,7 @@ use crawler_types::{FetchArtifact, FrontierItem};
 
 use crate::{
     error::Result,
-    types::{ClaimToken, PagePhase, PageTxHandle, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport},
+    types::{ClaimToken, PagePhase, PageTxHandle, ReleaseOutcome, RunHandle, RunSpec, StoreConfig, StoreDiagnosticReport},
 };
 
 /// Store contract implemented by `MemoryStore` and `YydbStore`.
@@ -26,6 +26,12 @@ pub trait Store {
 
     /// Attempt a competing claim for dual-worker contract cases.
     fn second_worker_claim(&mut self, worker_id: &str) -> Result<()>;
+
+    /// Extend the active claim lease and return the new expiry in epoch milliseconds.
+    fn renew_claim(&mut self, token: &ClaimToken) -> Result<u64>;
+
+    /// Release the active claim as done or requeued, rejecting stale fencing.
+    fn release_claim(&mut self, token: &ClaimToken, outcome: ReleaseOutcome) -> Result<()>;
 
     /// Begin a page transaction bound to the active claim.
     fn begin_page_tx(&mut self, worker_id: &str) -> Result<PageTxHandle>;
