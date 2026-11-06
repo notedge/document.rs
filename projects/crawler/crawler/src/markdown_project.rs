@@ -488,6 +488,7 @@ mod tests {
             chapters: Vec::new(),
             assets: Vec::new(),
             unresolved_asset_sources: Vec::new(),
+            losses: Vec::new(),
         }
     }
 

@@ -1,6 +1,7 @@
 use document_formats::export::markdown_project::export_markdown_project;
 use document_ir::{
-    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, NodeId, SemanticStatus, SourceKind, SourceRef,
+    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, ListItem, NodeId, SemanticStatus, SourceKind,
+    SourceRef,
 };
 
 #[test]
@@ -162,4 +163,43 @@ fn export_markdown_project_splits_epub_spine_members_into_chapters() {
     assert!(project.index_markdown.contains("chapters/001-chapter-two.md"));
     assert!(project.chapters[0].markdown.contains("# Chapter One"));
     assert!(project.chapters[1].markdown.contains("# Chapter Two"));
+}
+
+#[test]
+fn export_markdown_project_reports_omitted_navigation_member() {
+    let mut graph = DocumentGraph::new(DocumentId(1));
+    graph.metadata.title = Some("Nav Book".into());
+    let nav = graph.push_block(Block::List {
+        ordered: false,
+        items: vec![ListItem {
+            content: vec![Inline::Text { text: "Part A".into() }],
+            children: Vec::new(),
+            number: None,
+            is_task: false,
+            is_checked: None,
+        }],
+    });
+    graph.attach_source(SourceRef {
+        node: nav,
+        kind: SourceKind::PackageMember { path: "OEBPS/nav.xhtml".into() },
+        precision: SemanticStatus::Partial,
+    });
+    let chapter = graph.push_block(Block::Section {
+        level: 1,
+        title: vec![Inline::Text { text: "Chapter One".into() }],
+        children: vec![],
+    });
+    graph.attach_source(SourceRef {
+        node: chapter,
+        kind: SourceKind::PackageMember { path: "OEBPS/chapter.xhtml".into() },
+        precision: SemanticStatus::Partial,
+    });
+
+    let project = export_markdown_project(&graph).expect("export project");
+    assert_eq!(project.chapters.len(), 1);
+    let loss =
+        project.losses.iter().find(|loss| loss.code == "export.markdown_project.navigation_omitted").expect("navigation loss");
+    assert_eq!(loss.status, SemanticStatus::Lossy);
+    assert!(loss.message.contains("OEBPS/nav.xhtml"), "{}", loss.message);
+    assert!(loss.message.contains("#part-a"), "{}", loss.message);
 }

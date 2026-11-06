@@ -17,6 +17,7 @@ fn publish_markdown_project_writes_index_chapters_assets_and_report() {
             asset_id: document_ir::AssetId(1),
         }],
         unresolved_asset_sources: Vec::new(),
+        losses: Vec::new(),
     };
     let report = format!(r#"{{"schema_version":"{}","operation":"convert_project"}}"#, document_convert::SCHEMA_REPORT);
     let output_dir = std::env::temp_dir().join(format!("panduck-publish-project-{}", std::process::id()));
@@ -60,6 +61,7 @@ fn repeated_publish_produces_deterministic_directory_tree() {
             },
         ],
         unresolved_asset_sources: Vec::new(),
+        losses: Vec::new(),
     };
     let report = format!(r#"{{"schema_version":"{}"}}"#, document_convert::SCHEMA_REPORT);
     let base = std::env::temp_dir().join(format!("panduck-deterministic-{}", std::process::id()));
@@ -90,6 +92,7 @@ fn failed_publish_does_not_pollute_existing_output() {
             asset_id: document_ir::AssetId(1),
         }],
         unresolved_asset_sources: Vec::new(),
+        losses: Vec::new(),
     };
     // Bad asset path: does not start with `assets/` → fails inside the loop.
     let bad_project = MarkdownProject {
@@ -101,6 +104,7 @@ fn failed_publish_does_not_pollute_existing_output() {
             asset_id: document_ir::AssetId(2),
         }],
         unresolved_asset_sources: Vec::new(),
+        losses: Vec::new(),
     };
     let report = format!(r#"{{"schema_version":"{}"}}"#, document_convert::SCHEMA_REPORT);
     let output_dir = std::env::temp_dir().join(format!("panduck-failure-isolated-{}", std::process::id()));
@@ -128,6 +132,7 @@ fn publish_markdown_project_creates_missing_nested_output_directory() {
         chapters: vec![],
         assets: vec![],
         unresolved_asset_sources: Vec::new(),
+        losses: Vec::new(),
     };
     let report = format!(r#"{{"schema_version":"{}"}}"#, document_convert::SCHEMA_REPORT);
 
@@ -154,6 +159,7 @@ fn repeated_publish_replaces_stale_output_contents() {
             asset_id: document_ir::AssetId(1),
         }],
         unresolved_asset_sources: Vec::new(),
+        losses: Vec::new(),
     };
     let second = MarkdownProject {
         index_markdown: "# Second\n".into(),
@@ -164,6 +170,7 @@ fn repeated_publish_replaces_stale_output_contents() {
             asset_id: document_ir::AssetId(2),
         }],
         unresolved_asset_sources: Vec::new(),
+        losses: Vec::new(),
     };
 
     publish_markdown_project(&output_dir, &first, &report).expect("first publish");
@@ -196,6 +203,7 @@ fn failed_first_publish_leaves_no_output_or_staging_directory() {
             asset_id: document_ir::AssetId(1),
         }],
         unresolved_asset_sources: Vec::new(),
+        losses: Vec::new(),
     };
     let report = format!(r#"{{"schema_version":"{}"}}"#, document_convert::SCHEMA_REPORT);
 

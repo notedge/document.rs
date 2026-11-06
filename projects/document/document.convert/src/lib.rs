@@ -162,8 +162,8 @@ pub struct ConvertOutput {
 /// `notedown-ir` keeps spans in a sidecar alongside the markers, so the report
 /// carries `span.start` and `span.end` per loss. Consumers no longer have to
 /// re-read the source to locate a loss.
-fn losses_with_spans(graph: &DocumentGraph) -> serde_json::Value {
-    let losses: Vec<serde_json::Value> = graph
+fn losses_with_spans(graph: &DocumentGraph) -> Vec<serde_json::Value> {
+    graph
         .coverage
         .loss
         .iter()
@@ -181,8 +181,24 @@ fn losses_with_spans(graph: &DocumentGraph) -> serde_json::Value {
                 },
             })
         })
-        .collect();
-    serde_json::Value::Array(losses)
+        .collect()
+}
+
+/// Serialize project-assembly losses, which have no authored source span.
+fn project_losses(project: &document_formats::export::markdown_project::MarkdownProject) -> Vec<serde_json::Value> {
+    project
+        .losses
+        .iter()
+        .map(|loss| {
+            serde_json::json!({
+                "code": loss.code,
+                "message": loss.message,
+                "status": loss.status,
+                "severity": document_diagnostic::loss_severity(loss.status).to_string(),
+                "span": serde_json::Value::Null,
+            })
+        })
+        .collect()
 }
 
 /// Converts bytes from `from` format to `to` format.
@@ -354,7 +370,7 @@ fn build_convert_project_output(
     project: &document_formats::export::markdown_project::MarkdownProject,
     transform_outcome: &TransformOutcome,
 ) -> ConvertProjectOutput {
-    let loss_count = graph.coverage.loss.len();
+    let loss_count = graph.coverage.loss.len() + project.losses.len();
     let mut diagnostic_set = diagnostics_from_graph(graph);
     for diagnostic in &transform_outcome.diagnostics {
         diagnostic_set.push(diagnostic.clone());
@@ -379,6 +395,8 @@ fn build_convert_project_output(
     if !transform_outcome.is_empty() {
         pipeline["transforms"] = serde_json::to_value(&transform_outcome.passes).unwrap_or_default();
     }
+    let mut losses = losses_with_spans(graph);
+    losses.extend(project_losses(project));
     let report_json = serde_json::json!({
         "schema_version": document_diagnostic::SCHEMA_REPORT,
         "operation": "convert_project",
@@ -386,7 +404,7 @@ fn build_convert_project_output(
         "inputs": [{ "path": label, "format": from }],
         "pipeline": pipeline,
         "coverage": graph.coverage,
-        "losses": losses_with_spans(graph),
+        "losses": losses,
         "diagnostics": diagnostic_envelope,
         "outputs": outputs,
         "unresolved_assets": project.unresolved_asset_sources,

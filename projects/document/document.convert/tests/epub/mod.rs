@@ -193,3 +193,79 @@ fn epub_container_offers_its_member_sizes_as_declared_uncompressed_bytes() {
             .expect("a permissive container budget must not block the conversion");
     assert!(output.markdown.contains("Hello EPUB"));
 }
+
+fn epub_with_nav_and_metadata_zip() -> Vec<u8> {
+    let container = br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#;
+    let opf = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Rich Book</dc:title>
+    <dc:language>en</dc:language>
+    <dc:identifier id="uid">urn:uuid:1a2b3c4d</dc:identifier>
+    <dc:publisher>Example Press</dc:publisher>
+    <dc:subject>Reference</dc:subject>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+    <itemref idref="ch2"/>
+  </spine>
+</package>"#;
+    let nav = br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+  <body>
+    <nav epub:type="toc" id="toc">
+      <ol>
+        <li><a href="ch1.xhtml#part-a">One - Start</a>
+          <ol>
+            <li><a href="ch1.xhtml#part-a">Part A</a></li>
+          </ol>
+        </li>
+        <li><a href="ch2.xhtml">Two - End</a></li>
+      </ol>
+    </nav>
+  </body>
+</html>"#;
+    stored_zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container),
+        ("OEBPS/content.opf", opf),
+        ("OEBPS/nav.xhtml", nav),
+        (
+            "OEBPS/ch1.xhtml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><h1 id="part-a">One</h1><p>First chapter</p></body>
+</html>"#,
+        ),
+        (
+            "OEBPS/ch2.xhtml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><h1>Two</h1><p>Second chapter</p></body>
+</html>"#,
+        ),
+    ])
+}
+
+#[test]
+fn epub_project_route_reports_navigation_and_metadata_losses() {
+    let output =
+        document_convert::convert_to_markdown_project_bytes("epub", "book.epub", epub_with_nav_and_metadata_zip(), None)
+            .expect("convert epub project");
+    let report: serde_json::Value = serde_json::from_str(&output.report_json).expect("report");
+    let losses = report["losses"].as_array().expect("losses");
+    let codes = losses.iter().filter_map(|loss| loss["code"].as_str()).collect::<Vec<_>>();
+    assert!(codes.contains(&"import.epub.metadata_unmapped"), "{codes:?}");
+    assert!(codes.contains(&"export.markdown_project.navigation_omitted"), "{codes:?}");
+    assert_eq!(output.loss_count, losses.len(), "the report count must include project losses");
+}

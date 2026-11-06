@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use document_ir::{Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentMetadata, NodeId, SourceKind};
+use document_ir::{
+    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentMetadata, LossMarker, NodeId, SemanticStatus, SourceKind,
+};
 
 use crate::{FormatError, export::markdown::export_markdown_with_image_urls_for_roots};
 
@@ -35,6 +37,8 @@ pub struct MarkdownProject {
     pub assets: Vec<MarkdownProjectAsset>,
     /// Image sources that could not be materialized into `assets/`.
     pub unresolved_asset_sources: Vec<String>,
+    /// Losses raised while assembling the project, separate from reader losses.
+    pub losses: Vec<LossMarker>,
 }
 
 /// Export a Markdown project from `notedown-ir`.
@@ -48,12 +52,27 @@ pub fn export_markdown_project(graph: &DocumentGraph) -> Result<MarkdownProject,
     let spine_groups = group_blocks_by_package_member(graph);
     if spine_groups.len() <= 1 {
         let index_markdown = export_markdown_with_image_urls_for_roots(graph, None, Some(&image_urls))?;
-        return Ok(MarkdownProject { index_markdown, chapters: Vec::new(), assets, unresolved_asset_sources: unresolved });
+        return Ok(MarkdownProject {
+            index_markdown,
+            chapters: Vec::new(),
+            assets,
+            unresolved_asset_sources: unresolved,
+            losses: Vec::new(),
+        });
     }
 
     let mut chapters = Vec::with_capacity(spine_groups.len());
+    let mut losses = Vec::new();
     for group in spine_groups {
         if is_navigation_only_group(graph, &group) {
+            losses.push(LossMarker {
+                code: "export.markdown_project.navigation_omitted".into(),
+                message: format!(
+                    "navigation member `{}` was left out of the chapter index, so its labels, nesting and fragment targets (such as `#part-a`) are not part of `index.md`",
+                    group.member_path
+                ),
+                status: SemanticStatus::Lossy,
+            });
             continue;
         }
         let markdown = export_markdown_with_image_urls_for_roots(graph, Some(&group.blocks), Some(&image_urls))?;
@@ -63,11 +82,17 @@ pub fn export_markdown_project(graph: &DocumentGraph) -> Result<MarkdownProject,
 
     if chapters.is_empty() {
         let index_markdown = export_markdown_with_image_urls_for_roots(graph, None, Some(&image_urls))?;
-        return Ok(MarkdownProject { index_markdown, chapters: Vec::new(), assets, unresolved_asset_sources: unresolved });
+        return Ok(MarkdownProject {
+            index_markdown,
+            chapters: Vec::new(),
+            assets,
+            unresolved_asset_sources: unresolved,
+            losses,
+        });
     }
 
     let index_markdown = build_chapter_index(&graph.metadata, &chapters);
-    Ok(MarkdownProject { index_markdown, chapters, assets, unresolved_asset_sources: unresolved })
+    Ok(MarkdownProject { index_markdown, chapters, assets, unresolved_asset_sources: unresolved, losses })
 }
 
 #[derive(Debug, Clone)]

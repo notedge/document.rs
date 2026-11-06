@@ -119,6 +119,7 @@ mod tests {
             chapters: Vec::new(),
             assets: vec![asset("assets/logo.png", bytes.clone()), asset("assets/dup.png", bytes.clone())],
             unresolved_asset_sources: Vec::new(),
+            losses: Vec::new(),
         };
 
         let unique = dedupe_markdown_project(&mut project);
@@ -139,6 +140,7 @@ mod tests {
             chapters: Vec::new(),
             assets: vec![asset("assets/a.png", b"A".to_vec()), asset("assets/b.jpg", b"B".to_vec())],
             unresolved_asset_sources: Vec::new(),
+            losses: Vec::new(),
         };
 
         dedupe_markdown_project(&mut project);
@@ -153,6 +155,7 @@ mod tests {
             chapters: Vec::new(),
             assets: vec![asset("assets/cover.jpeg", b"x".to_vec())],
             unresolved_asset_sources: Vec::new(),
+            losses: Vec::new(),
         };
 
         dedupe_markdown_project(&mut project);
@@ -167,6 +170,7 @@ mod tests {
             chapters: Vec::new(),
             assets: Vec::new(),
             unresolved_asset_sources: Vec::new(),
+            losses: Vec::new(),
         };
         assert_eq!(dedupe_markdown_project(&mut project), 0);
     }
