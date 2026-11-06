@@ -1,12 +1,18 @@
 //! G-PANDARK-5：大对象进 ObjectStore，按 content fingerprint 去重。
 
-use crawler_store::{ObjectKind, PageAssetBinding, PagePhase, RunSpec, Store, StoreConfig, YydbStore};
+use crawler_store::{ObjectKind, PageAssetBinding, PagePhase, RunSpec};
 use crawler_types::CrawlEvent;
 
-use crate::contract::support::{HOST, LONG_LEASE, assert_both, item, temp_db_path};
+use crate::contract::support::{HOST, LONG_LEASE, assert_both, item};
 
+#[cfg(feature = "yydb")]
+use crate::contract::support::temp_db_path;
+
+#[cfg(feature = "yydb")]
 #[test]
 fn g7_legacy_yydb_paths_are_rejected_with_a_migration_message() {
+    use crawler_store::{Store, StoreConfig, YydbStore};
+
     let legacy = temp_db_path("g7-legacy").with_extension("yydb");
     let error = match YydbStore::open(StoreConfig::yydb(&legacy)) {
         Ok(_) => panic!("legacy single-file layout must be rejected"),

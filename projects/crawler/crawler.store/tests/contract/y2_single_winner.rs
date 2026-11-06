@@ -12,10 +12,7 @@ fn y2_compare_exchange_has_a_single_winner() {
     let conn = Connection::open_in_memory().expect("open in memory");
     let key = "run/cas/only";
     assert!(conn.compare_exchange(key, None, Some(b"first")).expect("first create"));
-    assert!(
-        !conn.compare_exchange(key, None, Some(b"second")).expect("second create"),
-        "only one creator may win"
-    );
+    assert!(!conn.compare_exchange(key, None, Some(b"second")).expect("second create"), "only one creator may win");
     assert!(
         !conn.compare_exchange(key, Some(b"stale"), Some(b"third")).expect("stale value"),
         "stale value must not overwrite"

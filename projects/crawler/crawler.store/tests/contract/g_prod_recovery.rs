@@ -5,7 +5,7 @@
 
 use std::{thread, time::Duration};
 
-use crawler_store::{PagePhase, ReleaseOutcome, RunSpec, Store, StoreConfig, YydbStore};
+use crawler_store::{PagePhase, ReleaseOutcome, RunSpec, Store};
 use crawler_types::{BodyStorage, CrawlEvent, CrawlRequest, FetchArtifact, TransportProvenance};
 use url::Url;
 
@@ -192,18 +192,20 @@ fn g_prod_crash_mid_page_tx_is_discarded() {
 
 #[test]
 fn g_prod_memory_and_yydb_report_the_same_contract_surface() {
-    let mut memory = crawler_store::MemoryStore::open(StoreConfig::memory()).expect("memory");
-    let path = crate::contract::support::temp_db_path("prod-surface");
-    let mut yydb = YydbStore::open(StoreConfig::yydb(&path)).expect("yydb");
-    memory.set_namespace_quota("cache/response/", u64::MAX, u64::MAX).expect("memory quota");
-    yydb.set_namespace_quota("cache/response/", u64::MAX, u64::MAX).expect("yydb quota");
-    let memory_report = memory.doctor().expect("memory doctor");
-    let yydb_report = yydb.doctor().expect("yydb doctor");
-    assert!(memory_report.namespaces.iter().any(|entry| entry.prefix == "cache/response/"));
-    assert!(yydb_report.namespaces.iter().any(|entry| entry.prefix == "cache/response/"));
-    assert!(memory_report.issues.is_empty() && yydb_report.issues.is_empty());
-    memory.reopen().expect("memory reopen");
-    yydb.reopen().expect("yydb reopen");
-    drop(yydb);
-    crate::contract::support::cleanup_db(&path);
+    assert_both!("prod-surface", LONG_LEASE, |store, backend| {
+        store.set_namespace_quota("cache/response/", u64::MAX, u64::MAX).expect("quota");
+        let report = store.doctor().expect("doctor");
+        assert!(
+            report.namespaces.iter().any(|entry| entry.prefix == "cache/response/"),
+            "cache namespace must be reported on {backend}"
+        );
+        assert!(report.issues.is_empty(), "doctor must stay quiet on {backend}");
+
+        store.reopen().expect("reopen");
+        let report = store.doctor().expect("doctor after reopen");
+        assert!(
+            report.namespaces.iter().any(|entry| entry.prefix == "cache/response/"),
+            "cache namespace must survive reopen on {backend}"
+        );
+    });
 }

@@ -27,7 +27,8 @@ fn y4_prefix_scan_pages_ten_thousand_records() {
     loop {
         let page = conn.scan_prefix("run/scale/frontier/", after.as_deref(), PAGE).expect("scan page");
         assert!(page.len() <= PAGE, "page must respect the limit");
-        let Some(last_key) = page.last().map(|(key, _)| key.clone()) else {
+        let Some(last_key) = page.last().map(|(key, _)| key.clone())
+        else {
             break;
         };
         for (key, _) in page {

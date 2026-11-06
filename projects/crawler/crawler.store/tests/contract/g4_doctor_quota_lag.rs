@@ -1,10 +1,10 @@
 //! G-STORE-4：doctor 报告命名空间配额用量与 checkpoint 落后量。
 
-use crawler_store::{PagePhase, RunSpec, Store, StoreConfig, YydbStore};
+use crawler_store::{PagePhase, RunSpec};
 use crawler_types::{BodyStorage, FetchArtifact, TransportProvenance};
 use url::Url;
 
-use crate::contract::support::{HOST, LONG_LEASE, assert_both, cleanup_db, item, temp_db_path};
+use crate::contract::support::{HOST, LONG_LEASE, assert_both, item};
 
 fn artifact(cache_key: &str) -> FetchArtifact {
     let url = Url::parse(cache_key).expect("url");
@@ -26,29 +26,29 @@ fn artifact(cache_key: &str) -> FetchArtifact {
 /// least-recently-used entry and doctor reports the bounded usage.
 #[test]
 fn g4_doctor_reports_quota_bound_and_usage() {
-    let path = temp_db_path("g4-quota");
-    let mut store = YydbStore::open(StoreConfig::yydb(&path).with_claim_lease(LONG_LEASE)).expect("open yydb store");
-    store.set_namespace_quota("cache/response/", 4096, 2).expect("set quota");
+    assert_both!("g4-quota", LONG_LEASE, |store, backend| {
+        store.set_namespace_quota("cache/response/", 4096, 2).expect("set quota");
 
-    for key in ["https://example.com/a", "https://example.com/b", "https://example.com/c"] {
-        store.put_response_cache(&artifact(key)).expect("put response");
-    }
+        for key in ["https://example.com/a", "https://example.com/b", "https://example.com/c"] {
+            store.put_response_cache(&artifact(key)).expect("put response");
+        }
 
-    assert!(store.get_response_cache("https://example.com/a").expect("get a").is_none(), "oldest entry must be evicted");
-    assert!(store.get_response_cache("https://example.com/c").expect("get c").is_some());
+        assert!(
+            store.get_response_cache("https://example.com/a").expect("get a").is_none(),
+            "oldest entry must be evicted on {backend}"
+        );
+        assert!(store.get_response_cache("https://example.com/c").expect("get c").is_some());
 
-    let report = store.doctor().expect("doctor");
-    let namespace = report
-        .namespaces
-        .iter()
-        .find(|namespace| namespace.prefix == "cache/response/")
-        .expect("cache namespace must be reported");
-    assert_eq!(namespace.record_count, 2, "usage must stay inside the quota");
-    assert_eq!(namespace.quota_max_bytes, Some(4096));
-    assert!(namespace.bytes_used > 0);
-
-    drop(store);
-    cleanup_db(&path);
+        let report = store.doctor().expect("doctor");
+        let namespace = report
+            .namespaces
+            .iter()
+            .find(|namespace| namespace.prefix == "cache/response/")
+            .expect("cache namespace must be reported");
+        assert_eq!(namespace.record_count, 2, "usage must stay inside the quota on {backend}");
+        assert_eq!(namespace.quota_max_bytes, Some(4096));
+        assert!(namespace.bytes_used > 0);
+    });
 }
 
 /// Checkpoint lag: commits outrun the last checkpoint, reopening still rebuilds
