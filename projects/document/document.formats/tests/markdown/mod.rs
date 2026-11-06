@@ -236,7 +236,7 @@ fn markdown_table_export_uses_three_hyphen_delimiters() {
 }
 
 #[test]
-fn markdown_spanning_table_round_trips_through_an_html_table() {
+fn markdown_spanning_table_reopens_as_a_flattened_pipe_table() {
     let mut graph = DocumentGraph::new(DocumentId(7));
     graph.push_block(Block::Table {
         caption: None,
@@ -277,12 +277,31 @@ fn markdown_spanning_table_round_trips_through_an_html_table() {
     else {
         panic!("reopened table expected: {:#?}", reopened.blocks)
     };
+    // Inline HTML tables are not rendered downstream, so every span collapses
+    // into a rectangular grid of single cells and the downgrade is reported.
+    assert!(rows.iter().flat_map(|row| &row.cells).all(|cell| cell.colspan == 1 && cell.rowspan == 1));
     assert!(rows[0].is_header);
-    assert_eq!(rows[0].cells[0].colspan, 2);
-    assert_eq!(rows[1].cells[0].rowspan, 2);
-    assert_eq!(rows[1].cells[1].rowspan, 1);
+    assert_eq!(rows[0].cells.len(), 2);
+    assert_eq!(rows[0].cells[0].content, vec![Inline::Text { text: "Head".into() }]);
+    assert!(
+        rows[1].cells.iter().any(|cell| cell.content == vec![Inline::Text { text: "a".into() }]),
+        "{:?}",
+        rows[1].cells
+    );
+    assert!(
+        reopened
+            .coverage
+            .loss
+            .iter()
+            .any(|loss| loss.code == "import.html.table_spans" && loss.status == SemanticStatus::Partial),
+        "{:?}",
+        reopened.coverage.loss
+    );
     assert!(reopened.validate().is_valid());
-    assert_eq!(export_markdown(&reopened).expect("re-export spanning table"), markdown);
+    let flattened = export_markdown(&reopened).expect("re-export flattened table");
+    assert!(!flattened.contains("<table>"), "{flattened:?}");
+    assert!(flattened.contains("| Head |"), "{flattened:?}");
+    assert!(flattened.contains("| a | b |"), "{flattened:?}");
 }
 
 #[test]

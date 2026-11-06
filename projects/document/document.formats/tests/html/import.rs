@@ -558,7 +558,7 @@ fn html_import_reads_pandoc_style_footnotes() {
 }
 
 #[test]
-fn html_import_maps_table_cell_spans_into_the_ir() {
+fn html_import_flattens_table_cell_spans_into_a_pipe_table() {
     let graph = import_html_text(
         "spans.html",
         "<body><table><tr><th colspan=\"2\">Head</th></tr><tr><td rowspan=\"2\">a</td><td>b</td></tr><tr><td>c</td></tr></table></body>",
@@ -568,12 +568,26 @@ fn html_import_maps_table_cell_spans_into_the_ir() {
     else {
         panic!("table expected, got {:?}", graph.blocks)
     };
-    assert_eq!(rows[0].cells[0].colspan, 2);
-    assert_eq!(rows[0].cells[0].rowspan, 1);
-    assert_eq!(rows[1].cells[0].colspan, 1);
-    assert_eq!(rows[1].cells[0].rowspan, 2);
-    assert_eq!(rows[1].cells[1].colspan, 1);
-    assert_eq!(rows[1].cells[1].rowspan, 1);
+    // The covered slots become empty continuation cells and every span
+    // collapses to 1, so the table stays a rectangular pipe table.
+    assert!(rows.iter().flat_map(|row| &row.cells).all(|cell| cell.colspan == 1 && cell.rowspan == 1));
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].cells.len(), 2);
+    assert_eq!(rows[0].cells[0].content, vec![Inline::Text { text: "Head".into() }]);
+    assert!(rows[0].cells[1].content.is_empty());
+    assert_eq!(rows[1].cells[0].content, vec![Inline::Text { text: "a".into() }]);
+    assert_eq!(rows[1].cells[1].content, vec![Inline::Text { text: "b".into() }]);
+    assert!(rows[2].cells[0].content.is_empty());
+    assert_eq!(rows[2].cells[1].content, vec![Inline::Text { text: "c".into() }]);
+    assert!(
+        graph
+            .coverage
+            .loss
+            .iter()
+            .any(|loss| loss.code == "import.html.table_spans" && loss.status == SemanticStatus::Partial),
+        "the flatten downgrade must be reported: {:?}",
+        graph.coverage.loss
+    );
     assert!(!graph.coverage.loss.iter().any(|loss| loss.code == "import.html.invalid_cell_span"), "{:?}", graph.coverage.loss);
     assert!(graph.validate().is_valid());
 }

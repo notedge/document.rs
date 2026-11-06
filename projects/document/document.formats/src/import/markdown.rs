@@ -276,7 +276,7 @@ fn lower_markdown_tree(
             // block would quietly turn the table back into markup, so a
             // standalone `<table>` element is lowered into the IR table.
             #[cfg(feature = "html")]
-            let block = lower_html_table_block(&html).unwrap_or(Block::RawHtml { html });
+            let block = lower_html_table_block(&html, &mut graph).unwrap_or(Block::RawHtml { html });
             // Without the HTML importer the table shape cannot be read back,
             // so the authored block stays verbatim rather than being guessed.
             #[cfg(not(feature = "html"))]
@@ -1846,7 +1846,7 @@ fn definition_description_inlines(
 /// else stays verbatim raw HTML, so authored markup is never re-read
 /// opportunistically.
 #[cfg(feature = "html")]
-fn lower_html_table_block(html: &str) -> Option<Block> {
+fn lower_html_table_block(html: &str, graph: &mut DocumentGraph) -> Option<Block> {
     let trimmed = html.trim();
     if !trimmed.starts_with("<table") || !trimmed.ends_with("</table>") {
         return None;
@@ -1858,7 +1858,19 @@ fn lower_html_table_block(html: &str) -> Option<Block> {
         return None;
     }
     match first.block {
-        block @ Block::Table { .. } => Some(block),
+        block @ Block::Table { .. } => {
+            // The nested HTML import flattens merged cells. Carry the table
+            // losses back so the reopen never downgrades silently.
+            for loss in imported
+                .coverage
+                .loss
+                .into_iter()
+                .filter(|loss| matches!(loss.code.as_str(), "import.html.table_spans" | "import.html.invalid_cell_span"))
+            {
+                graph.push_loss(loss);
+            }
+            Some(block)
+        }
         _ => None,
     }
 }
