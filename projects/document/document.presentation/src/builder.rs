@@ -154,7 +154,13 @@ fn push_run(runs: &mut Vec<FlowRun>, text: &str, style: FontStyle, href: Option<
         last.text.push_str(text);
         return;
     }
-    runs.push(FlowRun { text: text.to_string(), style, href: href.map(str::to_string), title: title.map(str::to_string), math: None });
+    runs.push(FlowRun {
+        text: text.to_string(),
+        style,
+        href: href.map(str::to_string),
+        title: title.map(str::to_string),
+        math: None,
+    });
 }
 
 /// Resolve the destination of a link target.

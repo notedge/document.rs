@@ -84,10 +84,7 @@ pub fn render_html_reflow(presentation: &FlowPresentation) -> Result<String, Dia
 /// the engine cannot lay out keeps its source text and adds a warning, so the
 /// output never silently loses content. The returned [`FlowHtml`] carries those
 /// warnings for the caller's report.
-pub fn render_html_reflow_with_math(
-    presentation: &FlowPresentation,
-    math: &FlowMathContext,
-) -> Result<FlowHtml, Diagnostic> {
+pub fn render_html_reflow_with_math(presentation: &FlowPresentation, math: &FlowMathContext) -> Result<FlowHtml, Diagnostic> {
     render_flow(presentation, Some(*math))
 }
 
@@ -241,12 +238,7 @@ fn write_snapshot_text(out: &mut String, run: &DisplayTextRun) {
     }
 }
 
-fn write_flow_block(
-    out: &mut String,
-    block: &FlowBlock,
-    math: Option<FlowMathContext>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn write_flow_block(out: &mut String, block: &FlowBlock, math: Option<FlowMathContext>, diagnostics: &mut Vec<Diagnostic>) {
     match block {
         FlowBlock::Heading { level, runs } => {
             let level = (*level).clamp(1, 6);
@@ -417,12 +409,7 @@ fn write_math_source_block(out: &mut String, source: &str) {
 /// inside a link renders as `<a href="…"><strong>…</strong></a>`. Runs without a
 /// destination keep the plain output, and the link title only appears on an
 /// anchor that exists. A math run typesets instead of printing source text.
-fn write_flow_run(
-    out: &mut String,
-    run: &FlowRun,
-    math: Option<FlowMathContext>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn write_flow_run(out: &mut String, run: &FlowRun, math: Option<FlowMathContext>, diagnostics: &mut Vec<Diagnostic>) {
     let anchor = run.href.as_deref().filter(|href| is_safe_href(href));
     if let Some(href) = anchor {
         write_anchor_open(out, href, run.title.as_deref(), None);
