@@ -515,6 +515,27 @@ impl LayoutEngine {
         }
     }
 
+    /// TeX rule 18c `sup_drop` (σ13): the minimum baseline drop for a large
+    /// operator's superscript, in layout units.
+    ///
+    /// `MATH` publishes `superscriptBaselineDropMax`, and the bundled faces
+    /// fill it with a value the reference engine reads at the script's own
+    /// size. TeX's σ13 is a nucleus parameter, so the per-face value in
+    /// [`MathSemantics`] is consumed at the nucleus size `size` without any
+    /// `script_scale`. A custom face with no declared TeX parameter falls back
+    /// to the font's constant at the script size, which is the value the
+    /// reference engine reads, so the substitution stays visible in the G5
+    /// ledger.
+    fn tex_sup_drop(&self, size: Fixed, script_scale: Fixed) -> Fixed {
+        match self.family.and_then(MathFontFamily::tex_parameter_family).and_then(MathSemantics::tex_sup_drop) {
+            Some(sup_drop) => sup_drop * size,
+            None => {
+                self.record_fallback(FontFallback::MissingTexParameter("sup_drop"));
+                self.math_constant(MathConstant::SuperscriptBaselineDropMax, size * script_scale).unwrap_or(Fixed::ZERO)
+            }
+        }
+    }
+
     /// The `MATH` constant layout substitutes when a TeX parameter is absent.
     ///
     /// The name is the TeX parameter the semantics layer could not answer for
@@ -523,6 +544,7 @@ impl LayoutEngine {
         match name {
             "sub1" => "SubscriptShiftDown",
             "sub_drop" => "SubscriptBaselineDropMin",
+            "sup_drop" => "SuperscriptBaselineDropMax",
             _ => "MATH constant",
         }
     }
@@ -2235,13 +2257,14 @@ impl LayoutEngine {
             if extended_base || large_operator_base {
                 // `SuperscriptBaselineDropMax` caps how far a superscript's
                 // baseline may drop below the top of the nucleus.  For a large
-                // operator this is the whole placement rule (TeX rule 18c),
-                // and the reference reads the cap at the script's own size:
-                // 0.250 em scaled by 0.7 lands a display `\int^1` baseline
-                // 0.178 em below the sign's top, matching the measured
-                // -1.1815 em.
+                // operator this is the whole placement rule (TeX rule 18c), and
+                // TeX reads its σ13 `sup_drop` at the nucleus size rather than
+                // the script's own size.  The reference places a display
+                // `\int^1` baseline 1.1139 em above the formula baseline, which
+                // is the sign's 1.3611 em height less 0.2472 em, and the
+                // text-style form agrees at 0.8056 − 0.2472 = 0.5584 em.
                 let drop_max = if large_operator_base {
-                    self.math_constant(MathConstant::SuperscriptBaselineDropMax, size * script_scale).unwrap_or(Fixed::ZERO)
+                    self.tex_sup_drop(size, script_scale)
                 }
                 else {
                     self.math_constant(MathConstant::SuperscriptBaselineDropMax, size).unwrap_or(Fixed::ZERO)
