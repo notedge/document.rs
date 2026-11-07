@@ -798,10 +798,13 @@ name = "document-renderer-html"
 version = "0.1.0"
 dependencies = [
  "document-compose",
+ "document-fonts",
  "document-ir",
  "document-layout",
  "document-presentation",
  "document-renderer",
+ "document-renderer-svg",
+ "document-text",
  "plotter-diagram",
  "plotter-input-dot",
  "plotter-input-mermaid",

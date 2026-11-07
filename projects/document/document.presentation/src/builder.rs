@@ -154,7 +154,7 @@ fn push_run(runs: &mut Vec<FlowRun>, text: &str, style: FontStyle, href: Option<
         last.text.push_str(text);
         return;
     }
-    runs.push(FlowRun { text: text.to_string(), style, href: href.map(str::to_string), title: title.map(str::to_string) });
+    runs.push(FlowRun { text: text.to_string(), style, href: href.map(str::to_string), title: title.map(str::to_string), math: None });
 }
 
 /// Resolve the destination of a link target.
@@ -190,6 +190,16 @@ fn flow_runs<'a>(
         match inline {
             Inline::Styled { style: name, children } => flow_runs(children, flow_style(name), href, title, runs),
             Inline::InlineCode { text } => push_run(runs, text, FontStyle::Monospace, href, title),
+            // A formula stays its own run: a reflow target typesets it instead
+            // of printing the source, so it must never merge into neighbouring
+            // text.
+            Inline::InlineMath { formula } => runs.push(FlowRun {
+                text: String::new(),
+                style,
+                href: href.map(str::to_string),
+                title: title.map(str::to_string),
+                math: Some(formula.clone()),
+            }),
             Inline::Image { alt, .. } => flow_runs(alt, style, href, title, runs),
             // Attributes and link destinations carry no printable face, but
             // their wrapped content keeps every authored style.
@@ -271,7 +281,7 @@ fn collect_flow(graph: &DocumentGraph, ids: &[NodeId], blocks: &mut Vec<FlowBloc
                 blocks.push(FlowBlock::CodeBlock { language: Some(language.clone()), text: source.clone() });
             }
             Block::Math { formula } => {
-                blocks.push(FlowBlock::CodeBlock { language: None, text: formula.source.clone() });
+                blocks.push(FlowBlock::Math { formula: formula.clone() });
             }
             Block::Quote { children } => {
                 let mut runs = Vec::new();

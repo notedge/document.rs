@@ -4,3 +4,4 @@ mod diagram_snapshot;
 
 mod document_html;
 mod html_style;
+mod math_reflow;

@@ -25,11 +25,11 @@ fn cell(graph: &mut DocumentGraph, content: Vec<Inline>) -> TableCell {
 }
 
 fn run(text: &str, style: FontStyle) -> FlowRun {
-    FlowRun { text: text.to_string(), style, href: None, title: None }
+    FlowRun { text: text.to_string(), style, math: None, href: None, title: None }
 }
 
 fn link_run(text: &str, style: FontStyle, href: &str) -> FlowRun {
-    FlowRun { text: text.to_string(), style, href: Some(href.to_string()), title: None }
+    FlowRun { text: text.to_string(), style, math: None, href: Some(href.to_string()), title: None }
 }
 
 fn sample_graph() -> DocumentGraph {
@@ -425,12 +425,14 @@ fn flow_external_link_runs_carry_the_authored_title() {
                 FlowRun {
                     text: "the ".to_string(),
                     style: FontStyle::Normal,
+                    math: None,
                     href: Some("https://example.com/guide".to_string()),
                     title: Some("Read the guide".to_string()),
                 },
                 FlowRun {
                     text: "guide".to_string(),
                     style: FontStyle::Bold,
+                    math: None,
                     href: Some("https://example.com/guide".to_string()),
                     title: Some("Read the guide".to_string()),
                 },

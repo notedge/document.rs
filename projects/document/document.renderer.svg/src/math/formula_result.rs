@@ -16,9 +16,22 @@ use document_compose::{
 /// Output of [`render_formula_result`]: the SVG document plus the warnings
 /// collected while walking the paint tree (glyphs the face ships no outline
 /// for).
+///
+/// The three geometry fields describe the emitted viewport in the layout
+/// units of [`FormulaLayoutResult::metrics`]. An embedder that places the
+/// document inline needs the viewport size to scale it and the baseline
+/// offset to sit it on the surrounding text baseline.
 #[derive(Debug, Clone)]
 pub struct FormulaSvg {
+    /// Standalone `<svg>` document.
     pub markup: String,
+    /// Viewport width in layout units.
+    pub width: f64,
+    /// Viewport height in layout units.
+    pub height: f64,
+    /// Distance from the viewport top down to the formula baseline.
+    pub baseline: f64,
+    /// Warnings collected while painting.
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -40,8 +53,9 @@ pub fn render_formula_result(result: &FormulaLayoutResult) -> FormulaSvg {
     walk.walk(&result.paint, 0.0, 0.0);
     let width = metrics.width.to_f64();
     let height = (metrics.height + metrics.depth).to_f64();
+    let baseline = metrics.height.to_f64();
     let diagnostics = std::mem::take(&mut walk.diagnostics);
-    FormulaSvg { markup: walk.finish(width, height), diagnostics }
+    walk.finish(width, height, baseline, diagnostics)
 }
 
 /// Axis-aligned ink bounds in canvas pixels, with y growing downward.
@@ -182,7 +196,7 @@ impl SvgWalk {
     }
 
     /// Close the document, widening the viewport to cover the painted ink.
-    fn finish(self, width: f64, height: f64) -> String {
+    fn finish(self, width: f64, height: f64, baseline: f64, diagnostics: Vec<Diagnostic>) -> FormulaSvg {
         let mut bounds = Bounds { min_x: 0.0, min_y: 0.0, max_x: width, max_y: height };
         if let Some(ink) = self.ink {
             bounds.include_bounds(&ink);
@@ -204,7 +218,17 @@ impl SvgWalk {
         );
         svg.push_str(&self.buffer);
         svg.push_str("</svg>");
-        svg
+        FormulaSvg {
+            markup: svg,
+            width: view_w,
+            height: view_h,
+            // The baseline sits at `baseline` in box coordinates, while the
+            // viewport top sits at `min_y`, so the offset between them is the
+            // distance an inline embedder must hang the viewport above the
+            // surrounding baseline.
+            baseline: baseline - min_y,
+            diagnostics,
+        }
     }
 }
 

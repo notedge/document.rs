@@ -4,4 +4,4 @@
 
 pub mod render;
 
-pub use render::{render_html_reflow, render_html_snapshot};
+pub use render::{FlowHtml, FlowMathContext, render_html_reflow, render_html_reflow_with_math, render_html_snapshot};

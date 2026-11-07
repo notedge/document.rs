@@ -1,11 +1,38 @@
 //! HTML output for fixed-geometry snapshots and semantic reflow.
 
 use document_compose::{Diagnostic, Severity, math::FontStyle};
+use document_layout::math::layout_formula_for;
 use document_presentation::{
     display::{DisplayGraphic, DisplayItem, DisplayPath, DisplayPresentation, DisplayTextRun},
     flow::{FlowBlock, FlowPresentation, FlowRun, FlowTableRow},
 };
 use document_renderer::is_safe_href;
+use document_renderer_svg::math::{FormulaSvg, render_formula_result};
+use document_text::math::MathFontFamily;
+
+/// MATH family and body size a reflow render typesets formulas with.
+///
+/// Formula layout needs the face the host installed and the body size the
+/// surrounding text is set at, because the engine resolves every metric
+/// relative to that em. A render without this context keeps authored source
+/// text visible instead of typesetting.
+#[derive(Debug, Clone, Copy)]
+pub struct FlowMathContext {
+    /// OpenType MATH family the host activated.
+    pub family: MathFontFamily,
+    /// Body size in points the formula scales from.
+    pub base_size: f64,
+}
+
+/// Reflow HTML plus the diagnostics formula layout raised.
+#[derive(Debug)]
+pub struct FlowHtml {
+    /// Complete HTML document.
+    pub markup: String,
+    /// Warnings from formulas that kept their source text, plus the outline
+    /// warnings the SVG math backend reports.
+    pub diagnostics: Vec<Diagnostic>,
+}
 
 /// Snapshot HTML maps fixed layout geometry into absolute-positioned markup.
 ///
@@ -44,7 +71,27 @@ body{margin:0;padding:24px;background:#f5f5f5}\
 ///
 /// Blocks carry `data-vutex-block` roles so hosts can restyle them, and all
 /// text stays in the document flow for accessibility and text extraction.
+/// Formulas keep their authored source text because no MATH context is given;
+/// [`render_html_reflow_with_math`] typesets them instead.
 pub fn render_html_reflow(presentation: &FlowPresentation) -> Result<String, Diagnostic> {
+    Ok(render_flow(presentation, None)?.markup)
+}
+
+/// Reflow HTML that typesets formulas into inline SVG.
+///
+/// Inline formulas become sized inline boxes on the surrounding baseline, and
+/// display formulas become their own `data-vutex-block="math"` line. A formula
+/// the engine cannot lay out keeps its source text and adds a warning, so the
+/// output never silently loses content. The returned [`FlowHtml`] carries those
+/// warnings for the caller's report.
+pub fn render_html_reflow_with_math(
+    presentation: &FlowPresentation,
+    math: &FlowMathContext,
+) -> Result<FlowHtml, Diagnostic> {
+    render_flow(presentation, Some(*math))
+}
+
+fn render_flow(presentation: &FlowPresentation, math: Option<FlowMathContext>) -> Result<FlowHtml, Diagnostic> {
     if !is_valid_tag(&presentation.root_tag) {
         return Err(Diagnostic {
             code: "vutex.render.html.reflow.invalid-root-tag".into(),
@@ -55,14 +102,15 @@ pub fn render_html_reflow(presentation: &FlowPresentation) -> Result<String, Dia
     }
     let mut out = String::new();
     out.push_str(
-        "<!doctype html>\n<html lang=\"und\">\n<head>\n<meta charset=\"utf-8\">\n<title>VuTeX document</title>\n<style>.vutex-link{color:#2B5B84;text-decoration:underline;text-decoration-thickness:.5pt}</style>\n</head>\n<body>\n",
+        "<!doctype html>\n<html lang=\"und\">\n<head>\n<meta charset=\"utf-8\">\n<title>VuTeX document</title>\n<style>.vutex-link{color:#2B5B84;text-decoration:underline;text-decoration-thickness:.5pt}.vutex-math svg{display:block}</style>\n</head>\n<body>\n",
     );
     out.push_str(&format!("<{} class=\"vutex-flow\" data-vutex=\"flow\">\n", presentation.root_tag,));
+    let mut diagnostics = Vec::new();
     for block in &presentation.blocks {
-        write_flow_block(&mut out, block);
+        write_flow_block(&mut out, block, math, &mut diagnostics);
     }
     out.push_str(&format!("</{}>\n</body>\n</html>\n", presentation.root_tag));
-    Ok(out)
+    Ok(FlowHtml { markup: out, diagnostics })
 }
 
 fn write_item(out: &mut String, item: &DisplayItem) -> Result<(), Diagnostic> {
@@ -193,20 +241,25 @@ fn write_snapshot_text(out: &mut String, run: &DisplayTextRun) {
     }
 }
 
-fn write_flow_block(out: &mut String, block: &FlowBlock) {
+fn write_flow_block(
+    out: &mut String,
+    block: &FlowBlock,
+    math: Option<FlowMathContext>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     match block {
         FlowBlock::Heading { level, runs } => {
             let level = (*level).clamp(1, 6);
             out.push_str(&format!("<h{level} data-vutex-block=\"heading\">"));
             for run in runs {
-                write_flow_run(out, run);
+                write_flow_run(out, run, math, diagnostics);
             }
             out.push_str(&format!("</h{level}>\n"));
         }
         FlowBlock::Paragraph { runs } => {
             out.push_str("<p data-vutex-block=\"paragraph\">");
             for run in runs {
-                write_flow_run(out, run);
+                write_flow_run(out, run, math, diagnostics);
             }
             out.push_str("</p>\n");
         }
@@ -239,10 +292,10 @@ fn write_flow_block(out: &mut String, block: &FlowBlock) {
                 }
                 out.push('>');
                 for run in &item.runs {
-                    write_flow_run(out, run);
+                    write_flow_run(out, run, math, diagnostics);
                 }
                 for child in &item.children {
-                    write_flow_block(out, child);
+                    write_flow_block(out, child, math, diagnostics);
                 }
                 out.push_str("</li>\n");
             }
@@ -255,10 +308,17 @@ fn write_flow_block(out: &mut String, block: &FlowBlock) {
             }
             out.push_str(&format!(">{}</code></pre>\n", escape_text(text)));
         }
+        FlowBlock::Math { formula } => match math.and_then(|context| formula_svg(formula, context, diagnostics)) {
+            Some(svg) => write_display_math(out, &formula.source, &svg),
+            // Without a MATH context, or when the engine rejects the formula,
+            // the authored source stays visible as a code run: the same output
+            // the reflow path produced before formulas were typeset.
+            None => write_math_source_block(out, &formula.source),
+        },
         FlowBlock::Quote { runs } => {
             out.push_str("<blockquote data-vutex-block=\"quote\"><p>");
             for run in runs {
-                write_flow_run(out, run);
+                write_flow_run(out, run, math, diagnostics);
             }
             out.push_str("</p></blockquote>\n");
         }
@@ -267,8 +327,8 @@ fn write_flow_block(out: &mut String, block: &FlowBlock) {
             if let Some(caption) = caption {
                 out.push_str(&format!("<caption>{}</caption>\n", escape_text(caption)));
             }
-            write_table_rows(out, "thead", rows.iter().filter(|row| row.is_header));
-            write_table_rows(out, "tbody", rows.iter().filter(|row| !row.is_header));
+            write_table_rows(out, "thead", math, diagnostics, rows.iter().filter(|row| row.is_header));
+            write_table_rows(out, "tbody", math, diagnostics, rows.iter().filter(|row| !row.is_header));
             out.push_str("</table>\n");
         }
         FlowBlock::Image { alt, source } => {
@@ -286,27 +346,105 @@ fn write_flow_block(out: &mut String, block: &FlowBlock) {
     }
 }
 
+/// Typeset one formula into SVG, or record why it kept its source text.
+///
+/// Layout diagnostics and outline warnings travel back to the caller's report.
+/// A rejected formula is a warning, not a failure: the source still reaches the
+/// page, so no content disappears.
+fn formula_svg(
+    formula: &document_ir::MathFormula,
+    math: FlowMathContext,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<FormulaSvg> {
+    match layout_formula_for(formula, math.base_size, math.family) {
+        Ok((result, _root, mut layout_diagnostics)) => {
+            diagnostics.append(&mut layout_diagnostics);
+            let svg = render_formula_result(&result);
+            diagnostics.extend(svg.diagnostics.iter().cloned());
+            Some(svg)
+        }
+        Err(error) => {
+            diagnostics.push(Diagnostic {
+                code: "vutex.render.html.math.not-typeset".into(),
+                severity: Severity::Warning,
+                message: format!("formula `{}` keeps its source text: {error}", formula.source),
+                span: None,
+            });
+            None
+        }
+    }
+}
+
+/// Embed one typeset formula as an inline SVG box sitting on the text baseline.
+///
+/// The wrapper carries the formula's point size, and the viewport hangs
+/// `height - baseline` below the baseline so surrounding text lines up with the
+/// formula axis instead of its descender.
+fn write_inline_math(out: &mut String, source: &str, svg: &FormulaSvg) {
+    out.push_str(&format!(
+        "<span class=\"vutex-math\" data-vutex-item=\"math\" role=\"img\" aria-label=\"{}\" style=\"display:inline-block;width:{}pt;height:{}pt;vertical-align:-{}pt\">",
+        escape_attribute(source),
+        num(svg.width),
+        num(svg.height),
+        num(svg.height - svg.baseline),
+    ));
+    out.push_str(&svg.markup.replacen("<svg ", "<svg style=\"width:100%;height:100%;display:block\" ", 1));
+    out.push_str("</span>");
+}
+
+/// Embed one typeset display formula as its own line.
+fn write_display_math(out: &mut String, source: &str, svg: &FormulaSvg) {
+    out.push_str(&format!(
+        "<div class=\"vutex-math\" data-vutex-block=\"math\" role=\"img\" aria-label=\"{}\">",
+        escape_attribute(source),
+    ));
+    out.push_str(&svg.markup.replacen(
+        "<svg ",
+        &format!("<svg style=\"width:{}pt;height:{}pt\" ", num(svg.width), num(svg.height)),
+        1,
+    ));
+    out.push_str("</div>\n");
+}
+
+/// Print a display formula as verbatim source when it is not typeset.
+fn write_math_source_block(out: &mut String, source: &str) {
+    out.push_str(&format!("<pre data-vutex-block=\"code\"><code>{}</code></pre>\n", escape_text(source)));
+}
+
 /// Write one flow run, wrapping it in the element that carries its emphasis.
 ///
 /// A run destination nests outside the emphasis element, so authored bold text
 /// inside a link renders as `<a href="…"><strong>…</strong></a>`. Runs without a
 /// destination keep the plain output, and the link title only appears on an
-/// anchor that exists.
-fn write_flow_run(out: &mut String, run: &FlowRun) {
+/// anchor that exists. A math run typesets instead of printing source text.
+fn write_flow_run(
+    out: &mut String,
+    run: &FlowRun,
+    math: Option<FlowMathContext>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let anchor = run.href.as_deref().filter(|href| is_safe_href(href));
     if let Some(href) = anchor {
         write_anchor_open(out, href, run.title.as_deref(), None);
     }
-    let tag = match run.style {
-        FontStyle::Bold => Some("strong"),
-        FontStyle::Italic => Some("em"),
-        FontStyle::Monospace => Some("code"),
-        FontStyle::Strike => Some("del"),
-        _ => None,
-    };
-    match tag {
-        Some(tag) => out.push_str(&format!("<{tag}>{}</{tag}>", escape_text(&run.text))),
-        None => out.push_str(&escape_text(&run.text)),
+    if let Some(formula) = &run.math {
+        match math.and_then(|context| formula_svg(formula, context, diagnostics)) {
+            Some(svg) => write_inline_math(out, &formula.source, &svg),
+            None => out.push_str(&escape_text(&formula.source)),
+        }
+    }
+    else {
+        let tag = match run.style {
+            FontStyle::Bold => Some("strong"),
+            FontStyle::Italic => Some("em"),
+            FontStyle::Monospace => Some("code"),
+            FontStyle::Strike => Some("del"),
+            _ => None,
+        };
+        match tag {
+            Some(tag) => out.push_str(&format!("<{tag}>{}</{tag}>", escape_text(&run.text))),
+            None => out.push_str(&escape_text(&run.text)),
+        }
     }
     if anchor.is_some() {
         out.push_str("</a>");
@@ -365,7 +503,13 @@ fn write_path(out: &mut String, path: &DisplayPath) {
     ));
 }
 
-fn write_table_rows<'a>(out: &mut String, section: &str, rows: impl Iterator<Item = &'a FlowTableRow>) {
+fn write_table_rows<'a>(
+    out: &mut String,
+    section: &str,
+    math: Option<FlowMathContext>,
+    diagnostics: &mut Vec<Diagnostic>,
+    rows: impl Iterator<Item = &'a FlowTableRow>,
+) {
     let mut wrote_section = false;
     for row in rows {
         if !wrote_section {
@@ -377,7 +521,7 @@ fn write_table_rows<'a>(out: &mut String, section: &str, rows: impl Iterator<Ite
         for cell in &row.cells {
             out.push_str(&format!("<{cell_tag}>"));
             for run in cell {
-                write_flow_run(out, run);
+                write_flow_run(out, run, math, diagnostics);
             }
             out.push_str(&format!("</{cell_tag}>"));
         }

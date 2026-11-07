@@ -9,6 +9,7 @@
 //! document graph.
 
 use document_compose::math::FontStyle;
+use document_ir::MathFormula;
 
 /// One contiguous styled text span inside a reflow block.
 #[derive(Debug, Clone, PartialEq)]
@@ -17,6 +18,12 @@ pub struct FlowRun {
     pub text: String,
     /// Face style the run was authored with.
     pub style: FontStyle,
+    /// Formula carried by this run, when the run is math rather than text.
+    ///
+    /// A math run keeps an empty `text`: a reflow target typesets the formula
+    /// from its lowered expression instead of printing the authored source.
+    /// Text runs and inline code keep `None`.
+    pub math: Option<MathFormula>,
     /// Authored external destination, such as `https://example.com/spec`.
     ///
     /// Only [`document_ir::RelationEndpoint::ExternalUri`] targets resolve to a
@@ -90,6 +97,11 @@ pub enum FlowBlock {
         language: Option<String>,
         /// Verbatim source text.
         text: String,
+    },
+    /// Display formula occupying its own line.
+    Math {
+        /// Formula with its authored source and lowered expression.
+        formula: MathFormula,
     },
     /// Block quotation.
     Quote {
