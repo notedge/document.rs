@@ -249,6 +249,17 @@ fn write_list(
     write_list_at_level(out, ordered, items, graph, rels, bookmarks, numbering, 0)
 }
 
+fn write_task_marker(out: &mut String, checked: bool) {
+    // `w:sym` with Wingdings is Word's portable checkbox pair: `F0A8` is the
+    // empty box and `F0FE` the ticked box. A trailing space keeps the marker
+    // from being glued to the item text when a reader extracts it.
+    let code = if checked { "F0FE" } else { "F0A8" };
+    let _ = write!(
+        out,
+        "<w:r><w:rPr><w:rFonts w:ascii=\"Wingdings\" w:hAnsi=\"Wingdings\"/></w:rPr><w:sym w:font=\"Wingdings\" w:char=\"{code}\"/></w:r><w:r><w:t xml:space=\"preserve\"> </w:t></w:r>"
+    );
+}
+
 fn write_list_at_level(
     out: &mut String,
     ordered: bool,
@@ -284,6 +295,9 @@ fn write_list_at_level(
         };
         write!(out, "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"{level}\"/><w:numId w:val=\"{num_id}\"/></w:numPr></w:pPr>")
             .map_err(map_fmt_error)?;
+        if item.is_task {
+            write_task_marker(out, item.is_checked.unwrap_or(false));
+        }
         write_inlines(out, &item.content, graph, rels)?;
         out.push_str("</w:p>");
         for child_id in &item.children {

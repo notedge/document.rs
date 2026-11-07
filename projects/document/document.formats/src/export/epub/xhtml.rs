@@ -326,11 +326,21 @@ fn write_list(
     let mut expected = start;
     for (index, item) in items.iter().enumerate() {
         let number = item.number.unwrap_or(expected);
+        out.push_str("<li");
         if ordered && index > 0 && number != expected {
-            let _ = write!(out, "<li value=\"{number}\">");
+            let _ = write!(out, " value=\"{number}\"");
+        }
+        if item.is_task {
+            // XHTML is a slot that can express a task marker, so the checked
+            // state is written instead of silently flattening to a plain item.
+            out.push_str(r#" class="task-list-item"><input type="checkbox" disabled="disabled""#);
+            if item.is_checked.unwrap_or(false) {
+                out.push_str(r#" checked="checked""#);
+            }
+            out.push_str(" />");
         }
         else {
-            out.push_str("<li>");
+            out.push('>');
         }
         expected = number.saturating_add(1);
         write_inlines(out, &item.content, source_map, footnote_refs, links)?;

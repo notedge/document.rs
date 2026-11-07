@@ -170,6 +170,13 @@ impl Exporter<'_> {
             }
             IrBlock::Paragraph { content } => Block::Para(self.export_inlines(content)?),
             IrBlock::List { ordered, items } => {
+                if items.iter().any(|item| item.is_task) {
+                    self.loss(
+                        "export.pandoc-json.task_list",
+                        "the Pandoc JSON AST has no task-list field, so task items were written as ordinary list items and their checked state was dropped".to_string(),
+                        SemanticStatus::Partial,
+                    );
+                }
                 let mut pandoc_items = Vec::with_capacity(items.len());
                 for item in items {
                     let mut blocks = Vec::new();

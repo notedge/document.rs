@@ -757,6 +757,44 @@ fn docx_images_use_consistent_emu_extents_without_upscaling() {
 }
 
 #[test]
+fn docx_export_writes_task_markers_for_task_items_only() {
+    let mut graph = DocumentGraph::new(DocumentId(51));
+    graph.push_block(Block::List {
+        ordered: false,
+        items: vec![
+            ListItem {
+                content: vec![Inline::Text { text: "Done".into() }],
+                children: Vec::new(),
+                number: None,
+                is_task: true,
+                is_checked: Some(true),
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "Todo".into() }],
+                children: Vec::new(),
+                number: None,
+                is_task: true,
+                is_checked: Some(false),
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "Plain".into() }],
+                children: Vec::new(),
+                number: None,
+                is_task: false,
+                is_checked: None,
+            },
+        ],
+    });
+
+    let exported = export_docx_bytes(&graph).expect("export task list DOCX");
+    let payload = String::from_utf8_lossy(&exported);
+    assert!(payload.contains(r#"<w:sym w:font="Wingdings" w:char="F0FE"/>"#), "a checked item needs a ticked box: {payload}");
+    assert!(payload.contains(r#"<w:sym w:font="Wingdings" w:char="F0A8"/>"#), "an open item needs an empty box: {payload}");
+    assert_eq!(payload.matches(r#"<w:sym w:font="Wingdings""#).count(), 2, "the plain item must stay marker-free: {payload}");
+    assert!(payload.contains("Done") && payload.contains("Todo") && payload.contains("Plain"));
+}
+
+#[test]
 fn docx_jpeg_frame_dimensions_determine_image_extent() {
     let bytes = vec![0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 100, 0, 50, 1, 1, 0x11, 0, 0xff, 0xd9];
     let exported = export_docx_bytes(&graph_with_image(bytes, "media/size.jpg")).expect("export JPEG frame");

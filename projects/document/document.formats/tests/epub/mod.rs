@@ -2,7 +2,7 @@ use document_formats::{
     export::{epub::export_epub_bytes, markdown::export_markdown},
     import::epub::import_epub_bytes,
 };
-use document_ir::{Block, Inline, SemanticStatus, SourceKind};
+use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, SemanticStatus, SourceKind};
 
 fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut archive = Vec::new();
@@ -1059,4 +1059,48 @@ fn docx_and_epub_cross_import_share_content_but_not_provenance() {
     assert!(matches!(&docx_sources[0].kind, SourceKind::XmlRange { path } if path == "word/document.xml"));
     assert!(matches!(&epub_sources[0].kind, SourceKind::PackageMember { path } if path == "OEBPS/chapter.xhtml"));
     assert_ne!(docx_sources[0].kind, epub_sources[0].kind);
+}
+
+#[test]
+fn epub_export_writes_task_checkboxes_and_leaves_plain_items_alone() {
+    let mut graph = DocumentGraph::new(DocumentId(60));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Tasks".into() }] });
+    graph.push_block(Block::List {
+        ordered: false,
+        items: vec![
+            ListItem {
+                content: vec![Inline::Text { text: "Done".into() }],
+                children: Vec::new(),
+                number: None,
+                is_task: true,
+                is_checked: Some(true),
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "Todo".into() }],
+                children: Vec::new(),
+                number: None,
+                is_task: true,
+                is_checked: Some(false),
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "Plain".into() }],
+                children: Vec::new(),
+                number: None,
+                is_task: false,
+                is_checked: None,
+            },
+        ],
+    });
+
+    let bytes = export_epub_bytes(&graph).expect("export task EPUB");
+    let package = String::from_utf8_lossy(&bytes);
+    assert!(
+        package.contains(r#"<li class="task-list-item"><input type="checkbox" disabled="disabled" checked="checked" />"#),
+        "a checked item needs a checked XHTML checkbox: {package}"
+    );
+    assert!(
+        package.contains(r#"<li class="task-list-item"><input type="checkbox" disabled="disabled" />"#),
+        "an open item needs an unchecked XHTML checkbox: {package}"
+    );
+    assert_eq!(package.matches(r#"class="task-list-item""#).count(), 2, "the plain item must stay marker-free: {package}");
 }

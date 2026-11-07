@@ -542,6 +542,44 @@ fn table_cell_blocks_round_trip_through_markdown_as_an_html_table() {
 }
 
 #[test]
+fn task_list_items_are_reported_as_unrepresentable_in_pandoc_json() {
+    let mut graph = DocumentGraph::new(document_ir::IdAllocator::default().document_id());
+    graph.push_block(IrBlock::List {
+        ordered: false,
+        items: vec![document_ir::ListItem {
+            content: vec![IrInline::Text { text: "task".into() }],
+            children: Vec::new(),
+            number: None,
+            is_task: true,
+            is_checked: Some(true),
+        }],
+    });
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(
+        exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.task_list"),
+        "the Pandoc JSON AST has no task field, so the checked state must be reported: {:?}",
+        exported.losses
+    );
+}
+
+#[test]
+fn plain_lists_do_not_report_task_marker_loss_in_pandoc_json() {
+    let mut graph = DocumentGraph::new(document_ir::IdAllocator::default().document_id());
+    graph.push_block(IrBlock::List {
+        ordered: false,
+        items: vec![document_ir::ListItem {
+            content: vec![IrInline::Text { text: "item".into() }],
+            children: Vec::new(),
+            number: None,
+            is_task: false,
+            is_checked: None,
+        }],
+    });
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(!exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.task_list"), "{:?}", exported.losses);
+}
+
+#[test]
 fn export_writes_only_the_three_contract_fields() {
     let graph = import(&full_fixture());
     let exported = export_pandoc_json(&graph).expect("export");

@@ -1,6 +1,8 @@
 //! Layout coverage for non-paragraph blocks and inline images.
 
-use document_ir::{Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, SemanticStatus, TableCell, TableRow};
+use document_ir::{
+    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, ListItem, SemanticStatus, TableCell, TableRow,
+};
 use document_layout::{
     layout,
     plan::{LayoutItem, LayoutPage, TextRun},
@@ -135,4 +137,48 @@ fn lays_out_quote_code_table_break_and_image() {
         )),
         "inline images reserve a placeholder and keep their source"
     );
+}
+
+#[test]
+fn layout_draws_task_boxes_and_keeps_plain_list_markers() {
+    let mut graph = DocumentGraph::new(DocumentId(6));
+    graph.push_block(Block::List {
+        ordered: false,
+        items: vec![
+            ListItem {
+                content: vec![text("Checked")],
+                children: Vec::new(),
+                number: None,
+                is_task: true,
+                is_checked: Some(true),
+            },
+            ListItem {
+                content: vec![text("Open")],
+                children: Vec::new(),
+                number: None,
+                is_task: true,
+                is_checked: Some(false),
+            },
+            ListItem { content: vec![text("Plain")], children: Vec::new(), number: None, is_task: false, is_checked: None },
+        ],
+    });
+
+    let plan = layout(&graph);
+    let page = &plan.pages[0];
+    let boxes: Vec<_> = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            LayoutItem::Rect(rect) if !rect.filled && rect.stroke.is_some() => Some(rect),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(boxes.len(), 2, "each task item gets one checkbox and the plain item gets none");
+    let ticks = page.items.iter().filter(|item| matches!(item, LayoutItem::Rule(_))).count();
+    assert_eq!(ticks, 2, "a checked item adds exactly the two tick strokes");
+    let runs = text_runs(page);
+    assert!(runs.iter().any(|run| run.text == "Checked"));
+    assert!(runs.iter().any(|run| run.text == "Open"));
+    assert!(runs.iter().any(|run| run.text == "Plain"));
+    assert!(runs.iter().any(|run| run.text == "–"), "the plain item keeps its bullet marker");
 }

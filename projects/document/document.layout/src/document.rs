@@ -37,6 +37,8 @@ const SERIF: &str = "serif";
 const MONOSPACE: &str = "monospace";
 /// Fixed advance width of every monospace glyph, in em units.
 const MONOSPACE_ADVANCE: f64 = 0.6;
+/// Side of a task-list checkbox, in em of the body size.
+const TASK_BOX_SIZE_EM: f64 = 0.72;
 
 // ---- TeX display-math skips ----
 //
@@ -1285,16 +1287,70 @@ impl<'a> PageBuilder<'a> {
                 (true, None) => format!("{}.", index + 1),
                 (false, _) => tokens.list_marker.to_string(),
             };
-            let marker_width = self.text.measure(&marker, size, BODY_FACE);
+            // A task item's box replaces the bullet/number glyph. The box is
+            // drawn as a stroked rectangle plus a tick, because painting the
+            // checked state as text would hide it inside a character that
+            // downstream extraction cannot tell from body text.
+            let marker_width = if item.is_task { TASK_BOX_SIZE_EM * size } else { self.text.measure(&marker, size, BODY_FACE) };
             let content_indent = indent + tokens.list_indent.max(marker_width + tokens.list_marker_gap);
             let atoms = self.compose_atoms(&item.content, size, content_indent, BODY_FACE, ImageMode::AltText);
             self.pad(tokens.list_gap_before);
             self.ensure_space(line_box * 2.0);
             // The marker keeps the baseline of the first content line.
-            self.emit_baseline(marker, size, SERIF, indent);
+            if item.is_task {
+                self.emit_task_box(indent, size, item.is_checked.unwrap_or(false));
+            }
+            else {
+                self.emit_baseline(marker, size, SERIF, indent);
+            }
             self.emit_inline_lines(atoms, size, content_indent);
             self.render_blocks(graph, &item.children, content_indent);
             self.pad(tokens.list_item_gap);
+        }
+    }
+
+    /// Draw a task-list checkbox on the first content line's baseline.
+    ///
+    /// The box is an outlined rectangle; a checked item adds two strokes that
+    /// form the tick. Both are page primitives, so the state stays visible
+    /// without pretending to be body text.
+    fn emit_task_box(&mut self, indent: f64, size: f64, checked: bool) {
+        let tokens = self.hint.style;
+        let side = TASK_BOX_SIZE_EM * size;
+        let x = self.left(indent);
+        let baseline = self.cursor + ASCENT * size;
+        let y = baseline - side;
+        self.push(LayoutItem::Rect(Rect {
+            x,
+            y,
+            width: side,
+            height: side,
+            filled: false,
+            fill: None,
+            stroke: Some(tokens.ink),
+            stroke_width: 0.6,
+        }));
+        if checked {
+            let thickness = (size * 0.06).max(0.5);
+            let start = (x + side * 0.18, y + side * 0.42);
+            let middle = (x + side * 0.44, y + side * 0.64);
+            let end = (x + side * 0.84, y + side * 0.20);
+            self.push(LayoutItem::Rule(Rule {
+                x1: start.0,
+                y1: start.1,
+                x2: middle.0,
+                y2: middle.1,
+                thickness,
+                color: Some(tokens.ink),
+            }));
+            self.push(LayoutItem::Rule(Rule {
+                x1: middle.0,
+                y1: middle.1,
+                x2: end.0,
+                y2: end.1,
+                thickness,
+                color: Some(tokens.ink),
+            }));
         }
     }
 
