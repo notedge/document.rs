@@ -683,7 +683,12 @@ impl Importer {
                         SemanticStatus::Partial,
                     )?;
                 }
-                Ok(Some(IrInline::Citation { key, display: Some(self.lower_inlines(inlines, &format!("{pointer}/c/1"))?) }))
+                // An absent display and an empty display are different: a
+                // `Cite` without `inlines` carries no authored text, and a
+                // `Some([])` would force every writer to print an empty run.
+                let display =
+                    if inlines.is_empty() { None } else { Some(self.lower_inlines(inlines, &format!("{pointer}/c/1"))?) };
+                Ok(Some(IrInline::Citation { key, display }))
             }
             Inline::Code { attr, text } => {
                 if !attr.is_empty() {

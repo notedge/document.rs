@@ -777,6 +777,41 @@ fn pandoc_citations_without_a_key_are_dropped_with_a_loss() {
     assert!(graph.validate().is_valid());
 }
 
+#[test]
+fn pandoc_citation_display_distinguishes_absent_from_empty() {
+    let citation = Citation {
+        id: "smith2024".into(),
+        prefix: Vec::new(),
+        suffix: Vec::new(),
+        mode: CitationMode::Normal,
+        note_num: 0,
+        hash: 0,
+    };
+    let document = PandocDocument {
+        api_version: API_VERSION,
+        meta: Vec::new(),
+        blocks: vec![Block::Para(vec![
+            Inline::Cite { citations: vec![citation.clone()], inlines: Vec::new() },
+            Inline::Str(" ".into()),
+            Inline::Cite { citations: vec![citation], inlines: vec![Inline::Str("(Smith 2024)".into())] },
+        ])],
+    };
+    let graph = import(&encode_text(&document));
+    let IrBlock::Paragraph { content } = &graph.blocks[0].block
+    else {
+        panic!("paragraph expected: {:?}", graph.blocks)
+    };
+    assert!(
+        matches!(&content[0], IrInline::Citation { key, display: None } if key == "smith2024"),
+        "an absent display must stay `None`, not become an empty run: {content:#?}"
+    );
+    assert!(
+        matches!(&content[2], IrInline::Citation { key, display: Some(display) }
+            if key == "smith2024" && display == &vec![IrInline::Text { text: "(Smith 2024)".into() }]),
+        "an authored display must survive: {content:#?}"
+    );
+}
+
 fn footnote_definition_payloads(blocks: &[Block]) -> Vec<&str> {
     blocks
         .iter()

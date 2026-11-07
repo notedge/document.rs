@@ -1,5 +1,6 @@
-use document_convert::{convert_bytes, convert_bytes_with_body_faces};
+use document_convert::{convert_bytes, convert_bytes_with_body_faces, write_document_pdf};
 use document_formats::import::markdown::import_markdown_bytes;
+use document_ir::{Block, DocumentGraph, DocumentId, Inline, SemanticStatus};
 
 use crate::common;
 use common::{
@@ -292,6 +293,38 @@ fn pdf_to_markdown_convert_report_lists_partial_coverage() {
 }
 
 #[test]
+fn pdf_convert_reports_dropped_citation_key_and_image_title() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(7));
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Citation { key: "smith2024".into(), display: Some(vec![Inline::Text { text: "(Smith 2024)".into() }]) },
+            Inline::Text { text: " ".into() },
+            Inline::Image {
+                source: "media/logo.png".into(),
+                alt: vec![Inline::Text { text: "alt".into() }],
+                title: Some("Logo title".into()),
+                asset: None,
+            },
+        ],
+    });
+
+    write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert_eq!(
+        codes,
+        ["export.pdf.image_unresolved", "export.pdf.citation_degraded", "export.pdf.image_title_dropped"],
+        "{:?}",
+        graph.coverage.loss
+    );
+    assert!(
+        graph.coverage.loss.iter().all(|loss| loss.status == SemanticStatus::Partial),
+        "a dropped key or title is partial, not unsupported: {:?}",
+        graph.coverage.loss
+    );
+}
+
+#[test]
 fn markdown_reference_link_convert_report_matches_loss_count() {
     let source = b"Read [guide][docs].\n\n[docs]: https://example.com/guide \"Docs\"\n".to_vec();
     let output = convert_bytes("markdown", "markdown", "reference.md", source, None).expect("convert");
@@ -299,4 +332,33 @@ fn markdown_reference_link_convert_report_matches_loss_count() {
     assert_convert_report(&output, "markdown");
     assert_eq!(output.loss_count, 0, "resolved reference definition title is preserved in IR");
     assert!(output.report_json.contains("\"complete\":true"));
+}
+
+#[test]
+fn markdown_missing_image_to_docx_reports_import_and_export_loss() {
+    let output = convert_bytes("markdown", "docx", "images.md", b"A ![alt](pic.png)\n".to_vec(), None)
+        .expect("convert markdown to docx");
+
+    assert_convert_report(&output, "docx");
+    assert_report_contains_loss_codes(
+        &output.report_json,
+        &["import.markdown.asset_unresolved", "export.docx.image_unresolved"],
+    );
+    let report = serde_json::from_str::<serde_json::Value>(&output.report_json).expect("report");
+    assert_eq!(report["status"].as_str(), Some("success_with_loss"), "{report}");
+}
+
+#[test]
+fn markdown_missing_image_to_pdf_reports_import_and_export_loss() {
+    let faces = pdf_body_faces();
+    let output = convert_bytes_with_body_faces("markdown", "pdf", "images.md", b"A ![alt](pic.png)\n".to_vec(), None, &faces)
+        .expect("convert markdown to pdf");
+
+    assert_convert_report(&output, "pdf");
+    assert_report_contains_loss_codes(
+        &output.report_json,
+        &["import.markdown.asset_unresolved", "export.pdf.image_unresolved"],
+    );
+    let report = serde_json::from_str::<serde_json::Value>(&output.report_json).expect("report");
+    assert_eq!(report["status"].as_str(), Some("success_with_loss"), "{report}");
 }

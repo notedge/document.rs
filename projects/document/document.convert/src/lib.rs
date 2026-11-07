@@ -47,8 +47,8 @@ pub use inspect::{
 };
 pub use publish::{PublishedMarkdownProject, publish_bytes, publish_markdown_project, publish_text};
 pub use readers::{
-    read_doc, read_doc_bytes, read_html, read_html_bytes, read_markdown, read_markdown_bytes, read_notedown,
-    read_notedown_bytes, read_pdf, read_pdf_bytes, read_tex, read_tex_bytes, read_typst, read_typst_bytes,
+    read_doc, read_doc_bytes, read_html, read_html_bytes, read_markdown, read_markdown_bytes, read_markdown_bytes_with_assets,
+    read_notedown, read_notedown_bytes, read_pdf, read_pdf_bytes, read_tex, read_tex_bytes, read_typst, read_typst_bytes,
 };
 pub use structure::MAX_STRUCTURE_DEPTH;
 pub use transform::{TransformOutcome, TransformPassReport, TransformPassStatus, apply_transform_passes};

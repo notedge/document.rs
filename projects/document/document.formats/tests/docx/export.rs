@@ -3,7 +3,8 @@ use document_formats::{
     import::{docx::import_docx_bytes, markdown::import_markdown_bytes},
 };
 use document_ir::{
-    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, ListItem, NodeId, SemanticStatus, TableCell, TableRow,
+    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, ListItem, NodeId, RelationEndpoint, SemanticStatus,
+    TableCell, TableRow,
 };
 
 fn png_header(width: u32, height: u32) -> Vec<u8> {
@@ -599,6 +600,42 @@ fn docx_export_round_trips_footnotes() {
     let markdown = export_markdown(&round).expect("export markdown");
     assert!(markdown.contains("See[^1] for details."));
     assert!(markdown.contains("[^1]: Footnote body."));
+}
+
+#[test]
+fn docx_export_keeps_citation_keys_and_titles() {
+    let mut graph = graph_with_image(png_header(1, 1), "media/logo.png");
+    let Block::Paragraph { content } = &mut graph.blocks[0].block
+    else {
+        panic!("image paragraph expected")
+    };
+    let Inline::Image { title, .. } = &mut content[0]
+    else {
+        panic!("image expected: {content:?}")
+    };
+    *title = Some("Logo title".into());
+
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Citation { key: "smith2024".into(), display: Some(vec![Inline::Text { text: "(Smith 2024)".into() }]) },
+            Inline::Text { text: " ".into() },
+            Inline::Link {
+                target: RelationEndpoint::ExternalUri("https://example.com".into()),
+                display: vec![Inline::Text { text: "Example".into() }],
+                title: Some("Example tooltip".into()),
+            },
+        ],
+    });
+
+    let exported = export_docx_bytes(&graph).expect("export docx");
+    let payload = String::from_utf8_lossy(&exported);
+    assert!(
+        payload.contains(r#"<w:fldSimple w:instr=" CITATION smith2024 ">"#),
+        "a citation key must survive in a Word citation field: {payload}"
+    );
+    assert!(payload.contains("(Smith 2024)"), "the authored display must stay the field result: {payload}");
+    assert!(payload.contains(r#"w:tooltip="Example tooltip""#), "a link title must become a hyperlink tooltip: {payload}");
+    assert!(payload.contains(r#"title="Logo title""#), "an image title must survive in the drawing properties: {payload}");
 }
 
 #[test]

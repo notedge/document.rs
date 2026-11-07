@@ -527,6 +527,10 @@ fn write_inline_with_properties(
             write_literal_text(out, display, properties, rels.footnotes())?;
         }
         Inline::Citation { key, display } => {
+            // A Word citation field keeps the key in the document while the
+            // field result keeps the authored display. Word readers see the
+            // display text, and the semantic key survives in `w:instr`.
+            write!(out, "<w:fldSimple w:instr=\" CITATION {} \">", escape_xml_attr(key)).map_err(map_fmt_error)?;
             if let Some(display) = display {
                 for child in display {
                     write_inline_with_properties(out, child, graph, rels, properties)?;
@@ -535,6 +539,7 @@ fn write_inline_with_properties(
             else {
                 write_literal_text(out, &format!("[{key}]"), properties, rels.footnotes())?;
             }
+            out.push_str("</w:fldSimple>");
         }
         Inline::Attributed { children, .. } => {
             for child in children {
@@ -544,7 +549,7 @@ fn write_inline_with_properties(
         Inline::RawHtml { html } => {
             write_literal_text(out, html, properties, rels.footnotes())?;
         }
-        Inline::Link { target, display, title: _ } => {
+        Inline::Link { target, display, title } => {
             let RelationEndpoint::ExternalUri(url) = target
             else {
                 return Err(FormatError::unsupported(
@@ -553,19 +558,24 @@ fn write_inline_with_properties(
                 ));
             };
             let rel_id = rels.id_for_hyperlink(url);
-            write!(out, "<w:hyperlink r:id=\"{rel_id}\">").map_err(map_fmt_error)?;
+            let tooltip = title
+                .as_deref()
+                .filter(|tooltip| !tooltip.is_empty())
+                .map(|tooltip| format!(" w:tooltip=\"{}\"", escape_xml_attr(tooltip)))
+                .unwrap_or_default();
+            write!(out, "<w:hyperlink r:id=\"{rel_id}\"{tooltip}>").map_err(map_fmt_error)?;
             for child in display {
                 write_inline_with_properties(out, child, graph, rels, properties)?;
             }
             out.push_str("</w:hyperlink>");
         }
-        Inline::Image { source, alt, title: _, asset } => {
+        Inline::Image { source, alt, title, asset } => {
             let alt = alt.iter().map(inline_plain_text).collect::<String>();
             match image_bytes_for_inline(graph, source, *asset) {
                 Some(bytes) => {
                     let extent = image_extent(&bytes)?;
                     let rel_id = rels.id_for_image(source, bytes);
-                    write_image_drawing(out, &rel_id, &alt, extent)?;
+                    write_image_drawing(out, &rel_id, &alt, title.as_deref(), extent)?;
                 }
                 None => {
                     // A picture without materialized bytes cannot become a
@@ -879,11 +889,21 @@ fn delimiter_char(delimiter: Option<&MathDelimiter>, open: bool) -> String {
     }
 }
 
-fn write_image_drawing(out: &mut String, rel_id: &str, alt: &str, extent: (u64, u64)) -> Result<(), FormatError> {
+fn write_image_drawing(
+    out: &mut String,
+    rel_id: &str,
+    alt: &str,
+    title: Option<&str>,
+    extent: (u64, u64),
+) -> Result<(), FormatError> {
     let (width, height) = extent;
+    let title_attribute = title
+        .filter(|title| !title.is_empty())
+        .map(|title| format!(" title=\"{}\"", escape_xml_attr(title)))
+        .unwrap_or_default();
     write!(
         out,
-        r#"<w:r><w:drawing><wp:inline xmlns:wp="{WP_NS}" xmlns:a="{A_NS}" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><wp:extent cx="{width}" cy="{height}"/><wp:docPr id="1" name="Picture" descr="{descr}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="{descr}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="{rel_id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{width}" cy="{height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#,
+        r#"<w:r><w:drawing><wp:inline xmlns:wp="{WP_NS}" xmlns:a="{A_NS}" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><wp:extent cx="{width}" cy="{height}"/><wp:docPr id="1" name="Picture" descr="{descr}"{title_attribute}/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="0" name="{descr}"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="{rel_id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{width}" cy="{height}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#,
         descr = escape_xml_attr(alt),
         rel_id = rel_id,
     )

@@ -286,6 +286,35 @@ fn math_not_typeset_diagnostic(formula: &document_ir::MathFormula, error: &MathE
     }
 }
 
+/// The loss reported when a citation reaches a PDF page.
+///
+/// A PDF has no citation structure to carry the IR key or its mode. The page
+/// keeps the authored display, or the key in brackets when the display is
+/// absent, so the reader loses no visible text. The semantic key is gone, which
+/// needs a code instead of a clean export.
+fn citation_degraded_diagnostic(key: &str) -> Diagnostic {
+    Diagnostic {
+        code: "export.pdf.citation_degraded".to_string(),
+        severity: Severity::Warning,
+        message: format!("citation key `{key}` has no PDF structure, only its display text was laid out"),
+        span: Some(SourceSpan { start: 0, end: key.len() as u32 }),
+    }
+}
+
+/// The loss reported when an image title reaches a PDF page.
+///
+/// A page image slot has no annotation or alternate-text channel, so the title
+/// cannot be written anywhere. The image itself stays, and the title is reported
+/// instead of disappearing from the document.
+fn image_title_dropped_diagnostic(source: &str, title: &str) -> Diagnostic {
+    Diagnostic {
+        code: "export.pdf.image_title_dropped".to_string(),
+        severity: Severity::Warning,
+        message: format!("image `{source}` title `{title}` has no PDF annotation or alternate-text slot"),
+        span: Some(SourceSpan { start: 0, end: title.len() as u32 }),
+    }
+}
+
 /// Compute the layout plan for a Notedown document graph.
 ///
 /// The document layout pass walks the Notedown block tree, measures inline
@@ -791,7 +820,10 @@ impl<'a> PageBuilder<'a> {
     ) {
         for inline in content {
             match inline {
-                Inline::Image { source, alt, asset, .. } => {
+                Inline::Image { source, alt, title: image_title, asset } => {
+                    if let Some(title) = image_title.as_deref().filter(|title| !title.trim().is_empty()) {
+                        self.diagnostics.push(image_title_dropped_diagnostic(source, title));
+                    }
                     let alt_text: String = alt.iter().map(Inline::plain_text).collect();
                     let aspect = asset.as_ref().and_then(|asset| self.asset_aspects.get(asset)).copied();
                     let source = asset
@@ -850,8 +882,20 @@ impl<'a> PageBuilder<'a> {
                     let inner_title = link_title(link_hover.as_ref()).or(title);
                     self.compose_inline(display, size, indent, flow, face, inner_href, inner_title, image_mode);
                 }
-                Inline::Note { display: Some(display), .. } | Inline::Citation { display: Some(display), .. } => {
+                Inline::Note { display: Some(display), .. } => {
                     self.compose_inline(display, size, indent, flow, face, href, title, image_mode);
+                }
+                // A citation key has no PDF structure to carry it and the IR
+                // keeps no citation mode. The display text stays on the page,
+                // the key stays visible when there is no display, and both
+                // cases report the dropped semantic instead of exporting clean.
+                Inline::Citation { key, display } => {
+                    self.diagnostics.push(citation_degraded_diagnostic(key));
+                    flow.pending.flush(&mut flow.atoms);
+                    match display {
+                        Some(display) => self.compose_inline(display, size, indent, flow, face, href, title, image_mode),
+                        None => flow.atoms.extend(split_inline_atoms(&format!("[{key}]"), face, href, title)),
+                    }
                 }
                 // A footnote reference with no authored display is still a
                 // semantic marker, not the `[^label]` source literal. Paint the

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use boost_diagnostic::{Diagnostic as UnifiedDiagnostic, DiagnosticCode, DiagnosticOrigin, DiagnosticSeverity, Message};
 use document_compose::diagnostic::Diagnostic as ComposeDiagnostic;
 use document_fonts::{BodyFaceSet, BodyMetrics};
-use document_ir::{AssetKind, Block, DocumentGraph};
+use document_ir::{AssetKind, Block, DocumentGraph, LossMarker, SemanticStatus};
 use document_layout::{Diagrams, LayoutHint};
 use document_presentation::build_display_presentation;
 use document_renderer_pdf::{PdfFontPolicy, PdfResources, render_pdf_with_resources_and_diagnostics};
@@ -22,7 +22,16 @@ struct LossNotice {
 /// `body_set` is injected by the host. A delivered PDF embeds every body face
 /// the host supplied, so it never depends on the faces the reader happens to
 /// have installed.
-pub fn write_document_pdf(graph: &DocumentGraph, body_set: &Arc<BodyFaceSet>) -> Result<Vec<u8>> {
+pub fn write_document_pdf(graph: &mut DocumentGraph, body_set: &Arc<BodyFaceSet>) -> Result<Vec<u8>> {
+    for source in crate::writers::unresolved_image_sources(graph) {
+        graph.push_loss(LossMarker {
+            code: "export.pdf.image_unresolved".into(),
+            message: format!(
+                "image `{source}` has no captured bytes. The page keeps a dashed placeholder instead of the picture"
+            ),
+            status: SemanticStatus::Partial,
+        });
+    }
     let (diagrams, losses) = lower_host_scenes(graph);
     if !losses.is_empty() {
         report_scene_losses(&losses);
@@ -30,6 +39,12 @@ pub fn write_document_pdf(graph: &DocumentGraph, body_set: &Arc<BodyFaceSet>) ->
     let metrics = BodyMetrics::from_set(body_set);
     let hint = layout_hint(graph);
     let (plan, layout_diagnostics) = document_layout::document::layout_with_metrics(graph, &hint, &diagrams, &metrics);
+    for diagnostic in &layout_diagnostics {
+        if let Some(loss) = pdf_layout_loss(diagnostic) {
+            let span = diagnostic.span.map(|span| document_ir::SourceSpan { start: span.start, end: span.end });
+            graph.push_loss_at(loss, span);
+        }
+    }
     report_compose_diagnostics(&layout_diagnostics);
     let presentation = build_display_presentation(&plan);
     let resources = pdf_resources(graph);
@@ -38,6 +53,16 @@ pub fn write_document_pdf(graph: &DocumentGraph, body_set: &Arc<BodyFaceSet>) ->
             .map_err(map_render_diagnostic)?;
     report_compose_diagnostics(&outcome.diagnostics);
     Ok(outcome.pdf)
+}
+
+/// Turn a layout diagnostic that describes dropped document semantics into a
+/// loss marker, so the conversion report never calls the export clean.
+fn pdf_layout_loss(diagnostic: &ComposeDiagnostic) -> Option<LossMarker> {
+    let code = diagnostic.code.as_str();
+    if !matches!(code, "export.pdf.citation_degraded" | "export.pdf.image_title_dropped") {
+        return None;
+    }
+    Some(LossMarker { code: code.to_string(), message: diagnostic.message.clone(), status: SemanticStatus::Partial })
 }
 
 /// Layout intent the graph declared, with A4 filling every gap.
