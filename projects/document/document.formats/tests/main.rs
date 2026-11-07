@@ -259,6 +259,24 @@ mod html_structure_smoke {
     }
 
     #[test]
+    fn late_head_sections_are_recorded_and_leading_heads_are_not() {
+        let late = "<table><tbody><tr><td>Body</td></tr></tbody><thead><tr><th>Late</th></tr></thead></table>";
+        let codes = loss_codes(late);
+        assert!(codes.contains(&"import.html.head_after_body".to_string()), "{codes:?}");
+        assert!(
+            !codes.contains(&"import.html.table_sections".to_string()),
+            "a late head section is not a scattered `th` row: {codes:?}"
+        );
+        let output = html(late);
+        assert!(output.contains("<thead><tr><th><p>Late</p></th></tr></thead>"), "{output}");
+        assert!(output.contains("<tbody><tr><td><p>Body</p></td></tr></tbody>"), "{output}");
+
+        let leading = "<table><thead><tr><th>Head</th></tr></thead><tbody><tr><td>Body</td></tr></tbody></table>";
+        let codes = loss_codes(leading);
+        assert!(!codes.contains(&"import.html.head_after_body".to_string()), "{codes:?}");
+    }
+
+    #[test]
     fn table_bands_and_cell_children_survive_export_and_reimport() {
         let source = concat!(
             "<table><caption>Cap</caption>",

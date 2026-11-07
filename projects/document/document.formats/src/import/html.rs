@@ -787,6 +787,7 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
             let mut foot: Vec<document_ir::TableRow> = Vec::new();
             let mut seen_body = false;
             let mut header_after_body = false;
+            let mut head_after_body = false;
             for (row_element, section) in table_section_rows(element) {
                 let mut is_header = matches!(section, TableSection::Head);
                 let cells: Vec<document_ir::TableCell> = row_element
@@ -813,7 +814,10 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                 let row = document_ir::TableRow { cells };
                 match section {
                     TableSection::Foot => foot.push(row),
-                    TableSection::Head => head.push(row),
+                    TableSection::Head => {
+                        head_after_body |= seen_body;
+                        head.push(row);
+                    }
                     TableSection::Body => {
                         if is_header && !seen_body && foot.is_empty() {
                             head.push(row);
@@ -843,6 +847,20 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                     LossMarker {
                         code: "import.html.table_cell_blocks".into(),
                         message: "table cells authored as block layout are flattened into one inline run".into(),
+                        status: SemanticStatus::Partial,
+                    },
+                    element_source_span(element),
+                );
+            }
+            // The bands always serialize head before body, so an explicit
+            // `<thead>` authored after body rows is moved to the front. The
+            // cell text survives but the authored order does not, and this
+            // marker is the only way a consumer can learn about the regroup.
+            if head_after_body {
+                graph.push_loss_at(
+                    LossMarker {
+                        code: "import.html.head_after_body".into(),
+                        message: "a head section authored after body rows is moved to the front of the head band".into(),
                         status: SemanticStatus::Partial,
                     },
                     element_source_span(element),
