@@ -289,12 +289,12 @@ mod html_structure_smoke {
         assert_eq!(caption.as_deref(), Some("Cap"));
         assert_eq!((head.len(), body.len(), foot.len()), (1, 1, 1));
         assert!(
-            loss_codes(source).contains(&"import.html.table_cell_blocks".to_string()),
-            "cell block layout stays a recorded loss"
+            !loss_codes(source).contains(&"import.html.table_cell_blocks".to_string()),
+            "cell block layout is preserved, not flattened"
         );
         let output = export_html(&graph).expect("html export");
         assert!(output.contains("<thead><tr><th><p>h1</p></th><th><p>h2</p></th></tr></thead>"), "{output}");
-        assert!(output.contains("<tbody><tr><td><p>ab</p></td><td><p>c</p></td></tr></tbody>"), "{output}");
+        assert!(output.contains("<tbody><tr><td><p>a</p><p>b</p></td><td><p>c</p></td></tr></tbody>"), "{output}");
         assert!(output.contains("<tfoot><tr><td><p>f</p></td><td><p>g</p></td></tr></tfoot>"), "{output}");
 
         let reopened = import_html_text("html-table-bands-roundtrip", &output).expect("html reimport");

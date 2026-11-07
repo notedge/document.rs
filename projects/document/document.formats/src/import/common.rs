@@ -74,6 +74,20 @@ fn bind_block_image_assets(node: document_ir::NodeId, block: &mut Block, referen
 /// The IR cell body is a block container. An importer that only produces one
 /// inline run takes the minimum semantic step: one paragraph child when the
 /// run is non-empty, and no child for an empty cell.
+#[cfg_attr(
+    not(any(
+        feature = "markdown",
+        feature = "notedown",
+        feature = "docx",
+        feature = "xlsx",
+        feature = "pptx",
+        feature = "pdf",
+        feature = "epub",
+        feature = "html",
+        feature = "tex"
+    )),
+    allow(dead_code)
+)]
 pub fn cell_children(graph: &mut DocumentGraph, content: Vec<Inline>) -> Vec<document_ir::NodeId> {
     if content.is_empty() { Vec::new() } else { vec![graph.push_block(Block::Paragraph { content })] }
 }

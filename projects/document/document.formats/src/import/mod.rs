@@ -12,8 +12,6 @@ pub(crate) mod math_latex;
 #[cfg(any(feature = "html", feature = "epub"))]
 pub(crate) mod math_ml;
 
-#[cfg(feature = "pandoc-json")]
-pub(crate) use common::cell_children;
 pub use common::register_image_assets;
 
 /// Legacy Word `.doc` import.

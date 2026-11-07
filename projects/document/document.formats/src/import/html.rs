@@ -9,7 +9,7 @@ use oak_html::{
 };
 
 use super::{
-    common::{cell_children, register_image_assets},
+    common::register_image_assets,
     math_latex::record_math_unsupported,
     math_ml::{is_display_math, lower_math_element, math_display, single_display_math_child},
 };
@@ -777,11 +777,8 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                 })
                 .and_then(|cap| if cap.is_empty() { None } else { Some(cap) });
             // A cell holds a block layout in HTML (`<td><p>one</p><p>two</p></td>`),
-            // but this importer still lowers a cell as one inline run. The
-            // authored text survives as one paragraph child of the cell, so this
-            // is a recorded partial loss rather than a silent downgrade.
-            let mut flattened_cell_blocks = false;
-            let mut flattened_nested_tables = false;
+            // and the IR cell stores child blocks, so every child is lowered as
+            // a block node instead of being flattened into one inline run.
             let mut head: Vec<document_ir::TableRow> = Vec::new();
             let mut body: Vec<document_ir::TableRow> = Vec::new();
             let mut foot: Vec<document_ir::TableRow> = Vec::new();
@@ -799,16 +796,13 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                         if cell.tag_name.eq_ignore_ascii_case("th") {
                             is_header = true;
                         }
-                        if !descendants(cell, "table").is_empty() {
-                            flattened_nested_tables = true;
-                        }
-                        if cell.children.iter().filter_map(as_element).any(is_block_element) {
-                            flattened_cell_blocks = true;
-                        }
                         let colspan = cell_span("colspan", cell, graph);
                         let rowspan = cell_span("rowspan", cell, graph);
-                        let content = lower_inlines(cell, graph, source);
-                        document_ir::TableCell { children: cell_children(graph, content), colspan, rowspan }
+                        let mut children = Vec::new();
+                        for (block, child_span) in lower_children(&cell.children, graph, source) {
+                            children.push(push_block_with_source(graph, block, child_span));
+                        }
+                        document_ir::TableCell { children, colspan, rowspan }
                     })
                     .collect();
                 let row = document_ir::TableRow { cells };
@@ -829,28 +823,6 @@ fn lower_blocks(element: &Element, graph: &mut DocumentGraph, source: &str) -> V
                         }
                     }
                 }
-            }
-            if flattened_nested_tables {
-                graph.push_loss_at(
-                    LossMarker {
-                        code: "import.html.table_nested".into(),
-                        message:
-                            "a nested table is flattened into its parent cell inline run, so the inner table rows are not represented"
-                                .into(),
-                        status: SemanticStatus::Partial,
-                    },
-                    element_source_span(element),
-                );
-            }
-            if flattened_cell_blocks {
-                graph.push_loss_at(
-                    LossMarker {
-                        code: "import.html.table_cell_blocks".into(),
-                        message: "table cells authored as block layout are flattened into one inline run".into(),
-                        status: SemanticStatus::Partial,
-                    },
-                    element_source_span(element),
-                );
             }
             // The bands always serialize head before body, so an explicit
             // `<thead>` authored after body rows is moved to the front. The

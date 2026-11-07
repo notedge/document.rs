@@ -13,10 +13,7 @@ use document_ir::{
     MathFormula, RelationEndpoint, SemanticStatus, SourceKind, SourceRef, TableCell, TableRow,
 };
 
-use crate::{
-    FormatError,
-    import::{cell_children, register_image_assets},
-};
+use crate::{FormatError, import::register_image_assets};
 
 use super::{
     codec::{self, FORMAT_ID, PandocBudget},
@@ -625,34 +622,11 @@ impl Importer {
                 SemanticStatus::Partial,
             )?;
         }
-        let content = if cell.blocks.len() == 1 {
-            match &cell.blocks[0] {
-                Block::Plain(inlines) | Block::Para(inlines) => self.lower_inlines(inlines, &format!("{pointer}/4/0/c"))?,
-                _ => {
-                    self.structural_loss(
-                        pointer,
-                        "import.pandoc-json.table_cell_blocks",
-                        "cell block content other than one paragraph was flattened into inline content",
-                        SemanticStatus::Partial,
-                    )?;
-                    self.flatten_blocks(&cell.blocks, &format!("{pointer}/4"))?
-                }
-            }
-        }
-        else if cell.blocks.is_empty() {
-            Vec::new()
-        }
-        else {
-            self.structural_loss(
-                pointer,
-                "import.pandoc-json.table_cell_blocks",
-                "cell block content other than one paragraph was flattened into inline content",
-                SemanticStatus::Partial,
-            )?;
-            self.flatten_blocks(&cell.blocks, &format!("{pointer}/4"))?
-        };
+        // The IR cell holds child blocks, so every authored cell block is
+        // lowered and linked instead of being flattened into one inline run.
+        let children = self.lower_sequence(&cell.blocks, &format!("{pointer}/4"), 0)?;
         Ok(TableCell {
-            children: cell_children(&mut self.graph, content),
+            children,
             colspan: u32::try_from(cell.col_span.max(1)).unwrap_or(1),
             rowspan: u32::try_from(cell.row_span.max(1)).unwrap_or(1),
         })

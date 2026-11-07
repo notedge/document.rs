@@ -340,9 +340,11 @@ fn write_table(
     if head.is_empty() && body.is_empty() && foot.is_empty() {
         return Ok(());
     }
-    if head.iter().chain(body).chain(foot).any(|row| row.cells.iter().any(|cell| cell.colspan > 1 || cell.rowspan > 1)) {
-        // GFM tables cannot express merged cells, so a spanning table is written
-        // as an inline HTML table instead of silently dropping the spans.
+    if !table_cells_fit_a_pipe_table(graph, head, body, foot) {
+        // GFM pipe cells hold inline content only and cannot express merged
+        // cells. A spanning table, or one whose cells carry list, quote or
+        // nested-table blocks, is written as an inline HTML table instead of
+        // silently dropping the structure.
         super::html::write_table(out, graph, head, body, foot, &HashMap::new(), &mut super::html::FootnoteRefIds::default())?;
         out.push('\n');
         return Ok(());
@@ -369,6 +371,24 @@ fn write_table(
         }
     }
     Ok(())
+}
+
+/// A GFM pipe table holds one inline run per cell and no merged cells.
+///
+/// The `write_table_cell` helper can join several paragraph children with
+/// `<br>`, but it cannot express any other block. Everything outside that
+/// shape goes through the HTML table fallback.
+fn table_cells_fit_a_pipe_table(graph: &DocumentGraph, head: &[TableRow], body: &[TableRow], foot: &[TableRow]) -> bool {
+    head.iter().chain(body).chain(foot).all(|row| {
+        row.cells.iter().all(|cell| {
+            cell.colspan <= 1
+                && cell.rowspan <= 1
+                && cell
+                    .children
+                    .iter()
+                    .all(|id| matches!(graph.block(*id).map(|node| &node.block), Some(Block::Paragraph { .. })))
+        })
+    })
 }
 
 /// Table cells carry full child blocks, so emphasis, code spans, links, and

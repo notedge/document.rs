@@ -449,7 +449,7 @@ fn images_are_registered_as_unresolved_assets_not_fetched() {
 }
 
 #[test]
-fn table_cell_block_content_is_a_recorded_loss_and_round_trips() {
+fn table_cell_block_content_is_preserved_and_round_trips() {
     let text = serde_json::json!({
         "pandoc-api-version": [1, 23, 1],
         "meta": {},
@@ -473,10 +473,72 @@ fn table_cell_block_content_is_a_recorded_loss_and_round_trips() {
     })
     .to_string();
     let graph = import(&text);
-    assert!(graph.coverage.loss.iter().any(|loss| loss.code == "import.pandoc-json.table_cell_blocks"));
+    assert!(
+        !graph.coverage.loss.iter().any(|loss| loss.code == "import.pandoc-json.table_cell_blocks"),
+        "{:?}",
+        graph.coverage.loss
+    );
+    let body = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            IrBlock::Table { body, .. } => Some(body.as_slice()),
+            _ => None,
+        })
+        .expect("table");
+    let cell = &body[0].cells[0];
+    assert_eq!(cell.children.len(), 2, "both authored paragraphs stay cell blocks: {cell:?}");
+    let texts: Vec<&str> = cell
+        .children
+        .iter()
+        .filter_map(|id| graph.block(*id))
+        .filter_map(|node| match &node.block {
+            IrBlock::Paragraph { content } => content.iter().find_map(|inline| match inline {
+                document_ir::Inline::Text { text } => Some(text.as_str()),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, ["a", "b"]);
     let exported = export_pandoc_json(&graph).expect("export");
     let reimported = import(&exported.to_json_text().expect("json"));
     assert_eq!(graph.blocks, reimported.blocks);
+}
+
+#[test]
+fn table_cell_blocks_round_trip_through_markdown_as_an_html_table() {
+    let text = serde_json::json!({
+        "pandoc-api-version": [1, 23, 1],
+        "meta": {},
+        "blocks": [
+            {"t": "Table", "c": [
+                ["", [], []],
+                [null, []],
+                [["AlignDefault", 0.0]],
+                [["", [], []], []],
+                [[["", [], []], 0, [], [
+                    [["", [], []], [
+                        [["", [], []], "AlignDefault", 1, 1, [
+                            {"t": "Para", "c": [{"t": "Str", "c": "first"}]},
+                            {"t": "BulletList", "c": [[{"t": "Plain", "c": [{"t": "Str", "c": "item"}]}]]}
+                        ]]
+                    ]]
+                ]]],
+                [["", [], []], []]
+            ]}
+        ]
+    })
+    .to_string();
+    let graph = import(&text);
+    let markdown = export_markdown(&graph).expect("markdown export");
+    assert!(markdown.contains("<table"), "{markdown:?}");
+    assert!(markdown.contains("<ul><li>item</li></ul>"), "{markdown:?}");
+
+    let reopened = import_markdown_bytes("cell-blocks.md", &markdown).expect("reopen markdown");
+    let exported = export_pandoc_json(&graph).expect("export pandoc json");
+    let round_tripped = export_pandoc_json(&reopened).expect("export reopened pandoc json");
+    assert_eq!(round_tripped.document.blocks, exported.document.blocks);
 }
 
 #[test]
