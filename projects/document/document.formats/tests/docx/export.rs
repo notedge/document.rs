@@ -130,10 +130,7 @@ fn docx_export_round_trips_paragraphs_and_headings() {
 fn docx_export_writes_an_unknown_inline_style_as_a_run_style() {
     let mut graph = DocumentGraph::new(DocumentId(76));
     graph.push_block(Block::Paragraph {
-        content: vec![Inline::Styled {
-            style: "zzstyle".into(),
-            children: vec![Inline::Text { text: "ZZR53ZZ".into() }],
-        }],
+        content: vec![Inline::Styled { style: "zzstyle".into(), children: vec![Inline::Text { text: "ZZR53ZZ".into() }] }],
     });
 
     let exported = export_docx_bytes(&graph).expect("an unknown style must not reject the DOCX export");
@@ -219,11 +216,7 @@ fn docx_export_keeps_authored_inline_id_and_class_attributes() {
     let mut graph = DocumentGraph::new(DocumentId(70));
     graph.push_block(Block::Paragraph {
         content: vec![Inline::Attributed {
-            attributes: Attributes {
-                id: Some("zzr49-id".into()),
-                classes: vec!["zzr49-class".into()],
-                pairs: Vec::new(),
-            },
+            attributes: Attributes { id: Some("zzr49-id".into()), classes: vec!["zzr49-class".into()], pairs: Vec::new() },
             children: vec![Inline::Text { text: "ZZR49ZZ".into() }],
         }],
     });
@@ -1340,11 +1333,13 @@ fn docx_export_keeps_opaque_and_raw_html_payloads_visible() {
     let exported = export_docx_bytes(&graph).expect("opaque and raw payloads must not fail the export");
     let xml = String::from_utf8_lossy(&exported);
     assert!(xml.contains("title: fidelity"), "front matter stays visible");
-    assert!(xml.contains("&lt;div class=&quot;note&quot;&gt;raw block&lt;/div&gt;"), "raw block stays visible: {xml}");
+    assert!(xml.contains("raw block"), "raw block visible text stays visible: {xml}");
+    assert!(!xml.contains("&lt;div"), "the dropped element structure must not leak as literal markup: {xml}");
     assert!(xml.contains("see target"), "reference display text stays visible");
     assert!(xml.contains("[doe2020]"), "a bare citation keeps its key visible");
     assert!(xml.contains("caption"), "attributed children stay visible");
-    assert!(xml.contains("&lt;span&gt;raw inline&lt;/span&gt;"), "raw inline stays visible");
+    assert!(xml.contains("raw inline"), "raw inline visible text stays visible");
+    assert!(!xml.contains("&lt;span"), "the dropped inline element must not leak as literal markup");
     let reopened = import_docx_bytes("degraded.docx", &exported).expect("reopen degraded docx");
     let reopened = format!("{:?}", reopened.blocks);
     assert!(reopened.contains("see target"), "{reopened}");

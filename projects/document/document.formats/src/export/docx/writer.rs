@@ -7,7 +7,7 @@ use document_ir::{
     MathEnvironmentKind, MathExpression, MathFractionLine, MathSpace, MathStyle, NodeId, RelationEndpoint, TableRow,
 };
 
-use crate::FormatError;
+use crate::{FormatError, html_text};
 
 use super::{
     footnotes::{FootnoteCatalog, collect_footnote_catalog, parse_footnote_reference_token, render_footnotes_xml},
@@ -242,10 +242,14 @@ fn write_block(
         }
         Block::RawHtml { html } => {
             // Raw markup cannot be interpreted by the DOCX exporter, but its
-            // authored text stays visible as a paragraph instead of failing.
-            out.push_str("<w:p>");
-            write_literal_text(out, html, "", rels.footnotes())?;
-            out.push_str("</w:p>");
+            // visible characters can live in paragraphs. Element structure is
+            // dropped, so `write_document_docx` names it in the loss marker.
+            let projection = html_text::project(html);
+            for line in projection.text.lines() {
+                out.push_str("<w:p>");
+                write_literal_text(out, line, "", rels.footnotes())?;
+                out.push_str("</w:p>");
+            }
         }
     }
     Ok(())
@@ -745,15 +749,10 @@ fn write_inline_with_properties(
             // An authored HTML `id` maps onto a Word bookmark. The bookmark must
             // sit inside a paragraph but outside the runs, so the wrapped runs
             // stay reachable under the authored name.
-            let bookmark = attributes
-                .id
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-                .map(|id| (id, inline_bookmark_id(id)));
+            let bookmark =
+                attributes.id.as_deref().map(str::trim).filter(|id| !id.is_empty()).map(|id| (id, inline_bookmark_id(id)));
             if let Some((name, id)) = &bookmark {
-                write!(out, "<w:bookmarkStart w:id=\"{id}\" w:name=\"{}\"/>", escape_xml_attr(name))
-                    .map_err(map_fmt_error)?;
+                write!(out, "<w:bookmarkStart w:id=\"{id}\" w:name=\"{}\"/>", escape_xml_attr(name)).map_err(map_fmt_error)?;
             }
             // A class name becomes a run style id. One run style slot exists, so
             // the first class is the one DOCX can carry.
@@ -771,7 +770,9 @@ fn write_inline_with_properties(
             }
         }
         Inline::RawHtml { html } => {
-            write_literal_text(out, html, properties, rels.footnotes())?;
+            let projection = html_text::project(html);
+            let text = projection.text.replace('\n', " ");
+            write_literal_text(out, &text, properties, rels.footnotes())?;
         }
         Inline::Link { target, display, title } => {
             let RelationEndpoint::ExternalUri(url) = target

@@ -5,6 +5,8 @@ mod capability;
 pub mod detect;
 mod error;
 pub mod export;
+/// Visible-text projection for authored raw HTML.
+pub mod html_text;
 pub mod import;
 pub mod inspect;
 #[cfg(feature = "pandoc-json")]

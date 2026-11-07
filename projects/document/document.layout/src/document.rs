@@ -14,6 +14,7 @@ use document_compose::{
     math::{FontStyle, FormulaLayoutResult, GlyphKey, MathError, MathResult},
 };
 use document_fonts::{BodyMetrics, key_for_run};
+use document_formats::html_text;
 use document_ir::{AssetId, Block, DocumentGraph, Inline, ListItem, MathFormula, NodeId, RelationEndpoint, TableRow};
 use document_text::math::{FontMetricsSystem, builtin_font_metrics};
 
@@ -452,14 +453,16 @@ fn reference_target_dropped_diagnostic(target: NodeId) -> Diagnostic {
 /// The loss reported when authored raw HTML reaches a PDF page.
 ///
 /// A page has no arbitrary HTML slot, so the markup cannot be rendered. Its
-/// text is painted as literal source lines and the missing slot is named
+/// visible characters are painted and the dropped element structure is named
 /// instead of letting the block disappear from the page.
-fn raw_html_flattened_diagnostic() -> Diagnostic {
+fn raw_html_flattened_diagnostic(projection: &html_text::HtmlTextProjection) -> Diagnostic {
     Diagnostic {
         code: "export.pdf.raw_html_flattened".to_string(),
         severity: Severity::Warning,
-        message: "the PDF target has no arbitrary HTML slot, so authored raw HTML is painted as its literal markup text"
-            .to_string(),
+        message: format!(
+            "the PDF target has no arbitrary HTML slot, so the {} element structure is dropped while its visible text is painted",
+            projection.element_description()
+        ),
         span: None,
     }
 }
@@ -611,9 +614,7 @@ fn scan_link_targets(inlines: &[Inline], targets: &mut HashSet<NodeId>) {
                 }
                 scan_link_targets(display, targets);
             }
-            Inline::Styled { children, .. } | Inline::Attributed { children, .. } => {
-                scan_link_targets(children, targets)
-            }
+            Inline::Styled { children, .. } | Inline::Attributed { children, .. } => scan_link_targets(children, targets),
             Inline::Note { display: Some(display), .. } | Inline::Citation { display: Some(display), .. } => {
                 scan_link_targets(display, targets)
             }
@@ -1186,9 +1187,7 @@ impl<'a> PageBuilder<'a> {
                     let inner_anchor = link_anchor(target);
                     let inner_anchor = inner_anchor.as_deref().or(anchor);
                     let inner_title = link_title(link_hover.as_ref()).or(title);
-                    self.compose_inline(
-                        display, size, indent, flow, face, inner_href, inner_anchor, inner_title, image_mode,
-                    );
+                    self.compose_inline(display, size, indent, flow, face, inner_href, inner_anchor, inner_title, image_mode);
                 }
                 Inline::Note { display: Some(display), .. } => {
                     self.compose_inline(display, size, indent, flow, face, href, anchor, title, image_mode);
@@ -1223,12 +1222,13 @@ impl<'a> PageBuilder<'a> {
                     flow.atoms.extend(split_inline_atoms(&superscript_label(label), face, href, anchor, title));
                 }
                 // The PDF page has no arbitrary HTML slot, and `plain_text`
-                // would erase the node's content entirely. The literal markup
-                // stays in the flow so its visible text reaches the page, and
-                // the missing slot is reported.
+                // would erase the node's content entirely. Visible characters
+                // stay in the flow and the dropped element structure is named.
                 Inline::RawHtml { html } => {
-                    self.diagnostics.push(raw_html_flattened_diagnostic());
-                    flow.pending.push(html, face, href, anchor, title, &mut flow.atoms);
+                    let projection = html_text::project(html);
+                    self.diagnostics.push(raw_html_flattened_diagnostic(&projection));
+                    let text = projection.text.replace('\n', " ");
+                    flow.pending.push(&text, face, href, anchor, title, &mut flow.atoms);
                 }
                 other => flow.pending.push(&other.plain_text(), face, href, anchor, title, &mut flow.atoms),
             }
@@ -2184,12 +2184,13 @@ impl<'a> PageBuilder<'a> {
                     self.diagnostics.push(opaque_metadata_dropped_diagnostic(kind));
                 }
                 // The PDF page has no arbitrary HTML slot, but dropping the
-                // block would drop its authored text as well. The markup stays
-                // visible as literal source lines and the missing slot is
-                // named so the report never reads as clean.
+                // block would drop its authored text as well. Its visible
+                // characters are painted line by line and the dropped element
+                // structure is named so the report never reads as clean.
                 Block::RawHtml { html } => {
-                    self.diagnostics.push(raw_html_flattened_diagnostic());
-                    for line in html.lines() {
+                    let projection = html_text::project(html);
+                    self.diagnostics.push(raw_html_flattened_diagnostic(&projection));
+                    for line in projection.text.lines() {
                         let content = [Inline::Text { text: line.to_owned() }];
                         self.emit_paragraph(&content, indent);
                     }
@@ -2323,11 +2324,16 @@ fn break_inline_atoms(
                 // Adjacent atoms that stay in one painted run are kerned as one
                 // pair, so breaking must reserve that pair as well.
                 let tail = match current.last() {
-                    Some(InlineAtom::Text { text: last, face: last_face, href: last_href, anchor: last_anchor, title: last_title })
-                        if *last_face == face
-                            && last_href.as_deref() == href.as_deref()
-                            && last_anchor.as_deref() == anchor.as_deref()
-                            && last_title.as_deref() == title.as_deref() =>
+                    Some(InlineAtom::Text {
+                        text: last,
+                        face: last_face,
+                        href: last_href,
+                        anchor: last_anchor,
+                        title: last_title,
+                    }) if *last_face == face
+                        && last_href.as_deref() == href.as_deref()
+                        && last_anchor.as_deref() == anchor.as_deref()
+                        && last_title.as_deref() == title.as_deref() =>
                     {
                         last.chars().last()
                     }

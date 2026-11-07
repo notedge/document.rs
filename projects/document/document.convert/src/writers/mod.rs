@@ -15,44 +15,51 @@ pub use pdf::write_document_pdf;
 
 use document_ir::{Block, DocumentGraph, Inline};
 
-/// Authored raw HTML nodes a writer can only keep as literal text.
+/// Element names of authored raw HTML nodes a writer can only keep as visible text.
 ///
 /// A writer without an arbitrary HTML slot still has to keep the authored
-/// characters visible, so the occurrence count lets the report name the gap
-/// instead of calling the projection clean.
-pub(crate) fn raw_html_occurrences(graph: &DocumentGraph) -> usize {
-    let mut count = 0;
+/// characters visible. The element structure has no slot either, so the
+/// collected names let the report name which markup was dropped instead of
+/// calling the projection clean.
+pub(crate) fn raw_html_dropped_elements(graph: &DocumentGraph) -> Vec<String> {
+    let mut elements = Vec::new();
     for node in &graph.blocks {
         match &node.block {
-            Block::Section { title, .. } => count += inline_raw_html_count(title),
-            Block::Paragraph { content } => count += inline_raw_html_count(content),
+            Block::Section { title, .. } => collect_raw_html_elements(title, &mut elements),
+            Block::Paragraph { content } => collect_raw_html_elements(content, &mut elements),
             Block::List { items, .. } => {
                 for item in items {
-                    count += inline_raw_html_count(&item.content);
+                    collect_raw_html_elements(&item.content, &mut elements);
                 }
             }
-            Block::RawHtml { .. } => count += 1,
+            Block::RawHtml { html } => extend_raw_html_elements(html, &mut elements),
             _ => {}
         }
     }
-    count
+    elements
 }
 
-fn inline_raw_html_count(inlines: &[Inline]) -> usize {
-    let mut count = 0;
+fn collect_raw_html_elements(inlines: &[Inline], elements: &mut Vec<String>) {
     for inline in inlines {
         match inline {
-            Inline::RawHtml { .. } => count += 1,
-            Inline::Link { display, .. } => count += inline_raw_html_count(display),
+            Inline::RawHtml { html } => extend_raw_html_elements(html, elements),
+            Inline::Link { display, .. } => collect_raw_html_elements(display, elements),
             Inline::Styled { children, .. } | Inline::Attributed { children, .. } => {
-                count += inline_raw_html_count(children);
+                collect_raw_html_elements(children, elements);
             }
-            Inline::Note { display: Some(display), .. } => count += inline_raw_html_count(display),
-            Inline::Citation { display: Some(display), .. } => count += inline_raw_html_count(display),
+            Inline::Note { display: Some(display), .. } => collect_raw_html_elements(display, elements),
+            Inline::Citation { display: Some(display), .. } => collect_raw_html_elements(display, elements),
             _ => {}
         }
     }
-    count
+}
+
+fn extend_raw_html_elements(html: &str, elements: &mut Vec<String>) {
+    for name in document_formats::html_text::project(html).elements {
+        if !elements.iter().any(|seen| seen == &name) {
+            elements.push(name);
+        }
+    }
 }
 
 /// Inline attributes a DOCX run cannot carry.

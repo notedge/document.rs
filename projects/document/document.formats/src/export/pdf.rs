@@ -223,8 +223,8 @@ fn render_block(lines: &mut Vec<RenderLine>, graph: &DocumentGraph, block: &Bloc
         }
         Block::Opaque { kind, .. } => return Err(FormatError::unsupported("pdf", format!("opaque block `{kind}`"))),
         Block::RawHtml { html } => {
-            // PDF cannot render raw HTML — emit as escaped text lines.
-            for line in html.lines() {
+            // PDF cannot render raw HTML — paint the visible text lines.
+            for line in crate::html_text::project(html).text.lines() {
                 lines.push(RenderLine::Text(line.to_owned()));
             }
         }
@@ -365,9 +365,9 @@ fn inline_text(graph: &DocumentGraph, inlines: &[Inline]) -> Result<String, Form
                 ));
             }
             // The PDF exporter has no HTML renderer, but collapsing the node
-            // to nothing would silently erase authored content. Keeping the
-            // authored markup as text matches the block-level fallback.
-            Inline::RawHtml { html } => output.push_str(html),
+            // to nothing would silently erase authored content. Its visible
+            // text stays in the flow.
+            Inline::RawHtml { html } => output.push_str(&crate::html_text::project(html).text),
         }
         Ok(output)
     })
