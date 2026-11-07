@@ -78,7 +78,9 @@ fn top_kind(result: &FormulaLayoutResult) -> String {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn every_backend_reads_one_layout_result() {
+    crate::support::math_fonts();
     for (source, kind, element) in CASES {
         // One layout result, consumed by all three backends.
         let result = layout(source);
@@ -105,7 +107,9 @@ fn every_backend_reads_one_layout_result() {
 /// The structured tree is the one layout read, not a re-parse: the nodes the
 /// backends see keep the authored nesting instead of a flattened glyph stream.
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn semantics_keep_the_authored_nesting() {
+    crate::support::math_fonts();
     let json = serde_json::to_value(&layout("\\frac{a}{b}")).expect("result must serialize");
     let fraction = &json["semantics"]["nodes"][0]["fraction"];
     assert_eq!(fraction["numerator"]["identifier"]["text"], "a", "{json}");
@@ -122,7 +126,9 @@ fn semantics_keep_the_authored_nesting() {
 /// Metrics belong to the same result as the paint tree and the semantics, so the
 /// PDF page and the SVG canvas are sized from one measurement.
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn geometry_and_structure_share_one_result() {
+    crate::support::math_fonts();
     let result = layout("\\sqrt[3]{x}");
     assert!(!result.semantics.nodes.is_empty(), "the result must carry the IR it laid out");
 
@@ -141,7 +147,9 @@ fn geometry_and_structure_share_one_result() {
 
 /// Serde keeps the Rust truth: struct fields camelCase, enum tags kebab-case.
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn semantics_serialize_in_crate_naming() {
+    crate::support::math_fonts();
     let json = serde_json::to_value(&layout("\\hat{f}")).expect("result must serialize");
     let accent = &json["semantics"]["nodes"][0]["accent"];
     assert_eq!(accent["position"], "above", "{json}");
@@ -184,7 +192,9 @@ fn parse_svg_viewport(svg: &str, source: &str) -> (f64, f64, f64, f64, f64, f64)
 /// `result.metrics` itself; the SVG viewport and the PDF page are the
 /// derived surfaces.  Drift beyond rounding is a renderer bug.
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn backend_canvases_derive_from_the_single_metrics() {
+    crate::support::math_fonts();
     for (source, _, _) in CASES {
         let result = layout(source);
         let w = result.metrics.width.to_f64();

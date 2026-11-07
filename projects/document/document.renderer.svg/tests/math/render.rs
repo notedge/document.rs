@@ -20,7 +20,9 @@ fn render_mathml(source: &str) -> String {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn svg_backend_emits_svg_tags_for_a_fraction() {
+    crate::support::math_fonts();
     let svg = render_svg("\\frac{a}{b}");
     assert!(svg.starts_with("<svg"), "unexpected output: {svg}");
     assert!(svg.ends_with("</svg>"), "unexpected output: {svg}");
@@ -32,7 +34,9 @@ fn svg_backend_emits_svg_tags_for_a_fraction() {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn svg_backend_emits_paths_for_radicals() {
+    crate::support::math_fonts();
     let svg = render_svg("\\sqrt{x}");
     assert!(svg.contains("<path"), "radical should emit a path: {svg}");
 }

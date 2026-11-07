@@ -841,6 +841,7 @@ name = "document-renderer-svg"
 version = "0.1.0"
 dependencies = [
  "document-compose",
+ "document-fonts",
  "document-ir",
  "document-layout",
  "document-presentation",

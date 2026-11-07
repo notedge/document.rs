@@ -15,6 +15,7 @@ document-renderer = { workspace = true }
 
 [dev-dependencies]
 document-ir = { workspace = true }
+document-fonts = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 document-layout = { workspace = true }

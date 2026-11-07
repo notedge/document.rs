@@ -240,7 +240,9 @@ fn bar_strokes(svg: &str) -> usize {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn view_box_contains_every_painted_point() {
+    crate::support::math_fonts();
     for (name, source, display) in CASES {
         let (svg, _) = render(source, *display);
         let (min_x, min_y, width, height) = view_box(&svg);
@@ -256,7 +258,9 @@ fn view_box_contains_every_painted_point() {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn painted_ink_stays_inside_the_layout_box() {
+    crate::support::math_fonts();
     for (name, source, display) in CASES {
         let (svg, result) = render(source, *display);
         let (min_x, min_y, width, height) = view_box(&svg);
@@ -274,7 +278,9 @@ fn painted_ink_stays_inside_the_layout_box() {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn simple_sum_extents_stay_in_one_em_range() {
+    crate::support::math_fonts();
     // Inline math lays out at a 14px em. `x + y` is a few em wide and a little
     // under one em tall; outlines painted in the wrong direction blow past this.
     let (svg, result) = render("x + y", false);
@@ -293,7 +299,9 @@ fn simple_sum_extents_stay_in_one_em_range() {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn thin_space_paints_nothing_in_deterministic_mode() {
+    crate::support::math_fonts();
     let (svg, result) = render(r"a\,b", false);
     assert!(!svg.contains("<text"), "deterministic mode must not fall back to a host font:\n{svg}");
     assert_eq!(outline_paths(&svg).len(), 2, "only the two letters carry ink:\n{svg}");
@@ -310,7 +318,9 @@ fn ink_y_extent(svg: &str) -> (f64, f64) {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn stretched_delimiters_paint_their_own_outlines() {
+    crate::support::math_fonts();
     // Inline math lays out at a 14px em. Parentheses wrapped around a fraction
     // paint two extra outlines, which only happens when the variant glyph keys
     // resolve to the font's own extents and paths.
@@ -324,7 +334,9 @@ fn stretched_delimiters_paint_their_own_outlines() {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn delimiters_cover_the_body_they_wrap() {
+    crate::support::math_fonts();
     // A stretched delimiter is sized from the taller side of the math axis, so
     // the parentheses must paint on both sides and enclose the fraction instead
     // of sticking to the one-em minimum.
@@ -345,7 +357,9 @@ fn delimiters_cover_the_body_they_wrap() {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn tall_brace_is_assembled_from_stacked_parts() {
+    crate::support::math_fonts();
     // A brace around two nested fractions needs the piecewise assembly: no
     // single prepared variant covers that height.
     let bare = r"\frac{\frac{a}{b}}{\frac{c}{d}}";
@@ -361,7 +375,9 @@ fn tall_brace_is_assembled_from_stacked_parts() {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn emphasis_faces_keep_their_own_outlines() {
+    crate::support::math_fonts();
     let (bold_svg, bold_root) = render_with_tree(r"\mathbf{a}", false);
     let (italic_svg, italic_root) = render_with_tree(r"\mathit{a}", false);
     let (upright_svg, upright_root) = render_with_tree(r"\mathrm{a}", false);
@@ -388,7 +404,9 @@ fn emphasis_faces_keep_their_own_outlines() {
 /// `\hat` paints the font's circumflex next to the nucleus, never a host-font
 /// run, so accent geometry stays deterministic.
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn hat_accent_paints_the_font_circumflex() {
+    crate::support::math_fonts();
     let (svg, _) = render(r"\hat{x}", false);
     assert!(!svg.contains("<text"), "`\\hat` must not fall back to a host font:\n{svg}");
     assert_eq!(outline_paths(&svg).len(), 2, "the nucleus and the circumflex carry one outline each:\n{svg}");
@@ -397,7 +415,9 @@ fn hat_accent_paints_the_font_circumflex() {
 /// `\bar` covers the nucleus it sits on: the font's macron is a text mark that
 /// does not span a wide base, so TeX draws an overbar rule across the whole box.
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn bar_accent_paints_a_rule_across_the_nucleus() {
+    crate::support::math_fonts();
     let (svg, _) = render(r"\bar{x}", false);
     assert!(!svg.contains("<text"), "`\\bar` must not fall back to a host font:\n{svg}");
     assert_eq!(outline_paths(&svg).len(), 1, "only the nucleus carries an outline:\n{svg}");
@@ -424,7 +444,9 @@ fn bar_accent_paints_a_rule_across_the_nucleus() {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn vmatrix_and_Vmatrix_use_different_bars() {
+    crate::support::math_fonts();
     let upper = render(r"\begin{Vmatrix}a&b\\c&d\end{Vmatrix}", true).0;
     let lower = render(r"\begin{vmatrix}a&b\\c&d\end{vmatrix}", true).0;
     // Each matrix paints a delimiter on both sides, so `Vmatrix` (two strokes
