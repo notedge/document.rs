@@ -4,7 +4,7 @@ use document_types::Result;
 
 use crate::{
     format_error::map_format_error,
-    writers::{raw_html_occurrences, unresolved_image_sources},
+    writers::{docx_dropped_inline_attributes, raw_html_occurrences, unresolved_image_sources},
 };
 
 /// Write `notedown-ir` to DOCX bytes via `notedown-formats`.
@@ -33,6 +33,17 @@ pub fn write_document_docx(graph: &mut DocumentGraph) -> Result<Vec<u8>> {
             code: "export.docx.raw_html_flattened".into(),
             message: format!(
                 "the DOCX target has no arbitrary HTML slot, so {raw_html} authored raw HTML node(s) are kept as literal markup text"
+            ),
+            status: SemanticStatus::Partial,
+        });
+    }
+    let dropped_attributes = docx_dropped_inline_attributes(graph);
+    if !dropped_attributes.is_empty() {
+        graph.push_loss(LossMarker {
+            code: "export.docx.inline_attributes_dropped".into(),
+            message: format!(
+                "the DOCX target has no slot for inline attribute {}, so the value is dropped while the wrapped text stays",
+                dropped_attributes.join(", ")
             ),
             status: SemanticStatus::Partial,
         });

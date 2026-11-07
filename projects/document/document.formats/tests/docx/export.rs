@@ -3,8 +3,8 @@ use document_formats::{
     import::{docx::import_docx_bytes, markdown::import_markdown_bytes},
 };
 use document_ir::{
-    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, Inline, ListItem, NodeId, RelationEndpoint, SemanticStatus,
-    TableCell, TableRow,
+    Asset, AssetId, AssetKind, AttributePair, Attributes, Block, DocumentGraph, DocumentId, Inline, ListItem, NodeId,
+    RelationEndpoint, SemanticStatus, TableCell, TableRow,
 };
 
 fn png_header(width: u32, height: u32) -> Vec<u8> {
@@ -124,6 +124,38 @@ fn docx_export_round_trips_paragraphs_and_headings() {
     let markdown = export_markdown(&round).expect("export markdown");
     assert!(markdown.contains("Hello DOCX"));
     assert!(markdown.contains("# Title"));
+}
+
+#[test]
+fn docx_export_keeps_authored_inline_id_and_class_attributes() {
+    let mut graph = DocumentGraph::new(DocumentId(70));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Attributed {
+            attributes: Attributes {
+                id: Some("zzr49-id".into()),
+                classes: vec!["zzr49-class".into()],
+                pairs: Vec::new(),
+            },
+            children: vec![Inline::Text { text: "ZZR49ZZ".into() }],
+        }],
+    });
+
+    let exported = export_docx_bytes(&graph).expect("export attributed paragraph");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("zzr49-id"), "the authored id must survive as a bookmark: {xml}");
+    assert!(xml.contains("zzr49-class"), "the authored class must survive as a run style: {xml}");
+    assert!(xml.contains("ZZR49ZZ"), "the wrapped text must still be there: {xml}");
+}
+
+#[test]
+fn docx_export_leaves_a_plain_run_without_a_bookmark_or_style_id() {
+    let mut graph = DocumentGraph::new(DocumentId(71));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "ZZ_PLAIN_ZZ".into() }] });
+
+    let exported = export_docx_bytes(&graph).expect("export plain paragraph");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(!xml.contains("w:bookmarkStart"), "a plain run needs no bookmark: {xml}");
+    assert!(!xml.contains("w:rStyle"), "a plain run needs no authored style id: {xml}");
 }
 
 #[test]

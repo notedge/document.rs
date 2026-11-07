@@ -585,6 +585,18 @@ fn write_inline(
     write_inline_with_properties(out, inline, graph, rels, "")
 }
 
+/// Numeric `w:id` for an inline bookmark. Authored ids are text but the
+/// bookmark id namespace is numeric, so a stable FNV-1a hash keeps the pairing
+/// deterministic while staying clear of the small node bookmark ids.
+fn inline_bookmark_id(name: &str) -> u32 {
+    let mut hash = 2_166_136_261u32;
+    for byte in name.bytes() {
+        hash ^= u32::from(byte);
+        hash = hash.wrapping_mul(16_777_619);
+    }
+    1_000_000 + hash % 1_000_000
+}
+
 fn write_inline_with_properties(
     out: &mut String,
     inline: &Inline,
@@ -703,9 +715,33 @@ fn write_inline_with_properties(
             }
             out.push_str("</w:fldSimple>");
         }
-        Inline::Attributed { children, .. } => {
+        Inline::Attributed { attributes, children } => {
+            // An authored HTML `id` maps onto a Word bookmark. The bookmark must
+            // sit inside a paragraph but outside the runs, so the wrapped runs
+            // stay reachable under the authored name.
+            let bookmark = attributes
+                .id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(|id| (id, inline_bookmark_id(id)));
+            if let Some((name, id)) = &bookmark {
+                write!(out, "<w:bookmarkStart w:id=\"{id}\" w:name=\"{}\"/>", escape_xml_attr(name))
+                    .map_err(map_fmt_error)?;
+            }
+            // A class name becomes a run style id. One run style slot exists, so
+            // the first class is the one DOCX can carry.
+            let class_properties = attributes
+                .classes
+                .first()
+                .filter(|class| !class.trim().is_empty() && !properties.contains("<w:rStyle"))
+                .map(|class| format!("{properties}<w:rStyle w:val=\"{}\"/>", escape_xml_attr(class)));
+            let child_properties = class_properties.as_deref().unwrap_or(properties);
             for child in children {
-                write_inline_with_properties(out, child, graph, rels, properties)?;
+                write_inline_with_properties(out, child, graph, rels, child_properties)?;
+            }
+            if let Some((_, id)) = &bookmark {
+                write!(out, "<w:bookmarkEnd w:id=\"{id}\"/>").map_err(map_fmt_error)?;
             }
         }
         Inline::RawHtml { html } => {

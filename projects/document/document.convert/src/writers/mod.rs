@@ -55,6 +55,51 @@ fn inline_raw_html_count(inlines: &[Inline]) -> usize {
     count
 }
 
+/// Inline attributes a DOCX run cannot carry.
+///
+/// A DOCX run maps an authored `id` onto a bookmark and the first class onto a
+/// run style. Additional classes and arbitrary pairs have no slot, so their
+/// authored names are collected here and named in the report.
+pub(crate) fn docx_dropped_inline_attributes(graph: &DocumentGraph) -> Vec<String> {
+    let mut dropped = Vec::new();
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Section { title, .. } => collect_docx_attribute_gaps(title, &mut dropped),
+            Block::Paragraph { content } => collect_docx_attribute_gaps(content, &mut dropped),
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_docx_attribute_gaps(&item.content, &mut dropped);
+                }
+            }
+            _ => {}
+        }
+    }
+    dropped
+}
+
+fn collect_docx_attribute_gaps(inlines: &[Inline], dropped: &mut Vec<String>) {
+    for inline in inlines {
+        match inline {
+            Inline::Attributed { attributes, children } => {
+                for pair in &attributes.pairs {
+                    dropped.push(format!("pairs:{}", pair.key));
+                }
+                for class in attributes.classes.iter().skip(1) {
+                    dropped.push(format!("classes:{class}"));
+                }
+                collect_docx_attribute_gaps(children, dropped);
+            }
+            Inline::Styled { children, .. } | Inline::Link { display: children, .. } => {
+                collect_docx_attribute_gaps(children, dropped);
+            }
+            Inline::Image { alt, .. } => collect_docx_attribute_gaps(alt, dropped),
+            Inline::Note { display: Some(display), .. } => collect_docx_attribute_gaps(display, dropped),
+            Inline::Citation { display: Some(display), .. } => collect_docx_attribute_gaps(display, dropped),
+            _ => {}
+        }
+    }
+}
+
 /// Image sources whose bound asset carries no bytes, in document order.
 ///
 /// A writer that cannot embed the raster still has to account for the

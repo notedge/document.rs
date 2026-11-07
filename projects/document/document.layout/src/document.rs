@@ -320,6 +320,23 @@ fn citation_degraded_diagnostic(key: &str) -> Diagnostic {
     }
 }
 
+/// The loss reported when authored inline attributes reach a PDF page.
+///
+/// The page keeps the characters inside an attributed run but has no slot for
+/// the identity attributes themselves, so the report names which of `id`,
+/// `classes` and `pairs` were dropped instead of exporting clean.
+fn inline_attributes_dropped_diagnostic(names: &[&str]) -> Diagnostic {
+    Diagnostic {
+        code: "export.pdf.inline_attributes_dropped".to_string(),
+        severity: Severity::Warning,
+        message: format!(
+            "the PDF target has no slot for inline attribute {} on an attributed run, so the wrapped characters stay but the authored identity is dropped",
+            names.join(", ")
+        ),
+        span: None,
+    }
+}
+
 /// The loss reported when image alternative text reaches a PDF page.
 ///
 /// The PDF backend emits untagged pages: there is no `/StructTreeRoot` to hold
@@ -1075,8 +1092,22 @@ impl<'a> PageBuilder<'a> {
                 }
                 Inline::InlineCode { text } => flow.pending.push(text, CODE_FACE, href, anchor, title, &mut flow.atoms),
                 // Attributes carry no printable face, but their wrapped content
-                // keeps every authored style and destination.
-                Inline::Attributed { children, .. } => {
+                // keeps every authored style and destination. The attributes
+                // themselves have no PDF slot, so the report names them.
+                Inline::Attributed { attributes, children } => {
+                    let mut dropped = Vec::new();
+                    if attributes.id.as_deref().is_some_and(|id| !id.trim().is_empty()) {
+                        dropped.push("id");
+                    }
+                    if !attributes.classes.is_empty() {
+                        dropped.push("classes");
+                    }
+                    if !attributes.pairs.is_empty() {
+                        dropped.push("pairs");
+                    }
+                    if !dropped.is_empty() {
+                        self.diagnostics.push(inline_attributes_dropped_diagnostic(&dropped));
+                    }
                     self.compose_inline(children, size, indent, flow, face, href, anchor, title, image_mode);
                 }
                 Inline::Link { target, display, title: link_hover } => {

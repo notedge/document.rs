@@ -1,6 +1,9 @@
 use document_convert::{convert_bytes, convert_bytes_with_body_faces, write_document_docx, write_document_pdf};
 use document_formats::import::{markdown::import_markdown_bytes, pdf::import_pdf_bytes};
-use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, RelationEndpoint, SemanticStatus, TableCell, TableRow};
+use document_ir::{
+    AttributePair, Attributes, Block, DocumentGraph, DocumentId, Inline, ListItem, RelationEndpoint, SemanticStatus,
+    TableCell, TableRow,
+};
 
 use crate::common;
 use common::{
@@ -715,6 +718,84 @@ fn pdf_export_keeps_external_links_as_uri_actions() {
 }
 
 #[test]
+fn pdf_export_keeps_attributed_text_and_names_the_dropped_attributes() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(25));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Attributed {
+            attributes: Attributes {
+                id: Some("zzr49-id".into()),
+                classes: vec!["zzr49-class".into()],
+                pairs: vec![AttributePair { key: "data-zz".into(), value: "zzr49-pair".into() }],
+            },
+            children: vec![Inline::Text { text: "ZZR49ZZ".into() }],
+        }],
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let reopened = convert_bytes("pdf", "markdown", "attributes.pdf", pdf, None).expect("reopen PDF");
+    assert!(reopened.markdown.contains("ZZR49ZZ"), "the wrapped text must stay on the page: {}", reopened.markdown);
+    let loss = graph
+        .coverage
+        .loss
+        .iter()
+        .find(|loss| loss.code == "export.pdf.inline_attributes_dropped")
+        .unwrap_or_else(|| panic!("missing attribute loss: {:?}", graph.coverage.loss));
+    assert_eq!(loss.status, SemanticStatus::Partial);
+    for name in ["id", "classes", "pairs"] {
+        assert!(loss.message.contains(name), "the message must name `{name}`: {}", loss.message);
+    }
+}
+
+#[test]
+fn pdf_export_of_a_plain_paragraph_reports_no_attribute_loss() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(26));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "ZZ_PLAIN_ZZ".into() }] });
+
+    write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(!codes.contains(&"export.pdf.inline_attributes_dropped"), "{codes:?}");
+
+    let mut empty = DocumentGraph::new(DocumentId(27));
+    empty.push_block(Block::Paragraph {
+        content: vec![Inline::Attributed { attributes: Attributes::default(), children: vec![Inline::Text { text: "ZZ_EMPTY_ZZ".into() }] }],
+    });
+    write_document_pdf(&mut empty, &faces).expect("write PDF");
+    let codes: Vec<&str> = empty.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(!codes.contains(&"export.pdf.inline_attributes_dropped"), "an empty wrapper carries no attribute: {codes:?}");
+}
+
+#[test]
+fn docx_export_keeps_the_inline_id_and_first_class_and_names_the_rest() {
+    let mut graph = DocumentGraph::new(DocumentId(28));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Attributed {
+            attributes: Attributes {
+                id: Some("zzr49-id".into()),
+                classes: vec!["zzr49-class".into(), "zzr49-extra".into()],
+                pairs: vec![AttributePair { key: "data-zz".into(), value: "zzr49-pair".into() }],
+            },
+            children: vec![Inline::Text { text: "ZZR49ZZ".into() }],
+        }],
+    });
+
+    let docx = write_document_docx(&mut graph).expect("write DOCX");
+    let xml = String::from_utf8_lossy(&docx);
+    assert!(xml.contains("zzr49-id"), "the id must survive as a bookmark: {xml}");
+    assert!(xml.contains("zzr49-class"), "the first class must survive as a run style: {xml}");
+    let loss = graph
+        .coverage
+        .loss
+        .iter()
+        .find(|loss| loss.code == "export.docx.inline_attributes_dropped")
+        .unwrap_or_else(|| panic!("missing attribute loss: {:?}", graph.coverage.loss));
+    assert_eq!(loss.status, SemanticStatus::Partial);
+    assert!(loss.message.contains("data-zz"), "the message must name the dropped pair: {}", loss.message);
+    assert!(loss.message.contains("zzr49-extra"), "the message must name the dropped class: {}", loss.message);
+}
+
+#[test]
 fn docx_export_of_plain_text_does_not_report_raw_html() {
     let mut graph = DocumentGraph::new(DocumentId(15));
     graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Plain body.".into() }] });
@@ -722,4 +803,5 @@ fn docx_export_of_plain_text_does_not_report_raw_html() {
     write_document_docx(&mut graph).expect("write DOCX");
     let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
     assert!(!codes.contains(&"export.docx.raw_html_flattened"), "{codes:?}");
+    assert!(!codes.contains(&"export.docx.inline_attributes_dropped"), "{codes:?}");
 }
