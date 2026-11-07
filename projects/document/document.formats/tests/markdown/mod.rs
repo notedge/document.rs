@@ -49,11 +49,8 @@ fn cell_text(graph: &DocumentGraph, cell: &TableCell) -> String {
 
 #[test]
 fn markdown_export_keeps_html_image_width_and_height() {
-    let graph = import_html_text(
-        "img-size.html",
-        r#"<body><img src="chart.png" alt="chart" width="320" height="180"></body>"#,
-    )
-    .expect("import html image size");
+    let graph = import_html_text("img-size.html", r#"<body><img src="chart.png" alt="chart" width="320" height="180"></body>"#)
+        .expect("import html image size");
     let markdown = export_markdown(&graph).expect("export markdown");
     assert!(
         markdown.contains(r#"<img src="chart.png" alt="chart" width="320" height="180">"#),
@@ -64,8 +61,8 @@ fn markdown_export_keeps_html_image_width_and_height() {
 
 #[test]
 fn markdown_export_of_an_unsized_image_stays_markdown() {
-    let graph = import_html_text("img-plain.html", r#"<body><img src="chart.png" alt="chart"></body>"#)
-        .expect("import html image");
+    let graph =
+        import_html_text("img-plain.html", r#"<body><img src="chart.png" alt="chart"></body>"#).expect("import html image");
     let markdown = export_markdown(&graph).expect("export markdown");
     assert!(markdown.contains("![chart](chart.png)"), "a plain image stays markdown: {markdown}");
     assert!(!markdown.contains("<img"), "no size means no inline HTML: {markdown}");

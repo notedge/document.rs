@@ -4,8 +4,7 @@ use std::{
 };
 
 use document_ir::{
-    Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, LossMarker, NodeId, RelationEndpoint, TableCell,
-    TableRow,
+    Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, LossMarker, NodeId, RelationEndpoint, TableCell, TableRow,
 };
 
 use crate::FormatError;

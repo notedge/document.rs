@@ -5,7 +5,10 @@ use document_formats::{
     },
     import::epub::import_epub_bytes,
 };
-use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, SemanticStatus, SourceKind};
+use document_ir::{
+    Block, DocumentGraph, DocumentId, DocumentMetadata, Inline, ListItem, MetadataEntry, MetadataValue, SemanticStatus,
+    SourceKind, TableCell, TableRow,
+};
 
 fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut archive = Vec::new();
@@ -1116,5 +1119,96 @@ fn epub_export_reports_only_declared_losses() {
     let export = export_epub_report(&graph).expect("epub export");
     assert!(!export.bytes.is_empty());
     let codes: Vec<&str> = export.losses.iter().map(|loss| loss.code.as_str()).collect();
-    assert!(codes.is_empty(), "no EPUB loss code is declared yet, but the channel reported {codes:?}");
+    assert!(codes.is_empty(), "a plain document declares no EPUB loss, but the channel reported {codes:?}");
+}
+
+#[test]
+fn epub_export_reports_dropped_document_metadata() {
+    let mut graph = DocumentGraph::new(DocumentId(7));
+    graph.metadata = DocumentMetadata {
+        title: Some("Title".into()),
+        language: Some("en".into()),
+        authors: vec!["First".into(), "Second".into()],
+        tags: vec!["rust".into()],
+        properties: vec![MetadataEntry { key: "key".into(), value: MetadataValue::Text("value".into()) }],
+    };
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Body".into() }] });
+
+    let export = export_epub_report(&graph).expect("epub export");
+    let codes: Vec<&str> = export.losses.iter().map(|loss| loss.code.as_str()).collect();
+    assert_eq!(codes, ["export.epub.creator_dropped", "export.epub.tag_dropped", "export.epub.property_dropped"]);
+    assert!(export.losses.iter().all(|loss| loss.status == SemanticStatus::Partial));
+
+    let roundtrip = import_epub_bytes("roundtrip.epub", &export.bytes).expect("epub import");
+    assert_eq!(roundtrip.metadata.authors, ["First"], "the second creator must really be gone");
+    assert!(roundtrip.metadata.tags.is_empty(), "tags must really be gone");
+    assert!(roundtrip.metadata.properties.is_empty(), "properties must really be gone");
+}
+
+#[test]
+fn epub_export_reports_flattened_table_foot_band() {
+    let mut graph = DocumentGraph::new(DocumentId(8));
+    let header = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "H".into() }] });
+    let body = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "B".into() }] });
+    let footer = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "F".into() }] });
+    graph.push_block(Block::Table {
+        caption: None,
+        head: vec![TableRow { cells: vec![TableCell { children: vec![header], colspan: 1, rowspan: 1 }] }],
+        body: vec![TableRow { cells: vec![TableCell { children: vec![body], colspan: 1, rowspan: 1 }] }],
+        foot: vec![TableRow { cells: vec![TableCell { children: vec![footer], colspan: 1, rowspan: 1 }] }],
+    });
+
+    let export = export_epub_report(&graph).expect("epub export");
+    let loss = export.losses.iter().find(|loss| loss.code == "export.epub.table_foot_band_flattened").expect("foot band loss");
+    assert!(loss.message.contains("1 foot row(s)"), "{}", loss.message);
+
+    let roundtrip = import_epub_bytes("roundtrip.epub", &export.bytes).expect("epub import");
+    let (head_rows, foot_rows) = roundtrip
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { head, foot, .. } => Some((head.len(), foot.len())),
+            _ => None,
+        })
+        .expect("the table survives the round trip");
+    assert_eq!(head_rows, 1, "the head row survives through `<th>`");
+    assert_eq!(foot_rows, 0, "the foot band is flattened into the body, not restored");
+
+    let mut plain = DocumentGraph::new(DocumentId(9));
+    let cell = plain.push_block(Block::Paragraph { content: vec![Inline::Text { text: "B".into() }] });
+    plain.push_block(Block::Table {
+        caption: None,
+        head: Vec::new(),
+        body: vec![TableRow { cells: vec![TableCell { children: vec![cell], colspan: 1, rowspan: 1 }] }],
+        foot: Vec::new(),
+    });
+    let export = export_epub_report(&plain).expect("epub export");
+    assert!(
+        !export.losses.iter().any(|loss| loss.code == "export.epub.table_foot_band_flattened"),
+        "a table without a foot band must not be reported"
+    );
+
+    let mut head_only = DocumentGraph::new(DocumentId(10));
+    let header = head_only.push_block(Block::Paragraph { content: vec![Inline::Text { text: "H".into() }] });
+    head_only.push_block(Block::Table {
+        caption: None,
+        head: vec![TableRow { cells: vec![TableCell { children: vec![header], colspan: 1, rowspan: 1 }] }],
+        body: Vec::new(),
+        foot: Vec::new(),
+    });
+    let export = export_epub_report(&head_only).expect("epub export");
+    assert!(
+        !export.losses.iter().any(|loss| loss.code == "export.epub.table_foot_band_flattened"),
+        "the head band round-trips through `<th>`, so declaring it would over-report"
+    );
+    let roundtrip = import_epub_bytes("head-only.epub", &export.bytes).expect("epub import");
+    let head_rows = roundtrip
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { head, .. } => Some(head.len()),
+            _ => None,
+        })
+        .expect("the table survives the round trip");
+    assert_eq!(head_rows, 1, "the head band must survive without a declared loss");
 }

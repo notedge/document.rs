@@ -50,10 +50,7 @@ fn quote_paragraph(graph: &DocumentGraph) -> &[Inline] {
 fn html_export_writes_an_unknown_inline_style_as_a_class() {
     let mut graph = DocumentGraph::new(DocumentId(78));
     graph.push_block(Block::Paragraph {
-        content: vec![Inline::Styled {
-            style: "zzstyle".into(),
-            children: vec![Inline::Text { text: "ZZR53ZZ".into() }],
-        }],
+        content: vec![Inline::Styled { style: "zzstyle".into(), children: vec![Inline::Text { text: "ZZR53ZZ".into() }] }],
     });
 
     let html = export_html(&graph).expect("an unknown style must not reject the HTML export");

@@ -24,7 +24,7 @@ mod xhtml;
 
 use std::{collections::HashMap, path::Path};
 
-use document_ir::{DocumentGraph, LossMarker, NodeId};
+use document_ir::{Block, DocumentGraph, LossMarker, NodeId, SemanticStatus};
 
 use crate::FormatError;
 
@@ -34,8 +34,8 @@ use crate::FormatError;
 /// known degradation point, may be pushed. Render and layout diagnostics stay
 /// with the logger and never arrive through this path.
 ///
-/// No EPUB code is declared yet: metadata beyond the first author and the
-/// table head/foot band flattening are still silent, so the list is empty.
+/// Declared so far: creators after the first, tags, typed properties, and the
+/// table foot band flattening.
 pub struct EpubExport {
     /// The finished OCF package.
     pub bytes: Vec<u8>,
@@ -121,7 +121,65 @@ pub fn export_epub_report(graph: &DocumentGraph) -> Result<EpubExport, FormatErr
     let opf_xml = opf::content_opf(graph, &opf_items, &spine_items)?;
     entries.push(("OEBPS/content.opf".to_string(), opf_xml.as_bytes().to_vec()));
 
-    Ok(EpubExport { bytes: package::build_epub_package(&entries), losses: Vec::new() })
+    Ok(EpubExport { bytes: package::build_epub_package(&entries), losses: declared_losses(graph) })
+}
+
+/// Losses this exporter declares explicitly.
+///
+/// Every entry is a deliberate degradation in `content.opf` or the chapter
+/// XHTML. The list is not populated from diagnostics.
+fn declared_losses(graph: &DocumentGraph) -> Vec<LossMarker> {
+    let mut losses = Vec::new();
+
+    for author in graph.metadata.authors.iter().skip(1) {
+        losses.push(LossMarker {
+            code: "export.epub.creator_dropped".into(),
+            message: format!("author `{author}` is not written because `OEBPS/content.opf` carries only the first creator"),
+            status: SemanticStatus::Partial,
+        });
+    }
+    for tag in &graph.metadata.tags {
+        losses.push(LossMarker {
+            code: "export.epub.tag_dropped".into(),
+            message: format!("tag `{tag}` is not written because `OEBPS/content.opf` emits no `dc:subject`"),
+            status: SemanticStatus::Partial,
+        });
+    }
+    for property in &graph.metadata.properties {
+        losses.push(LossMarker {
+            code: "export.epub.property_dropped".into(),
+            message: format!(
+                "metadata property `{}` is not written because `OEBPS/content.opf` emits only title, language and creator",
+                property.key
+            ),
+            status: SemanticStatus::Partial,
+        });
+    }
+
+    for node in &graph.blocks {
+        let Block::Table { foot, .. } = &node.block
+        else {
+            continue;
+        };
+        if foot.is_empty() {
+            continue;
+        }
+        // Header rows survive because the chapter XHTML writes them as `<th>`
+        // and the read side rebuilds the leading `<th>` run as the head band.
+        // Footer rows are written as `<td>` inside the same `<tr>` sequence,
+        // so they come back as body rows and the band is gone for good.
+        losses.push(LossMarker {
+            code: "export.epub.table_foot_band_flattened".into(),
+            message: format!(
+                "table `{:?}` keeps {} foot row(s) as body rows because the chapter XHTML emits one `<tr>` sequence without `<tfoot>` and the reader has no foot band",
+                node.id,
+                foot.len()
+            ),
+            status: SemanticStatus::Partial,
+        });
+    }
+
+    losses
 }
 
 /// Export a document graph to an EPUB file on disk.
