@@ -257,8 +257,8 @@ fn write_block(
             write_list(out, graph, *ordered, items, 0, image_urls)?;
             out.push('\n');
         }
-        Block::Table { head, body, foot, .. } => {
-            write_table(out, graph, head, body, foot, image_urls)?;
+        Block::Table { caption, head, body, foot } => {
+            write_table(out, graph, caption.as_deref(), head, body, foot, image_urls)?;
             out.push('\n');
         }
         Block::Math { formula } => {
@@ -332,6 +332,7 @@ fn write_list(
 fn write_table(
     out: &mut String,
     graph: &DocumentGraph,
+    caption: Option<&str>,
     head: &[TableRow],
     body: &[TableRow],
     foot: &[TableRow],
@@ -340,12 +341,23 @@ fn write_table(
     if head.is_empty() && body.is_empty() && foot.is_empty() {
         return Ok(());
     }
-    if !table_cells_fit_a_pipe_table(graph, head, body, foot) {
+    if caption.is_some() || !table_cells_fit_a_pipe_table(graph, head, body, foot) {
         // GFM pipe cells hold inline content only and cannot express merged
         // cells. A spanning table, or one whose cells carry list, quote or
         // nested-table blocks, is written as an inline HTML table instead of
-        // silently dropping the structure.
-        super::html::write_table(out, graph, head, body, foot, &HashMap::new(), &mut super::html::FootnoteRefIds::default())?;
+        // silently dropping the structure. A caption has no pipe-table slot
+        // either, so a captioned table takes the same HTML path and keeps
+        // `<caption>` for the reader that lowers the table again.
+        super::html::write_table(
+            out,
+            graph,
+            caption,
+            head,
+            body,
+            foot,
+            &HashMap::new(),
+            &mut super::html::FootnoteRefIds::default(),
+        )?;
         out.push('\n');
         return Ok(());
     }

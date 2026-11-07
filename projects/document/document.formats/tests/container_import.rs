@@ -11,6 +11,7 @@ use document_formats::{
     import::{
         epub::import_epub_bytes,
         html::{import_html_bytes, import_html_text},
+        markdown::import_markdown_bytes,
     },
 };
 use document_ir::{Block, DocumentGraph, Inline, SemanticStatus};
@@ -160,9 +161,20 @@ fn html_table_lowers_to_a_structured_table() {
     );
     assert!(raw_tables.is_empty(), "table stayed raw: {raw_tables:?}");
     let markdown = export_markdown(&graph).expect("markdown export");
-    assert!(!markdown.contains("<table"), "markdown kept a raw table: {markdown}");
-    assert!(markdown.contains("| Region"), "{markdown}");
-    assert!(markdown.contains("North"), "{markdown}");
+    // A caption has no GFM pipe slot, so the table takes the inline HTML path
+    // instead of dropping the caption as before. The fallback still carries
+    // `<caption>` and lowers back to a structured table.
+    assert!(markdown.contains("<caption>Table 1. Coverage by region.</caption>"), "{markdown}");
+    let reopened = import_markdown_bytes("table-roundtrip.md", &markdown).expect("markdown reimport");
+    let reopened_tables = collect_blocks(&reopened, &|block| matches!(block, Block::Table { .. }));
+    assert_eq!(reopened_tables.len(), 1, "{:?}", collect_blocks(&reopened, &|_| true));
+    let Block::Table { caption: reopened_caption, head: reopened_head, body: reopened_body, .. } = reopened_tables[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(reopened_caption.as_deref(), Some("Table 1. Coverage by region."), "{reopened_caption:?}");
+    assert_eq!(reopened_head.len(), 2, "{reopened_head:?}");
+    assert_eq!(reopened_body.len(), 2, "{reopened_body:?}");
 }
 
 /// Endnotes trailing the last section, including inside `<footer>`/`<aside>`,

@@ -70,9 +70,11 @@ pub fn build_minimal_opc_package(
     footnotes_xml: Option<&str>,
     metadata_xml: Option<&str>,
     styles_xml: &str,
+    numbering_overrides: &[super::numbering::NumberingOverride],
 ) -> Vec<u8> {
     let content_types = content_types_xml(include_numbering, image_extensions, footnotes_xml.is_some(), metadata_xml.is_some());
     let root_rels = root_rels_xml(metadata_xml.is_some());
+    let numbering_xml = super::numbering::numbering_xml(numbering_overrides);
     let mut entries = vec![
         ("[Content_Types].xml", content_types.as_bytes()),
         ("_rels/.rels", root_rels.as_bytes()),
@@ -81,7 +83,7 @@ pub fn build_minimal_opc_package(
         ("word/styles.xml", styles_xml.as_bytes()),
     ];
     if include_numbering {
-        entries.insert(3, ("word/numbering.xml", super::numbering::NUMBERING_XML.as_bytes()));
+        entries.insert(3, ("word/numbering.xml", numbering_xml.as_bytes()));
     }
     if let Some(footnotes_xml) = footnotes_xml {
         entries.push(("word/footnotes.xml", footnotes_xml.as_bytes()));

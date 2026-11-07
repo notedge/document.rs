@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use document_formats::export::html::{RenderedDiagram, export_html, export_html_report, export_html_with_diagrams};
 use document_ir::{
-    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, DocumentMetadata, IdAllocator, Inline, NodeId,
-    RelationEndpoint, SemanticStatus,
+    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, DocumentMetadata, IdAllocator, Inline, ListItem, NodeId,
+    RelationEndpoint, SemanticStatus, TableCell, TableRow,
 };
 use oak_core::{Builder, SourceText, parser::session::ParseSession};
 use oak_html::{
@@ -312,5 +312,39 @@ fn html_export_report_keeps_resolved_asset_out_of_loss_list() {
     assert!(export.losses.is_empty(), "{:?}", export.losses.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>());
     assert_eq!(export.html, export_html(&graph).expect("html export"));
 }
+#[test]
+fn html_export_keeps_table_caption_and_ordered_list_numbers() {
+    let mut graph = DocumentGraph::new(DocumentId(70));
+    let heading = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "h".into() }] });
+    graph.push_block(Block::Table {
+        caption: Some("表 1".into()),
+        head: vec![TableRow { cells: vec![TableCell { children: vec![heading], colspan: 1, rowspan: 1 }] }],
+        body: Vec::new(),
+        foot: Vec::new(),
+    });
+    graph.push_block(Block::List {
+        ordered: true,
+        items: vec![
+            ListItem {
+                content: vec![Inline::Text { text: "five".into() }],
+                children: Vec::new(),
+                number: Some(5),
+                ..Default::default()
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "seven".into() }],
+                children: Vec::new(),
+                number: Some(7),
+                ..Default::default()
+            },
+        ],
+    });
+
+    let html = export_html(&graph).expect("html export");
+    assert!(html.contains("<caption>表 1</caption>"), "{html}");
+    assert!(html.contains(r#"<ol start="5">"#), "{html}");
+    assert!(html.contains(r#"<li value="7">"#), "{html}");
+}
+
 mod asset_materialization;
 mod import;

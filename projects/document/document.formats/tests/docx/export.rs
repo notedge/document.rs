@@ -1155,3 +1155,60 @@ fn docx_rejects_lists_deeper_than_numbering_definitions() {
     assert!(graph.validate().is_valid());
     assert!(export_docx_bytes(&graph).is_err());
 }
+
+#[test]
+fn docx_export_keeps_image_alt_as_alternate_text() {
+    let mut graph = graph_with_image(png_header(1, 1), "media/alt.png");
+    let Block::Paragraph { content } = &mut graph.blocks[0].block
+    else {
+        panic!("fixture graph must start with a paragraph")
+    };
+    let Inline::Image { alt, .. } = &mut content[0]
+    else {
+        panic!("fixture paragraph must hold the image")
+    };
+    *alt = vec![Inline::Text { text: "ZZ".into() }];
+
+    let exported = export_docx_bytes(&graph).expect("export image alt");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains(r#"descr="ZZ""#), "the alternate text must reach `wp:docPr`: {xml}");
+}
+
+#[test]
+fn docx_export_keeps_table_caption_list_start_and_reference_target() {
+    let mut graph = DocumentGraph::new(DocumentId(54));
+    let target = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "target".into() }] });
+    let heading = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "h".into() }] });
+    graph.push_block(Block::Table {
+        caption: Some("表 1".into()),
+        head: vec![TableRow { cells: vec![TableCell { children: vec![heading], colspan: 1, rowspan: 1 }] }],
+        body: Vec::new(),
+        foot: Vec::new(),
+    });
+    graph.push_block(Block::List {
+        ordered: true,
+        items: vec![
+            ListItem {
+                content: vec![Inline::Text { text: "five".into() }],
+                children: Vec::new(),
+                number: Some(5),
+                ..Default::default()
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "six".into() }],
+                children: Vec::new(),
+                number: Some(6),
+                ..Default::default()
+            },
+        ],
+    });
+    graph.push_block(Block::Paragraph { content: vec![Inline::Reference { display: "go".into(), target }] });
+
+    let exported = export_docx_bytes(&graph).expect("export structural blocks");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("表 1"), "the caption must stay visible: {xml}");
+    assert!(xml.contains(r#"<w:tblCaption w:val="表 1"/>"#), "the caption must be attached to the table: {xml}");
+    assert!(xml.contains(r#"<w:startOverride w:val="5"/>"#), "the ordered list must start at its authored number: {xml}");
+    assert!(xml.contains(r#"<w:bookmarkStart w:id="1" w:name="node_1"/>"#), "the reference target needs a bookmark: {xml}");
+    assert!(xml.contains(r#"<w:hyperlink w:anchor="node_1">"#), "the reference must hyperlink to its target: {xml}");
+}

@@ -11,7 +11,7 @@ use crate::FormatError;
 
 use super::{
     footnotes::{FootnoteCatalog, collect_footnote_catalog, parse_footnote_reference_token, render_footnotes_xml},
-    numbering::{ORDERED_NUM_ID, UNORDERED_NUM_ID},
+    numbering::{FIRST_DYNAMIC_NUM_ID, NumberingOverride, UNORDERED_NUM_ID},
     page::{DocxPageSetup, twips},
     rels::DocumentRelsRegistry,
 };
@@ -30,6 +30,28 @@ pub struct DocxRenderOutput {
     pub media_parts: Vec<(String, Vec<u8>)>,
     pub image_extensions: Vec<String>,
     pub footnotes_xml: Option<String>,
+    pub numbering_overrides: Vec<NumberingOverride>,
+}
+
+/// Allocates concrete `w:num` entries for ordered runs that restart at an
+/// authored number instead of starting at one.
+#[derive(Default)]
+struct NumberingState {
+    next_num_id: u32,
+    overrides: Vec<NumberingOverride>,
+}
+
+impl NumberingState {
+    fn new() -> Self {
+        Self { next_num_id: FIRST_DYNAMIC_NUM_ID, overrides: Vec::new() }
+    }
+
+    fn restart_at(&mut self, level: u32, start: u32) -> u32 {
+        let num_id = self.next_num_id;
+        self.next_num_id = self.next_num_id.saturating_add(1);
+        self.overrides.push(NumberingOverride { num_id, level, start });
+        num_id
+    }
 }
 
 pub fn render_document_xml(graph: &DocumentGraph) -> Result<DocxRenderOutput, FormatError> {
@@ -41,6 +63,8 @@ pub fn render_document_xml(graph: &DocumentGraph) -> Result<DocxRenderOutput, Fo
     let uses_numbering = graph.blocks.iter().any(|node| matches!(node.block, Block::List { .. }));
     let mut rels = DocumentRelsRegistry::default();
     rels.set_footnotes(collect_footnote_catalog(graph));
+    let bookmarks = referenced_node_ids(graph);
+    let mut numbering = NumberingState::new();
     let nested_blocks = nested_block_ids(graph);
     for node in &graph.blocks {
         if nested_blocks.contains(&node.id) {
@@ -51,7 +75,7 @@ pub fn render_document_xml(graph: &DocumentGraph) -> Result<DocxRenderOutput, Fo
                 continue;
             }
         }
-        write_block(&mut body, &node.block, graph, &mut rels)?;
+        write_block(&mut body, node.id, &node.block, graph, &mut rels, &bookmarks, &mut numbering)?;
     }
     body.push_str("<w:sectPr/>");
 
@@ -77,19 +101,40 @@ pub fn render_document_xml(graph: &DocumentGraph) -> Result<DocxRenderOutput, Fo
         media_parts: rels.media_parts(),
         image_extensions: rels.image_extensions(),
         footnotes_xml,
+        numbering_overrides: numbering.overrides,
     })
 }
 
 fn write_block(
     out: &mut String,
+    id: NodeId,
     block: &Block,
     graph: &DocumentGraph,
     rels: &mut DocumentRelsRegistry,
+    bookmarks: &HashSet<NodeId>,
+    numbering: &mut NumberingState,
 ) -> Result<(), FormatError> {
+    let bookmarked = bookmarks.contains(&id);
+    if bookmarked && !matches!(block, Block::Paragraph { .. }) {
+        // Run-level bookmarks must sit inside a paragraph. A block that is not a
+        // paragraph carries its anchor in a zero-content paragraph right before
+        // it, so `w:hyperlink w:anchor` has something to resolve to.
+        let _ = write!(
+            out,
+            "<w:p><w:bookmarkStart w:id=\"{}\" w:name=\"node_{}\"/><w:bookmarkEnd w:id=\"{}\"/></w:p>",
+            id.0, id.0, id.0
+        );
+    }
     match block {
         Block::Paragraph { content } => {
             out.push_str("<w:p>");
+            if bookmarked {
+                let _ = write!(out, "<w:bookmarkStart w:id=\"{}\" w:name=\"node_{}\"/>", id.0, id.0);
+            }
             write_inlines(out, content, graph, rels)?;
+            if bookmarked {
+                let _ = write!(out, "<w:bookmarkEnd w:id=\"{}\"/>", id.0);
+            }
             out.push_str("</w:p>");
         }
         Block::Section { level, title, children } => {
@@ -101,7 +146,7 @@ fn write_block(
                 let child = graph
                     .block(*child_id)
                     .ok_or_else(|| FormatError::invalid_input(format!("missing section child {child_id:?}")))?;
-                write_block(out, &child.block, graph, rels)?;
+                write_block(out, *child_id, &child.block, graph, rels, bookmarks, numbering)?;
             }
         }
         Block::Code { content, .. } => {
@@ -139,19 +184,34 @@ fn write_block(
                     .ok_or_else(|| FormatError::invalid_input(format!("missing quote child {child_id:?}")))?;
                 if let Block::Paragraph { content } = &child.block {
                     out.push_str("<w:p><w:pPr><w:pStyle w:val=\"Quote\"/></w:pPr>");
+                    if bookmarks.contains(child_id) {
+                        let _ = write!(out, "<w:bookmarkStart w:id=\"{}\" w:name=\"node_{}\"/>", child_id.0, child_id.0);
+                    }
                     write_inlines(out, content, graph, rels)?;
+                    if bookmarks.contains(child_id) {
+                        let _ = write!(out, "<w:bookmarkEnd w:id=\"{}\"/>", child_id.0);
+                    }
                     out.push_str("</w:p>");
                 }
                 else {
-                    write_block(out, &child.block, graph, rels)?;
+                    write_block(out, *child_id, &child.block, graph, rels, bookmarks, numbering)?;
                 }
             }
         }
         Block::List { ordered, items } => {
-            write_list(out, *ordered, items, graph, rels)?;
+            write_list(out, *ordered, items, graph, rels, bookmarks, numbering)?;
         }
-        Block::Table { head, body, foot, .. } => {
-            write_table(out, head, body, foot, graph, rels)?;
+        Block::Table { caption, head, body, foot } => {
+            // The caption paragraph keeps the text visible, and `w:tblCaption`
+            // attaches the same string to the table's properties so the
+            // association survives inside Word instead of reading as stray
+            // prose.
+            if let Some(caption) = caption {
+                out.push_str("<w:p><w:pPr><w:pStyle w:val=\"Caption\"/></w:pPr>");
+                write_run_text(out, caption)?;
+                out.push_str("</w:p>");
+            }
+            write_table(out, caption.as_deref(), head, body, foot, graph, rels, bookmarks, numbering)?;
         }
         Block::Math { formula } => {
             out.push_str("<w:p><m:oMathPara><m:oMath>");
@@ -183,8 +243,10 @@ fn write_list(
     items: &[ListItem],
     graph: &DocumentGraph,
     rels: &mut DocumentRelsRegistry,
+    bookmarks: &HashSet<NodeId>,
+    numbering: &mut NumberingState,
 ) -> Result<(), FormatError> {
-    write_list_at_level(out, ordered, items, graph, rels, 0)
+    write_list_at_level(out, ordered, items, graph, rels, bookmarks, numbering, 0)
 }
 
 fn write_list_at_level(
@@ -193,13 +255,33 @@ fn write_list_at_level(
     items: &[ListItem],
     graph: &DocumentGraph,
     rels: &mut DocumentRelsRegistry,
+    bookmarks: &HashSet<NodeId>,
+    numbering: &mut NumberingState,
     level: u32,
 ) -> Result<(), FormatError> {
     if level > 8 {
         return Err(FormatError::unsupported("docx", "list nesting exceeds the nine numbering levels"));
     }
-    let num_id = if ordered { ORDERED_NUM_ID } else { UNORDERED_NUM_ID };
-    for item in items {
+    // Each ordered list gets its own concrete `w:num` with a `w:startOverride`.
+    // Reusing one numId would let Word continue numbering across separate
+    // lists and silently renumber an item from its authored value.
+    let mut expected = items.first().and_then(|item| item.number).unwrap_or(1);
+    let mut current_ordered = UNORDERED_NUM_ID;
+    if ordered {
+        current_ordered = numbering.restart_at(level, expected);
+    }
+    for (index, item) in items.iter().enumerate() {
+        let num_id = if ordered {
+            let number = item.number.unwrap_or(expected);
+            if index > 0 && number != expected {
+                current_ordered = numbering.restart_at(level, number);
+            }
+            expected = number.saturating_add(1);
+            current_ordered
+        }
+        else {
+            UNORDERED_NUM_ID
+        };
         write!(out, "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"{level}\"/><w:numId w:val=\"{num_id}\"/></w:numPr></w:pPr>")
             .map_err(map_fmt_error)?;
         write_inlines(out, &item.content, graph, rels)?;
@@ -210,14 +292,51 @@ fn write_list_at_level(
                 continue;
             };
             if let Block::List { ordered, items } = &child.block {
-                write_list_at_level(out, *ordered, items, graph, rels, level + 1)?;
+                write_list_at_level(out, *ordered, items, graph, rels, bookmarks, numbering, level + 1)?;
             }
             else {
-                write_block(out, &child.block, graph, rels)?;
+                write_block(out, *child_id, &child.block, graph, rels, bookmarks, numbering)?;
             }
         }
     }
     Ok(())
+}
+
+/// Block ids that an `Inline::Reference` points at and that therefore need a
+/// `node_N` bookmark.
+fn referenced_node_ids(graph: &DocumentGraph) -> HashSet<NodeId> {
+    let mut targets = HashSet::new();
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Section { title, .. } => collect_inline_references(title, &mut targets),
+            Block::Paragraph { content } => collect_inline_references(content, &mut targets),
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_inline_references(&item.content, &mut targets);
+                }
+            }
+            _ => {}
+        }
+    }
+    targets
+}
+
+fn collect_inline_references(inlines: &[Inline], targets: &mut HashSet<NodeId>) {
+    for inline in inlines {
+        match inline {
+            Inline::Reference { target, .. } => {
+                targets.insert(*target);
+            }
+            Inline::Styled { children, .. } | Inline::Attributed { children, .. } | Inline::Link { display: children, .. } => {
+                collect_inline_references(children, targets);
+            }
+            Inline::Image { alt, .. } => collect_inline_references(alt, targets),
+            Inline::Citation { display: Some(display), .. } | Inline::Note { display: Some(display), .. } => {
+                collect_inline_references(display, targets);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn nested_block_ids(graph: &DocumentGraph) -> HashSet<NodeId> {
@@ -318,11 +437,14 @@ fn place_cells(rows: &[TableRow]) -> (Vec<Vec<Option<GridOrigin>>>, usize) {
 
 fn write_table(
     out: &mut String,
+    caption: Option<&str>,
     head: &[TableRow],
     body: &[TableRow],
     foot: &[TableRow],
     graph: &DocumentGraph,
     rels: &mut DocumentRelsRegistry,
+    bookmarks: &HashSet<NodeId>,
+    numbering: &mut NumberingState,
 ) -> Result<(), FormatError> {
     // WordprocessingML has no head/body/foot section element, so the bands are
     // laid out as one continuous row sequence in authored order.
@@ -345,7 +467,11 @@ fn write_table(
     for side in ["top", "left", "bottom", "right", "insideH", "insideV"] {
         let _ = write!(out, "<w:{side} w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
     }
-    out.push_str("</w:tblBorders></w:tblPr><w:tblGrid>");
+    out.push_str("</w:tblBorders>");
+    if let Some(caption) = caption {
+        let _ = write!(out, "<w:tblCaption w:val=\"{}\"/>", escape_xml_attr(caption));
+    }
+    out.push_str("</w:tblPr><w:tblGrid>");
     for width in &widths {
         let _ = write!(out, "<w:gridCol w:w=\"{width}\"/>");
     }
@@ -380,7 +506,7 @@ fn write_table(
                         else {
                             return Err(FormatError::invalid_input(format!("table cell child `{child_id:?}` is missing")));
                         };
-                        write_block(out, &child.block, graph, rels)?;
+                        write_block(out, *child_id, &child.block, graph, rels, bookmarks, numbering)?;
                     }
                 }
                 out.push_str("</w:tc>");
@@ -521,10 +647,12 @@ fn write_inline_with_properties(
             write_math_expression(out, &formula.expression, None)?;
             out.push_str("</m:oMath>");
         }
-        Inline::Reference { display, .. } => {
-            // The referenced target has no DOCX anchor to point at, so the
-            // authored display text stays readable in place.
+        Inline::Reference { display, target } => {
+            // The target block carries a `node_N` bookmark, so the display text
+            // becomes an internal Word hyperlink instead of losing the target.
+            write!(out, "<w:hyperlink w:anchor=\"node_{}\">", target.0).map_err(map_fmt_error)?;
             write_literal_text(out, display, properties, rels.footnotes())?;
+            out.push_str("</w:hyperlink>");
         }
         Inline::Citation { key, display } => {
             // A Word citation field keeps the key in the document while the

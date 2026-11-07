@@ -59,7 +59,7 @@ pub fn write_document_pdf(graph: &mut DocumentGraph, body_set: &Arc<BodyFaceSet>
 /// loss marker, so the conversion report never calls the export clean.
 fn pdf_layout_loss(diagnostic: &ComposeDiagnostic) -> Option<LossMarker> {
     let code = diagnostic.code.as_str();
-    if !matches!(code, "export.pdf.citation_degraded" | "export.pdf.image_title_dropped") {
+    if !matches!(code, "export.pdf.citation_degraded" | "export.pdf.image_title_dropped" | "export.pdf.image_alt_dropped") {
         return None;
     }
     Some(LossMarker { code: code.to_string(), message: diagnostic.message.clone(), status: SemanticStatus::Partial })

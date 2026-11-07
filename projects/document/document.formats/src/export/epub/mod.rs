@@ -22,9 +22,9 @@ mod opf;
 mod package;
 mod xhtml;
 
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
-use document_ir::DocumentGraph;
+use document_ir::{DocumentGraph, NodeId};
 
 use crate::FormatError;
 
@@ -63,9 +63,20 @@ pub fn export_epub_bytes(graph: &DocumentGraph) -> Result<Vec<u8>, FormatError> 
     });
 
     // 4. XHTML chapters.
+    let mut block_chapters: HashMap<NodeId, String> = HashMap::new();
     for (index, plan) in chapters.iter().enumerate() {
-        let xhtml = xhtml::chapter_xhtml(graph, plan)?;
         let href = chapter::chapter_href(index);
+        for block_id in &plan.blocks {
+            block_chapters.insert(*block_id, href.clone());
+            for nested in xhtml::nested_block_ids(graph, *block_id) {
+                block_chapters.insert(nested, href.clone());
+            }
+        }
+    }
+    for (index, plan) in chapters.iter().enumerate() {
+        let href = chapter::chapter_href(index);
+        let links = xhtml::ChapterLinks { current: &href, chapter_of: &block_chapters };
+        let xhtml = xhtml::chapter_xhtml(graph, plan, &links)?;
         entries.push((format!("OEBPS/{href}"), xhtml.as_bytes().to_vec()));
         let id = format!("ch{index:03}");
         opf_items.push(opf::OpfManifestItem {

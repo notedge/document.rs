@@ -13,7 +13,7 @@ use super::chapter::{ChapterPlan, asset_source_map, plan_assets};
 use crate::{FormatError, export::html::FootnoteRefIds};
 
 /// Render a single chapter as a full XHTML document.
-pub fn chapter_xhtml(graph: &DocumentGraph, plan: &ChapterPlan) -> Result<String, FormatError> {
+pub fn chapter_xhtml(graph: &DocumentGraph, plan: &ChapterPlan, links: &ChapterLinks) -> Result<String, FormatError> {
     let mut out = String::new();
     out.push_str(
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -65,7 +65,7 @@ pub fn chapter_xhtml(graph: &DocumentGraph, plan: &ChapterPlan) -> Result<String
                 continue;
             }
         }
-        write_node(&mut out, graph, &node.block, Some(&source_map), &mut footnote_refs)?;
+        write_node(&mut out, graph, *node_id, &node.block, Some(&source_map), &mut footnote_refs, links)?;
     }
     if !footnotes.is_empty() {
         write_footnote_section(&mut out, &footnotes, &footnote_refs);
@@ -124,7 +124,7 @@ fn encode_hex(value: &str) -> String {
     out
 }
 
-fn nested_block_ids(graph: &DocumentGraph, node_id: NodeId) -> Vec<NodeId> {
+pub(super) fn nested_block_ids(graph: &DocumentGraph, node_id: NodeId) -> Vec<NodeId> {
     let mut out = Vec::new();
     let Some(node) = graph.block(node_id)
     else {
@@ -164,14 +164,38 @@ fn nested_block_ids(graph: &DocumentGraph, node_id: NodeId) -> Vec<NodeId> {
     out
 }
 
+/// Maps every block node id to the chapter file that carries its anchor.
+pub struct ChapterLinks<'a> {
+    pub(super) current: &'a str,
+    pub(super) chapter_of: &'a std::collections::HashMap<NodeId, String>,
+}
+
+impl ChapterLinks<'_> {
+    fn href(&self, target: NodeId) -> String {
+        match self.chapter_of.get(&target) {
+            Some(chapter) if chapter == self.current => format!("#node-{}", target.0),
+            Some(chapter) => format!("{}#node-{}", chapter, target.0),
+            None => format!("#node-{}", target.0),
+        }
+    }
+}
+
 fn write_node(
     out: &mut String,
     graph: &DocumentGraph,
+    id: NodeId,
     block: &Block,
     source_map: Option<&std::collections::HashMap<String, String>>,
     footnote_refs: &mut FootnoteRefIds,
+    links: &ChapterLinks,
 ) -> Result<(), FormatError> {
-    write_block(out, graph, block, source_map, footnote_refs)
+    // Every block carries the same `node-N` anchor the HTML exporter uses, so
+    // `Inline::Reference` links resolve inside the chapter instead of pointing
+    // at a missing id. Without this the reference is a dangling link.
+    let _ = write!(out, "<div id=\"node-{}\" data-node-id=\"{}\">", id.0, id.0);
+    write_block(out, graph, block, source_map, footnote_refs, links)?;
+    out.push_str("</div>\n");
+    Ok(())
 }
 
 fn write_block(
@@ -180,24 +204,25 @@ fn write_block(
     block: &Block,
     source_map: Option<&std::collections::HashMap<String, String>>,
     footnote_refs: &mut FootnoteRefIds,
+    links: &ChapterLinks,
 ) -> Result<(), FormatError> {
     match block {
         Block::Section { level, title, children } => {
             let level = (*level).clamp(1, 6);
             write!(out, "<h{}>", level).map_err(format_error)?;
-            write_inlines(out, title, source_map, footnote_refs)?;
+            write_inlines(out, title, source_map, footnote_refs, links)?;
             write!(out, "</h{}>\n", level).map_err(format_error)?;
             for child_id in children {
                 let Some(child) = graph.block(*child_id)
                 else {
                     return Err(FormatError::invalid_input(format!("section child `{child_id:?}` is missing")));
                 };
-                write_node(out, graph, &child.block, source_map, footnote_refs)?;
+                write_node(out, graph, child.id, &child.block, source_map, footnote_refs, links)?;
             }
         }
         Block::Paragraph { content } => {
             out.push_str("<p>");
-            write_inlines(out, content, source_map, footnote_refs)?;
+            write_inlines(out, content, source_map, footnote_refs, links)?;
             out.push_str("</p>\n");
         }
         Block::Quote { children } => {
@@ -207,7 +232,7 @@ fn write_block(
                 else {
                     return Err(FormatError::invalid_input(format!("missing quote child {child_id:?}")));
                 };
-                write_node(out, graph, &child.block, source_map, footnote_refs)?;
+                write_node(out, graph, child.id, &child.block, source_map, footnote_refs, links)?;
             }
             out.push_str("</blockquote>\n");
         }
@@ -253,8 +278,10 @@ fn write_block(
             escape_text(out, &formula.source);
             out.push_str("</div>\n");
         }
-        Block::List { ordered, items } => write_list(out, graph, *ordered, items, source_map, footnote_refs)?,
-        Block::Table { head, body, foot, .. } => write_table(out, graph, head, body, foot, source_map, footnote_refs)?,
+        Block::List { ordered, items } => write_list(out, graph, *ordered, items, source_map, footnote_refs, links)?,
+        Block::Table { caption, head, body, foot } => {
+            write_table(out, graph, caption.as_deref(), head, body, foot, source_map, footnote_refs, links)?
+        }
         Block::Opaque { kind, payload_hint, .. } if kind == "thematic_break" => {
             out.push_str("<hr/>");
             if !payload_hint.is_empty() {
@@ -282,18 +309,38 @@ fn write_list(
     items: &[ListItem],
     source_map: Option<&std::collections::HashMap<String, String>>,
     footnote_refs: &mut FootnoteRefIds,
+    links: &ChapterLinks,
 ) -> Result<(), FormatError> {
-    out.push_str(if ordered { "<ol>\n" } else { "<ul>\n" });
-    for item in items {
-        out.push_str("<li>");
-        write_inlines(out, &item.content, source_map, footnote_refs)?;
+    let start = items.first().and_then(|item| item.number).unwrap_or(1);
+    if ordered {
+        if start == 1 {
+            out.push_str("<ol>\n");
+        }
+        else {
+            let _ = write!(out, "<ol start=\"{start}\">\n");
+        }
+    }
+    else {
+        out.push_str("<ul>\n");
+    }
+    let mut expected = start;
+    for (index, item) in items.iter().enumerate() {
+        let number = item.number.unwrap_or(expected);
+        if ordered && index > 0 && number != expected {
+            let _ = write!(out, "<li value=\"{number}\">");
+        }
+        else {
+            out.push_str("<li>");
+        }
+        expected = number.saturating_add(1);
+        write_inlines(out, &item.content, source_map, footnote_refs, links)?;
         out.push('\n');
         for child_id in &item.children {
             let Some(child) = graph.block(*child_id)
             else {
                 return Err(FormatError::invalid_input(format!("list item child `{child_id:?}` is missing")));
             };
-            write_node(out, graph, &child.block, source_map, footnote_refs)?;
+            write_node(out, graph, child.id, &child.block, source_map, footnote_refs, links)?;
         }
         out.push_str("</li>\n");
     }
@@ -304,13 +351,20 @@ fn write_list(
 fn write_table(
     out: &mut String,
     graph: &DocumentGraph,
+    caption: Option<&str>,
     head: &[TableRow],
     body: &[TableRow],
     foot: &[TableRow],
     source_map: Option<&std::collections::HashMap<String, String>>,
     footnote_refs: &mut FootnoteRefIds,
+    links: &ChapterLinks,
 ) -> Result<(), FormatError> {
     out.push_str("<table>\n");
+    if let Some(caption) = caption {
+        out.push_str("  <caption>");
+        escape_text(out, caption);
+        out.push_str("</caption>\n");
+    }
     for (band, tag) in [(head, "th"), (body, "td"), (foot, "td")] {
         for row in band {
             out.push_str("  <tr>\n");
@@ -333,7 +387,7 @@ fn write_table(
                     else {
                         return Err(FormatError::invalid_input(format!("table cell child `{child_id:?}` is missing")));
                     };
-                    write_node(out, graph, &child.block, source_map, footnote_refs)?;
+                    write_node(out, graph, child.id, &child.block, source_map, footnote_refs, links)?;
                 }
                 out.push_str("</");
                 out.push_str(tag);
@@ -351,6 +405,7 @@ fn write_inlines(
     inlines: &[Inline],
     source_map: Option<&std::collections::HashMap<String, String>>,
     footnote_refs: &mut FootnoteRefIds,
+    links: &ChapterLinks,
 ) -> Result<(), FormatError> {
     for inline in inlines {
         match inline {
@@ -372,7 +427,10 @@ fn write_inlines(
                 out.push_str("</span>");
             }
             Inline::Reference { display, target } => {
-                write!(out, "<a href=\"#node-{}\">", target.0).map_err(format_error)?;
+                let href = links.href(*target);
+                out.push_str("<a href=\"");
+                escape_attribute(out, &href);
+                out.push_str("\">");
                 escape_text(out, display);
                 out.push_str("</a>");
             }
@@ -382,7 +440,7 @@ fn write_inlines(
                         return Err(FormatError::unsupported("epub", format!("invalid color style `{style}`")));
                     }
                     write!(out, "<span style=\"color:#{color}\">").map_err(format_error)?;
-                    write_inlines(out, children, source_map, footnote_refs)?;
+                    write_inlines(out, children, source_map, footnote_refs, links)?;
                     out.push_str("</span>");
                     continue;
                 }
@@ -398,7 +456,7 @@ fn write_inlines(
                     }
                 };
                 write!(out, "<{}>", tag).map_err(format_error)?;
-                write_inlines(out, children, source_map, footnote_refs)?;
+                write_inlines(out, children, source_map, footnote_refs, links)?;
                 write!(out, "</{}>", tag).map_err(format_error)?;
             }
             Inline::Link { target, display, title } => {
@@ -414,7 +472,7 @@ fn write_inlines(
                 out.push('"');
                 write_optional_title(out, title.as_deref());
                 out.push('>');
-                write_inlines(out, display, source_map, footnote_refs)?;
+                write_inlines(out, display, source_map, footnote_refs, links)?;
                 out.push_str("</a>");
             }
             Inline::Image { source, alt, title, asset: _ } => {
@@ -435,7 +493,7 @@ fn write_inlines(
                 out.push_str("<span");
                 write_attributes(out, attributes)?;
                 out.push('>');
-                write_inlines(out, children, source_map, footnote_refs)?;
+                write_inlines(out, children, source_map, footnote_refs, links)?;
                 out.push_str("</span>");
             }
             Inline::Note { label, display } => {
@@ -447,7 +505,7 @@ fn write_inlines(
                 escape_attribute(out, label);
                 out.push_str("\">");
                 match display {
-                    Some(display) => write_inlines(out, display, source_map, footnote_refs)?,
+                    Some(display) => write_inlines(out, display, source_map, footnote_refs, links)?,
                     None => escape_text(out, label),
                 }
                 out.push_str("</a></sup>");

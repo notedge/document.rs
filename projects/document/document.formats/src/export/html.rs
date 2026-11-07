@@ -362,7 +362,9 @@ fn write_block(
             out.push_str("</div>");
         }
         Block::List { ordered, items } => write_list(out, graph, *ordered, items, diagrams, footnote_refs)?,
-        Block::Table { head, body, foot, .. } => write_table(out, graph, head, body, foot, diagrams, footnote_refs)?,
+        Block::Table { caption, head, body, foot } => {
+            write_table(out, graph, caption.as_deref(), head, body, foot, diagrams, footnote_refs)?
+        }
         Block::Opaque { kind, payload_hint, .. } if kind == "thematic_break" => {
             out.push_str("<hr>");
             if !payload_hint.is_empty() {
@@ -400,18 +402,36 @@ fn write_list(
     diagrams: &HashMap<NodeId, RenderedDiagram>,
     footnote_refs: &mut FootnoteRefIds,
 ) -> Result<(), FormatError> {
-    out.push_str(if ordered { "<ol>" } else { "<ul>" });
-    for item in items {
+    let start = items.first().and_then(|item| item.number).unwrap_or(1);
+    if ordered {
+        if start == 1 {
+            out.push_str("<ol>");
+        }
+        else {
+            let _ = write!(out, "<ol start=\"{start}\">");
+        }
+    }
+    else {
+        out.push_str("<ul>");
+    }
+    let mut expected = start;
+    for (index, item) in items.iter().enumerate() {
+        let number = item.number.unwrap_or(expected);
+        out.push_str("<li");
+        if ordered && index > 0 && number != expected {
+            let _ = write!(out, " value=\"{number}\"");
+        }
         if item.is_task {
-            out.push_str(r#"<li class="task-list-item"><input type="checkbox" disabled"#);
+            out.push_str(r#" class="task-list-item"><input type="checkbox" disabled"#);
             if item.is_checked.unwrap_or(false) {
                 out.push_str(" checked");
             }
-            out.push_str(">");
+            out.push('>');
         }
         else {
-            out.push_str("<li>");
+            out.push('>');
         }
+        expected = number.saturating_add(1);
         write_inlines(out, &item.content, footnote_refs)?;
         for child_id in &item.children {
             let child = graph
@@ -428,6 +448,7 @@ fn write_list(
 pub(crate) fn write_table(
     out: &mut String,
     graph: &DocumentGraph,
+    caption: Option<&str>,
     head: &[TableRow],
     body: &[TableRow],
     foot: &[TableRow],
@@ -435,6 +456,11 @@ pub(crate) fn write_table(
     footnote_refs: &mut FootnoteRefIds,
 ) -> Result<(), FormatError> {
     out.push_str("<table>");
+    if let Some(caption) = caption {
+        out.push_str("<caption>");
+        escape_text(out, caption);
+        out.push_str("</caption>");
+    }
     if !head.is_empty() {
         out.push_str("<thead>");
         write_table_rows(out, graph, head, "th", diagrams, footnote_refs)?;

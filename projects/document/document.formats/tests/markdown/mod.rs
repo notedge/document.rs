@@ -1312,5 +1312,26 @@ fn markdown_images_with_supplied_bytes_resolve_assets() {
     assert_eq!(asset.media_type.as_deref(), Some("image/png"));
 }
 
+#[test]
+fn markdown_export_keeps_table_caption_through_the_html_fallback() {
+    let mut graph = DocumentGraph::new(DocumentId(72));
+    let heading = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "h".into() }] });
+    graph.push_block(Block::Table {
+        caption: Some("表 1".into()),
+        head: vec![TableRow { cells: vec![TableCell { children: vec![heading], colspan: 1, rowspan: 1 }] }],
+        body: Vec::new(),
+        foot: Vec::new(),
+    });
+
+    let markdown = export_markdown(&graph).expect("export table caption");
+    assert!(markdown.contains("<caption>表 1</caption>"), "a GFM pipe table has no caption slot: {markdown}");
+    let reopened = import_markdown_bytes("caption-roundtrip.md", &markdown).expect("reopen table caption");
+    let Block::Table { caption, .. } = top_level_table(&reopened)
+    else {
+        panic!("top-level table expected after round trip: {:#?}", reopened.blocks)
+    };
+    assert_eq!(caption.as_deref(), Some("表 1"), "the caption must round trip through the HTML fallback");
+}
+
 mod export_project;
 mod roundtrip;

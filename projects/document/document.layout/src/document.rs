@@ -301,6 +301,23 @@ fn citation_degraded_diagnostic(key: &str) -> Diagnostic {
     }
 }
 
+/// The loss reported when image alternative text reaches a PDF page.
+///
+/// The PDF backend emits untagged pages: there is no `/StructTreeRoot` to hold
+/// an `/Alt` entry and no marked-content sequence to carry `/ActualText`. An
+/// image box alone therefore has no channel for the authored description, so
+/// the alt text is reported as dropped instead of disappearing silently.
+fn image_alt_dropped_diagnostic(source: &str, alt: &str) -> Diagnostic {
+    Diagnostic {
+        code: "export.pdf.image_alt_dropped".to_string(),
+        severity: Severity::Warning,
+        message: format!(
+            "image `{source}` alternate text `{alt}` has no tagged-PDF structure or marked-content slot, so the page keeps only the image box"
+        ),
+        span: Some(SourceSpan { start: 0, end: alt.len() as u32 }),
+    }
+}
+
 /// The loss reported when an image title reaches a PDF page.
 ///
 /// A page image slot has no annotation or alternate-text channel, so the title
@@ -833,6 +850,9 @@ impl<'a> PageBuilder<'a> {
                         .unwrap_or_else(|| source.clone());
                     match image_mode {
                         ImageMode::Placeholder => {
+                            if !alt_text.trim().is_empty() {
+                                self.diagnostics.push(image_alt_dropped_diagnostic(&source, &alt_text));
+                            }
                             flow.pending.flush(&mut flow.atoms);
                             self.emit_inline_lines(std::mem::take(&mut flow.atoms), size, indent);
                             self.emit_image_placeholder(&alt_text, &source, aspect, indent);

@@ -313,7 +313,12 @@ fn pdf_convert_reports_dropped_citation_key_and_image_title() {
     let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
     assert_eq!(
         codes,
-        ["export.pdf.image_unresolved", "export.pdf.citation_degraded", "export.pdf.image_title_dropped"],
+        [
+            "export.pdf.image_unresolved",
+            "export.pdf.citation_degraded",
+            "export.pdf.image_title_dropped",
+            "export.pdf.image_alt_dropped"
+        ],
         "{:?}",
         graph.coverage.loss
     );
@@ -322,6 +327,25 @@ fn pdf_convert_reports_dropped_citation_key_and_image_title() {
         "a dropped key or title is partial, not unsupported: {:?}",
         graph.coverage.loss
     );
+}
+
+#[test]
+fn pdf_export_names_image_alt_when_the_page_cannot_carry_it() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(8));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Image {
+            source: "media/logo.png".into(),
+            alt: vec![Inline::Text { text: "ZZ".into() }],
+            title: None,
+            asset: None,
+        }],
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(codes.contains(&"export.pdf.image_alt_dropped"), "the report must name alt itself: {codes:?}");
+    assert!(!String::from_utf8_lossy(&pdf).contains("ZZ"), "if the page ever carries alt, drop the loss code");
 }
 
 #[test]
