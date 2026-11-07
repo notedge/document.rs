@@ -718,6 +718,36 @@ fn pdf_export_keeps_external_links_as_uri_actions() {
 }
 
 #[test]
+fn pdf_export_names_the_code_language_it_cannot_carry() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(29));
+    graph.push_block(Block::Code { language: Some("zzlang".into()), content: "ZZ_CODE_ZZ".into() });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let reopened = convert_bytes("pdf", "markdown", "code.pdf", pdf, None).expect("reopen PDF");
+    assert!(reopened.markdown.contains("ZZ_CODE_ZZ"), "the code text must stay on the page: {}", reopened.markdown);
+    let loss = graph
+        .coverage
+        .loss
+        .iter()
+        .find(|loss| loss.code == "export.pdf.code_language_dropped")
+        .unwrap_or_else(|| panic!("missing code language loss: {:?}", graph.coverage.loss));
+    assert_eq!(loss.status, SemanticStatus::Partial);
+    assert!(loss.message.contains("zzlang"), "the message must name the language: {}", loss.message);
+}
+
+#[test]
+fn pdf_export_of_a_language_less_code_block_reports_no_language_loss() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(30));
+    graph.push_block(Block::Code { language: None, content: "ZZ_CODE_ZZ".into() });
+
+    write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(!codes.contains(&"export.pdf.code_language_dropped"), "{codes:?}");
+}
+
+#[test]
 fn pdf_export_keeps_attributed_text_and_names_the_dropped_attributes() {
     let faces = pdf_body_faces();
     let mut graph = DocumentGraph::new(DocumentId(25));

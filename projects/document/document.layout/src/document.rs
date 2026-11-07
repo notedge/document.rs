@@ -320,6 +320,21 @@ fn citation_degraded_diagnostic(key: &str) -> Diagnostic {
     }
 }
 
+/// The loss reported when a code block language reaches a PDF page.
+///
+/// The page keeps the fence text but has no per-block metadata slot, so the
+/// report names the language that could not travel.
+fn code_language_dropped_diagnostic(language: &str) -> Diagnostic {
+    Diagnostic {
+        code: "export.pdf.code_language_dropped".to_string(),
+        severity: Severity::Warning,
+        message: format!(
+            "the PDF target has no slot for the code block language `{language}`, so the fence keeps its text but loses the language"
+        ),
+        span: None,
+    }
+}
+
 /// The loss reported when authored inline attributes reach a PDF page.
 ///
 /// The page keeps the characters inside an attributed run but has no slot for
@@ -2048,6 +2063,12 @@ impl<'a> PageBuilder<'a> {
                     self.emit_quote(graph, children, indent);
                 }
                 Block::Code { content, language } => {
+                    // A PDF page has no per-block metadata slot, so the code
+                    // language cannot travel with the fence text. Report it
+                    // instead of exporting clean.
+                    if let Some(language) = language.as_deref().map(str::trim).filter(|language| !language.is_empty()) {
+                        self.diagnostics.push(code_language_dropped_diagnostic(language));
+                    }
                     // A TikZ fence whose scene the host registered is a
                     // diagram, not preformatted code. A failed or missing
                     // lowering keeps the authored fence text visible.

@@ -127,6 +127,33 @@ fn docx_export_round_trips_paragraphs_and_headings() {
 }
 
 #[test]
+fn docx_export_keeps_a_code_language_and_reads_it_back() {
+    let mut graph = DocumentGraph::new(DocumentId(72));
+    graph.push_block(Block::Code { language: Some("zzlang".into()), content: "let x = 1;".into() });
+
+    let exported = export_docx_bytes(&graph).expect("export code");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains(r#"w:pStyle w:val="Code:zzlang""#), "the language travels in the paragraph style: {xml}");
+
+    let reopened = import_docx_bytes("code-language.docx", &exported).expect("reopen DOCX code");
+    let language = reopened.blocks.iter().find_map(|node| match &node.block {
+        Block::Code { language, .. } => Some(language.clone()),
+        _ => None,
+    });
+    assert_eq!(language, Some(Some("zzlang".into())), "the code language must reopen: {:?}", reopened.blocks);
+}
+
+#[test]
+fn docx_export_of_a_code_block_without_a_language_writes_no_code_style() {
+    let mut graph = DocumentGraph::new(DocumentId(73));
+    graph.push_block(Block::Code { language: None, content: "plain body".into() });
+
+    let exported = export_docx_bytes(&graph).expect("export code");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(!xml.contains("Code:"), "an absent language needs no style id: {xml}");
+}
+
+#[test]
 fn docx_export_keeps_authored_inline_id_and_class_attributes() {
     let mut graph = DocumentGraph::new(DocumentId(70));
     graph.push_block(Block::Paragraph {

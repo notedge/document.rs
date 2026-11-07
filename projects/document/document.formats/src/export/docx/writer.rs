@@ -149,11 +149,18 @@ fn write_block(
                 write_block(out, *child_id, &child.block, graph, rels, bookmarks, numbering)?;
             }
         }
-        Block::Code { content, .. } => {
+        Block::Code { language, content } => {
             // Code has no paragraph structure beyond its text, but the package
             // already declares `VerbatimChar`; referencing it is what makes the
-            // monospace face actually apply instead of sitting unused.
+            // monospace face actually apply instead of sitting unused. The
+            // language has no WordprocessingML property either, so it travels
+            // in the paragraph style and the importer reads it back.
             out.push_str("<w:p>");
+            if let Some(language) = language.as_deref().map(str::trim).filter(|language| !language.is_empty()) {
+                out.push_str("<w:pPr><w:pStyle w:val=\"Code:");
+                write_xml_text(out, language)?;
+                out.push_str("\"/></w:pPr>");
+            }
             write_run_with_properties(out, content, "<w:rStyle w:val=\"VerbatimChar\"/>")?;
             out.push_str("</w:p>");
         }

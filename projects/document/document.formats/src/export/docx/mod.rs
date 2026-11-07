@@ -59,6 +59,9 @@ fn diagram_style_ids(graph: &DocumentGraph) -> Vec<String> {
         let id = match &node.block {
             Block::Diagram { language, .. } => Some(format!("Diagram:{language}")),
             Block::Chart { language, .. } => Some(format!("Chart:{language}")),
+            Block::Code { language: Some(language), .. } if !language.trim().is_empty() => {
+                Some(format!("Code:{}", language.trim()))
+            }
             _ => None,
         };
         if let Some(id) = id {

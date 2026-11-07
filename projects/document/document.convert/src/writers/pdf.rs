@@ -66,6 +66,7 @@ fn pdf_layout_loss(diagnostic: &ComposeDiagnostic) -> Option<LossMarker> {
             | "export.pdf.image_alt_dropped"
             | "export.pdf.reference_target_dropped"
             | "export.pdf.inline_attributes_dropped"
+            | "export.pdf.code_language_dropped"
             | "export.pdf.table_cell_flattened"
             | "export.pdf.raw_html_flattened"
     ) {
