@@ -34,8 +34,9 @@ use crate::FormatError;
 /// known degradation point, may be pushed. Render and layout diagnostics stay
 /// with the logger and never arrive through this path.
 ///
-/// Declared so far: creators after the first, tags, typed properties, and the
-/// table foot band flattening.
+/// Declared so far: creators after the first, tags, typed properties, the
+/// table foot band flattening, and image sources that no package member
+/// resolves.
 pub struct EpubExport {
     /// The finished OCF package.
     pub bytes: Vec<u8>,
@@ -179,7 +180,65 @@ fn declared_losses(graph: &DocumentGraph) -> Vec<LossMarker> {
         });
     }
 
+    for source in unresolved_image_sources(graph) {
+        losses.push(LossMarker {
+            code: "export.epub.image_asset_unresolved".into(),
+            message: format!(
+                "image `{source}` has no captured bytes, so `OEBPS/content.opf` carries no asset for it and the chapter keeps a `src` that no package member resolves"
+            ),
+            status: SemanticStatus::Unresolved,
+        });
+    }
+
     losses
+}
+
+/// Image sources whose bound asset carries no bytes, in document order.
+///
+/// `plan_assets` skips every asset without bytes, so an occurrence of such an
+/// image keeps its source path in the chapter XHTML even though no package
+/// member answers it. Reporting each occurrence is what stops the package from
+/// reading as intact.
+fn unresolved_image_sources(graph: &DocumentGraph) -> Vec<String> {
+    let mut sources = Vec::new();
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Section { title, .. } => collect_unresolved_images(graph, title, &mut sources),
+            Block::Paragraph { content } => collect_unresolved_images(graph, content, &mut sources),
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_unresolved_images(graph, &item.content, &mut sources);
+                }
+            }
+            _ => {}
+        }
+    }
+    sources
+}
+
+fn collect_unresolved_images(graph: &DocumentGraph, inlines: &[document_ir::Inline], sources: &mut Vec<String>) {
+    for inline in inlines {
+        match inline {
+            document_ir::Inline::Image { source, alt, asset, .. } => {
+                let resolved = asset
+                    .and_then(|id| graph.assets.iter().find(|asset| asset.id == id))
+                    .and_then(|asset| asset.bytes.as_ref())
+                    .is_some();
+                if !resolved {
+                    sources.push(source.clone());
+                }
+                collect_unresolved_images(graph, alt, sources);
+            }
+            document_ir::Inline::Link { display, .. } => collect_unresolved_images(graph, display, sources),
+            document_ir::Inline::Styled { children, .. } | document_ir::Inline::Attributed { children, .. } => {
+                collect_unresolved_images(graph, children, sources);
+            }
+            document_ir::Inline::Note { display: Some(display), .. } => {
+                collect_unresolved_images(graph, display, sources);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Export a document graph to an EPUB file on disk.

@@ -6,8 +6,8 @@ use document_formats::{
     import::epub::import_epub_bytes,
 };
 use document_ir::{
-    Block, DocumentGraph, DocumentId, DocumentMetadata, Inline, ListItem, MetadataEntry, MetadataValue, SemanticStatus,
-    SourceKind, TableCell, TableRow,
+    Asset, AssetId, AssetKind, Block, DocumentGraph, DocumentId, DocumentMetadata, Inline, ListItem, MetadataEntry,
+    MetadataValue, SemanticStatus, SourceKind, TableCell, TableRow,
 };
 
 fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
@@ -1120,6 +1120,56 @@ fn epub_export_reports_only_declared_losses() {
     assert!(!export.bytes.is_empty());
     let codes: Vec<&str> = export.losses.iter().map(|loss| loss.code.as_str()).collect();
     assert!(codes.is_empty(), "a plain document declares no EPUB loss, but the channel reported {codes:?}");
+}
+
+#[test]
+fn markdown_image_without_bytes_is_reported_and_absent_from_the_package() {
+    use document_formats::import::markdown::import_markdown_bytes;
+
+    let graph = import_markdown_bytes("image-loss.md", "A ![alt](pic.png)\n").expect("markdown import");
+    let export = export_epub_report(&graph).expect("epub export");
+    let codes: Vec<&str> = export.losses.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(codes.contains(&"export.epub.image_asset_unresolved"), "{codes:?}");
+    assert!(
+        export
+            .losses
+            .iter()
+            .all(|loss| loss.code != "export.epub.image_asset_unresolved" || loss.status == SemanticStatus::Unresolved)
+    );
+
+    let package = String::from_utf8_lossy(&export.bytes);
+    assert!(package.contains(r#"src="pic.png""#), "the chapter keeps the unresolved source: {package}");
+    assert!(!package.contains("OEBPS/assets/"), "the package must not pretend the missing bytes exist: {package}");
+}
+
+#[test]
+fn packaged_image_bytes_are_exported_without_an_image_loss() {
+    let mut graph = DocumentGraph::new(DocumentId(11));
+    let asset = graph.push_asset(Asset {
+        id: AssetId(1),
+        kind: AssetKind::Image,
+        content_identity: None,
+        source: Some("images/pic.png".into()),
+        media_type: Some("image/png".into()),
+        status: SemanticStatus::Resolved,
+        bytes: Some(b"\x89PNG\r\n".to_vec()),
+    });
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Image {
+            source: "images/pic.png".into(),
+            alt: vec![Inline::Text { text: "alt".into() }],
+            title: None,
+            asset: Some(asset),
+        }],
+    });
+
+    let export = export_epub_report(&graph).expect("epub export");
+    let codes: Vec<&str> = export.losses.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(codes.is_empty(), "a packaged image must not declare an image loss: {codes:?}");
+
+    let package = String::from_utf8_lossy(&export.bytes);
+    assert!(package.contains("OEBPS/assets/pic.png"), "the resolved bytes must be a package member: {package}");
+    assert!(package.contains(r#"src="assets/pic.png""#), "the chapter must point at the packaged asset: {package}");
 }
 
 #[test]
