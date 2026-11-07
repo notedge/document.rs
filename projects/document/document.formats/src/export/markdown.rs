@@ -620,11 +620,22 @@ fn write_html_attribute_value(out: &mut String, value: &str) {
 }
 
 fn write_markdown_text(out: &mut String, text: &str) {
-    for character in text.chars() {
-        if matches!(character, '\\' | '`' | '*' | '_' | '{' | '}' | '[' | ']' | '<' | '>' | '!' | '|' | '#' | '+' | '-') {
+    let mut characters = text.chars().peekable();
+    let mut previous = None;
+    while let Some(character) = characters.next() {
+        let next = characters.peek().copied();
+        // CommonMark already treats an underscore between two word characters
+        // as literal text, so escaping it would change authored bytes for no
+        // reason. Every other underscore stays escaped.
+        let intraword_underscore =
+            character == '_' && previous.is_some_and(char::is_alphanumeric) && next.is_some_and(char::is_alphanumeric);
+        if matches!(character, '\\' | '`' | '*' | '{' | '}' | '[' | ']' | '<' | '>' | '!' | '|' | '#' | '+' | '-')
+            || (character == '_' && !intraword_underscore)
+        {
             out.push('\\');
         }
         out.push(character);
+        previous = Some(character);
     }
 }
 

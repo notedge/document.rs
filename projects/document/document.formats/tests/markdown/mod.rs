@@ -45,6 +45,54 @@ fn cell_text(graph: &DocumentGraph, cell: &TableCell) -> String {
 }
 
 #[test]
+fn markdown_intraword_underscores_stay_literal_in_every_position() {
+    let source = "# snake_case_name\n\nsnake_case_name\n\n> snake_case_name\n\n- snake_case_name\n\n\
+                  | head |\n| --- |\n| snake_case_name |\n\n**snake_case_name**\n";
+    let graph = import_markdown_bytes("intraword.md", source).expect("import intraword underscores");
+    assert_eq!(count_intraword(&graph), 6, "all six positions must keep the word: {:#?}", graph.blocks);
+
+    let markdown = export_markdown(&graph).expect("export markdown");
+    assert!(!markdown.contains("snake*case*name"), "the export must not rewrite the word as emphasis: {markdown}");
+    assert!(!markdown.contains("\\_"), "an intraword underscore needs no escape: {markdown}");
+    assert_eq!(markdown.matches("snake_case_name").count(), 6, "{markdown}");
+
+    let reopened = import_markdown_bytes("intraword-roundtrip.md", &markdown).expect("reopen markdown");
+    assert_eq!(count_intraword(&reopened), 6, "the round trip must keep the word: {markdown}");
+}
+
+fn count_intraword(graph: &DocumentGraph) -> usize {
+    fn push_inlines(inlines: &[Inline], out: &mut String) {
+        for inline in inlines {
+            match inline {
+                Inline::Text { text } | Inline::InlineCode { text } => out.push_str(text),
+                Inline::Styled { children, .. } | Inline::Attributed { children, .. } => push_inlines(children, out),
+                Inline::Link { display, .. } => push_inlines(display, out),
+                Inline::Image { alt, .. } => push_inlines(alt, out),
+                Inline::Note { display: Some(display), .. } | Inline::Citation { display: Some(display), .. } => {
+                    push_inlines(display, out);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut text = String::new();
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Section { title, .. } => push_inlines(title, &mut text),
+            Block::Paragraph { content } => push_inlines(content, &mut text),
+            Block::List { items, .. } => {
+                for item in items {
+                    push_inlines(&item.content, &mut text);
+                }
+            }
+            _ => {}
+        }
+    }
+    text.matches("snake_case_name").count()
+}
+
+#[test]
 fn markdown_stray_angle_bracket_stays_text_and_is_escaped_on_export() {
     let graph = import_markdown_bytes("angle.md", "Para with 1 < 2.\n").expect("import markdown");
     let Block::Paragraph { content } = &graph.blocks[0].block

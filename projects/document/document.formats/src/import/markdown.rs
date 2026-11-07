@@ -700,7 +700,11 @@ fn collect_inlines(node: RedNode<MarkdownLanguage>, source: &SourceText, context
             }
             RedTree::Leaf(leaf) => {
                 let text = leaf.text(source);
-                if !text.is_empty() && !is_markdown_marker(text.as_ref()) {
+                // A `Text` leaf carries authored bytes, so a lone `_` is a
+                // literal intraword underscore rather than a delimiter. Only
+                // marker token kinds are dropped by content.
+                let literal = matches!(leaf.kind(), MarkdownTokenType::Text);
+                if !text.is_empty() && (literal || !is_markdown_marker(text.as_ref())) {
                     let inline = match leaf.kind() {
                         MarkdownTokenType::HtmlComment => None,
                         MarkdownTokenType::HtmlTag if is_authored_html_tag(text.as_ref()) => {
