@@ -85,7 +85,8 @@ fn bind_inline_image_assets(
 ) {
     for inline in inlines {
         match inline {
-            Inline::Image { source, asset, .. } => {
+            Inline::Image { source, asset, alt, .. } => {
+                bind_inline_image_assets(node, alt, references);
                 if source.is_empty() {
                     continue;
                 }
@@ -94,6 +95,10 @@ fn bind_inline_image_assets(
                 references.push((node, source.clone()));
             }
             Inline::Styled { children, .. } | Inline::Attributed { children, .. } => {
+                bind_inline_image_assets(node, children, references)
+            }
+            Inline::Link { display: children, .. } => bind_inline_image_assets(node, children, references),
+            Inline::Note { display: Some(children), .. } | Inline::Citation { display: Some(children), .. } => {
                 bind_inline_image_assets(node, children, references)
             }
             _ => {}

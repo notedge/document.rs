@@ -652,16 +652,18 @@ fn classify_footnote_body(body: &str) -> Result<Vec<IrInline>, NoteDefinitionFai
                 _ => return Err(NoteDefinitionFailure::BlockLevel),
             }
         }
-        let content = content.ok_or(NoteDefinitionFailure::Empty)?;
+        let mut content = content.ok_or(NoteDefinitionFailure::Empty)?;
         if !parsed.coverage.loss.is_empty() {
             return Err(NoteDefinitionFailure::Unrepresentable);
         }
         if has_nested_note(&content) {
             return Err(NoteDefinitionFailure::Nested);
         }
-        if has_image(&content) {
-            // Image assets belong to the fragment graph, so rebuilding here
-            // would leave a dangling asset reference.
+        // The body was bound to the fragment graph while it was reparsed, so
+        // its image asset ids cannot be resolved against the document graph.
+        // The source URL is the only carry Pandoc needs, and a body image with
+        // an empty source has no recoverable location at all.
+        if !unbind_fragment_assets(&mut content) {
             return Err(NoteDefinitionFailure::Unrepresentable);
         }
         Ok(content)
@@ -685,14 +687,40 @@ fn has_nested_note(inlines: &[IrInline]) -> bool {
     })
 }
 
+/// Detach a reparsed body from the fragment graph's asset ids.
+///
+/// The fragment importer binds every image to its own asset list. Those ids
+/// mean nothing in the document graph, so the exporter keeps the source URL
+/// and drops the binding. A body image without a source cannot be placed
+/// anywhere, so the caller must keep the definition opaque instead.
 #[cfg(feature = "markdown")]
-fn has_image(inlines: &[IrInline]) -> bool {
-    inlines.iter().any(|inline| match inline {
-        IrInline::Image { .. } => true,
-        IrInline::Styled { children, .. }
-        | IrInline::Attributed { children, .. }
-        | IrInline::Link { display: children, .. } => has_image(children),
-        IrInline::Note { display: Some(display), .. } | IrInline::Citation { display: Some(display), .. } => has_image(display),
-        _ => false,
-    })
+fn unbind_fragment_assets(inlines: &mut [IrInline]) -> bool {
+    let mut resolvable = true;
+    for inline in inlines {
+        match inline {
+            IrInline::Image { source, asset, alt, .. } => {
+                if source.is_empty() {
+                    resolvable = false;
+                }
+                *asset = None;
+                if !unbind_fragment_assets(alt) {
+                    resolvable = false;
+                }
+            }
+            IrInline::Styled { children, .. }
+            | IrInline::Attributed { children, .. }
+            | IrInline::Link { display: children, .. } => {
+                if !unbind_fragment_assets(children) {
+                    resolvable = false;
+                }
+            }
+            IrInline::Note { display: Some(display), .. } | IrInline::Citation { display: Some(display), .. } => {
+                if !unbind_fragment_assets(display) {
+                    resolvable = false;
+                }
+            }
+            _ => {}
+        }
+    }
+    resolvable
 }

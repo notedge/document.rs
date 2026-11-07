@@ -525,6 +525,76 @@ fn non_consecutive_ordered_list_numbers_are_reported() {
 }
 
 #[test]
+fn images_nested_in_links_and_notes_register_assets() {
+    let text = serde_json::json!({
+        "pandoc-api-version": [1, 23, 1],
+        "meta": {},
+        "blocks": [{"t": "Para", "c": [
+            {"t": "Link", "c": [
+                ["", [], []],
+                [{"t": "Image", "c": [["", [], []], [{"t": "Str", "c": "alt"}], ["linked.png", ""]]}],
+                ["https://example.com", ""]
+            ]},
+            {"t": "Note", "c": [{"t": "Para", "c": [
+                {"t": "Image", "c": [["", [], []], [{"t": "Str", "c": "alt"}], ["note.png", ""]]}
+            ]}]}
+        ]}]
+    })
+    .to_string();
+    let graph = import(&text);
+    let sources: Vec<&str> = graph.assets.iter().filter_map(|asset| asset.source.as_deref()).collect();
+    assert_eq!(sources, ["linked.png", "note.png"], "{:?}", graph.assets);
+    assert_eq!(graph.coverage.loss.iter().filter(|loss| loss.code == "import.pandoc-json.asset_unresolved").count(), 2);
+}
+
+#[test]
+fn pandoc_note_with_an_image_survives_a_markdown_round_trip() {
+    let document = PandocDocument {
+        api_version: API_VERSION,
+        meta: Vec::new(),
+        blocks: vec![Block::Para(vec![
+            Inline::Str("See".into()),
+            Inline::Note(vec![Block::Para(vec![
+                Inline::Str("picture ".into()),
+                Inline::Image {
+                    attr: Attr::default(),
+                    inlines: vec![Inline::Str("alt".into())],
+                    target: Target { url: "pic.png".into(), title: String::new() },
+                },
+            ])]),
+        ])],
+    };
+    let graph = import(&encode_text(&document));
+    let markdown = export_markdown(&graph).expect("markdown export");
+    assert!(markdown.contains("![alt](pic.png)"), "{markdown:?}");
+
+    let reopened = import_markdown_bytes("note-image.md", &markdown).expect("reopen markdown");
+    let exported = export_pandoc_json(&reopened).expect("export pandoc json");
+    assert!(
+        !exported.losses.iter().any(|loss| loss.code.starts_with("export.pandoc-json.note_definition")),
+        "{:?}",
+        exported.losses
+    );
+    assert!(footnote_definition_payloads(&exported.document.blocks).is_empty(), "{:?}", exported.document.blocks);
+    let notes = paragraph_notes(&exported.document.blocks);
+    assert_eq!(notes.len(), 1, "{:?}", exported.document.blocks);
+    let note_body = &notes[0];
+    let images: Vec<&str> = note_body
+        .iter()
+        .filter_map(|block| match block {
+            Block::Para(inlines) => Some(inlines),
+            _ => None,
+        })
+        .flat_map(|inlines| inlines.iter())
+        .filter_map(|inline| match inline {
+            Inline::Image { target, .. } => Some(target.url.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images, ["pic.png"], "{note_body:?}");
+}
+
+#[test]
 fn unrelated_custom_inline_style_fails_the_export() {
     let mut graph = DocumentGraph::new(document_ir::IdAllocator::default().document_id());
     graph.push_block(IrBlock::Paragraph {
@@ -796,8 +866,36 @@ fn block_level_footnote_body_reports_a_block_level_reason() {
 }
 
 #[test]
-fn footnote_body_with_an_image_is_kept_opaque_with_a_precise_reason() {
+fn footnote_body_with_an_image_is_rebuilt_as_a_native_note() {
     let markdown = "Text[^a].\n\n[^a]: see ![alt](pic.png)\n";
+    let graph = import_markdown_bytes("note.md", markdown).expect("markdown import");
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(
+        !exported.losses.iter().any(|loss| loss.code.starts_with("export.pandoc-json.note_definition")),
+        "{:?}",
+        exported.losses
+    );
+    assert!(footnote_definition_payloads(&exported.document.blocks).is_empty());
+    let notes = paragraph_notes(&exported.document.blocks);
+    assert_eq!(notes.len(), 1);
+    let images: Vec<&str> = notes[0]
+        .iter()
+        .filter_map(|block| match block {
+            Block::Para(inlines) => Some(inlines),
+            _ => None,
+        })
+        .flat_map(|inlines| inlines.iter())
+        .filter_map(|inline| match inline {
+            Inline::Image { target, .. } => Some(target.url.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(images, ["pic.png"], "{:?}", notes[0]);
+}
+
+#[test]
+fn lossy_footnote_body_stays_opaque_with_an_unrepresentable_reason() {
+    let markdown = "Text[^a].\n\n[^a]: [text][missing]\n";
     let graph = import_markdown_bytes("note.md", markdown).expect("markdown import");
     let exported = export_pandoc_json(&graph).expect("export");
     assert!(
@@ -805,7 +903,7 @@ fn footnote_body_with_an_image_is_kept_opaque_with_a_precise_reason() {
         "{:?}",
         exported.losses
     );
-    assert_eq!(footnote_definition_payloads(&exported.document.blocks), vec!["[^a]: see ![alt](pic.png)"]);
+    assert_eq!(footnote_definition_payloads(&exported.document.blocks), vec!["[^a]: [text][missing]"]);
 }
 
 #[test]
