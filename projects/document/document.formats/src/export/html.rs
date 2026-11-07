@@ -562,7 +562,15 @@ fn write_inlines(out: &mut String, inlines: &[Inline], footnote_refs: &mut Footn
                     "superscript" => "sup",
                     "subscript" => "sub",
                     _ => {
-                        return Err(FormatError::unsupported("html", format!("inline style `{style}` is not representable")));
+                        // A style with no known HTML tag still has a class slot.
+                        // Keep the authored name visible instead of rejecting
+                        // the whole document.
+                        out.push_str("<span class=\"");
+                        escape_attribute(out, style);
+                        out.push_str("\">");
+                        write_inlines(out, children, footnote_refs)?;
+                        out.push_str("</span>");
+                        return Ok(());
                     }
                 };
                 write!(out, "<{}>", tag).map_err(format_error)?;

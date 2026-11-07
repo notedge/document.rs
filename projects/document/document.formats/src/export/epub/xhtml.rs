@@ -462,7 +462,15 @@ fn write_inlines(
                     "superscript" => "sup",
                     "subscript" => "sub",
                     _ => {
-                        return Err(FormatError::unsupported("epub", format!("inline style `{style}` is not representable")));
+                        // A style with no known XHTML tag still has a class slot.
+                        // Keep the authored name visible instead of rejecting
+                        // the whole document.
+                        out.push_str("<span class=\"");
+                        escape_attribute(out, style);
+                        out.push_str("\">");
+                        write_inlines(out, children, source_map, footnote_refs, links)?;
+                        out.push_str("</span>");
+                        return Ok(());
                     }
                 };
                 write!(out, "<{}>", tag).map_err(format_error)?;

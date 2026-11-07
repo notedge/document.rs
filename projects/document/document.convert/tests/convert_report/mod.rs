@@ -718,6 +718,40 @@ fn pdf_export_keeps_external_links_as_uri_actions() {
 }
 
 #[test]
+fn pdf_export_names_an_unknown_inline_style_and_keeps_the_text() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(33));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Styled { style: "zzstyle".into(), children: vec![Inline::Text { text: "ZZR53ZZ".into() }] }],
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let reopened = convert_bytes("pdf", "markdown", "style.pdf", pdf, None).expect("reopen PDF");
+    assert!(reopened.markdown.contains("ZZR53ZZ"), "the wrapped text stays on the page: {}", reopened.markdown);
+    let loss = graph
+        .coverage
+        .loss
+        .iter()
+        .find(|loss| loss.code == "export.pdf.inline_style_dropped")
+        .unwrap_or_else(|| panic!("missing inline style loss: {:?}", graph.coverage.loss));
+    assert_eq!(loss.status, SemanticStatus::Partial);
+    assert!(loss.message.contains("zzstyle"), "the message must name the style: {}", loss.message);
+}
+
+#[test]
+fn pdf_export_of_a_known_style_reports_no_style_loss() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(34));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Styled { style: "bold".into(), children: vec![Inline::Text { text: "ZZ_BOLD_ZZ".into() }] }],
+    });
+
+    write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(!codes.contains(&"export.pdf.inline_style_dropped"), "{codes:?}");
+}
+
+#[test]
 fn pdf_export_names_the_opaque_kind_and_keeps_the_payload_text() {
     let faces = pdf_body_faces();
     let mut graph = DocumentGraph::new(DocumentId(31));

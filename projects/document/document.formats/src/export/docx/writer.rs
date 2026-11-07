@@ -693,10 +693,22 @@ fn write_inline_with_properties(
                 }
             }
             other => {
-                return Err(FormatError::unsupported(
-                    "docx",
-                    format!("inline style `{other}` is not supported by the conservative DOCX exporter yet"),
-                ));
+                // A style name with no native run property has no Word
+                // formatting slot either, but `w:rStyle` can carry the name
+                // itself. Refusing the whole export would be worse than writing
+                // a run style Word falls back on.
+                if other.chars().any(char::is_control) {
+                    return Err(FormatError::unsupported(
+                        "docx",
+                        format!("inline style `{other}` contains control characters"),
+                    ));
+                }
+                let property = format!("<w:rStyle w:val=\"{}\"/>", escape_xml_attr(other));
+                let combined =
+                    if properties.contains(&property) { properties.to_owned() } else { format!("{properties}{property}") };
+                for child in children {
+                    write_inline_with_properties(out, child, graph, rels, &combined)?;
+                }
             }
         },
         Inline::InlineCode { text } => {

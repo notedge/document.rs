@@ -47,6 +47,32 @@ fn quote_paragraph(graph: &DocumentGraph) -> &[Inline] {
 }
 
 #[test]
+fn html_export_writes_an_unknown_inline_style_as_a_class() {
+    let mut graph = DocumentGraph::new(DocumentId(78));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Styled {
+            style: "zzstyle".into(),
+            children: vec![Inline::Text { text: "ZZR53ZZ".into() }],
+        }],
+    });
+
+    let html = export_html(&graph).expect("an unknown style must not reject the HTML export");
+    assert!(html.contains(r#"<span class="zzstyle">ZZR53ZZ</span>"#), "{html}");
+}
+
+#[test]
+fn html_export_of_a_known_style_writes_no_class() {
+    let mut graph = DocumentGraph::new(DocumentId(79));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Styled { style: "bold".into(), children: vec![Inline::Text { text: "ZZ_BOLD_ZZ".into() }] }],
+    });
+
+    let html = export_html(&graph).expect("export bold run");
+    assert!(html.contains("<strong>ZZ_BOLD_ZZ</strong>"), "{html}");
+    assert!(!html.contains(r#"class="bold""#), "a known style needs no class: {html}");
+}
+
+#[test]
 fn html_blockquote_round_trips_quoted_text() {
     let source = "<body><blockquote><p>Quoted line</p></blockquote></body>";
     let graph = import_html_text("quote.html", source).expect("import html quote");

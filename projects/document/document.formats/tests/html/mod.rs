@@ -110,7 +110,7 @@ fn html_export_writes_image_inline_semantics() {
 }
 
 #[test]
-fn html_export_rejects_unrepresentable_inline_styles() {
+fn html_export_keeps_an_unrepresentable_inline_style_as_a_class() {
     let mut graph = DocumentGraph::new(IdAllocator::default().document_id());
     graph.push_block(Block::Paragraph {
         content: vec![Inline::Styled {
@@ -119,8 +119,8 @@ fn html_export_rejects_unrepresentable_inline_styles() {
         }],
     });
 
-    let error = export_html(&graph).expect_err("style must not be discarded");
-    assert!(error.to_string().contains("small_caps"));
+    let html = export_html(&graph).expect("a style with no HTML tag still has a class slot");
+    assert!(html.contains(r#"<span class="small_caps">meaningful</span>"#), "{html}");
 }
 
 #[test]

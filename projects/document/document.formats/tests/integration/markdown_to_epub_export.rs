@@ -63,6 +63,24 @@ fn epub_export_keeps_the_title_at_the_start_of_the_body_chapter() {
 }
 
 #[test]
+fn epub_export_writes_an_unknown_inline_style_as_a_class() {
+    let mut graph = document_ir::DocumentGraph::new(document_ir::DocumentId(80));
+    graph.push_block(document_ir::Block::Paragraph {
+        content: vec![document_ir::Inline::Styled {
+            style: "zzstyle".into(),
+            children: vec![document_ir::Inline::Text { text: "ZZR53ZZ".into() }],
+        }],
+    });
+
+    let bytes = export_epub_bytes(&graph).expect("an unknown style must not reject the EPUB export");
+    let package = OcfPackage::open("style.epub", bytes).expect("open as OCF");
+    let mut ledger = BudgetTracker::new(Budget::default());
+    let chapter = String::from_utf8(package.read_member("OEBPS/chapter-000.xhtml", &mut ledger).expect("read chapter"))
+        .expect("chapter must be UTF-8");
+    assert!(chapter.contains(r#"<span class="zzstyle">ZZR53ZZ</span>"#), "{chapter}");
+}
+
+#[test]
 fn epub_export_produces_valid_ocf_package() {
     let graph = import_markdown_bytes("book.md", make_simple_markdown()).expect("import markdown");
     let bytes = export_epub_bytes(&graph).expect("export epub");

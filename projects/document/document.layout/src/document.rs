@@ -320,6 +320,39 @@ fn citation_degraded_diagnostic(key: &str) -> Diagnostic {
     }
 }
 
+/// Whether an inline style has a face of its own on a PDF page.
+fn is_known_inline_style(style: &str) -> bool {
+    matches!(
+        style.to_ascii_lowercase().as_str(),
+        "bold"
+            | "strong"
+            | "italic"
+            | "em"
+            | "emphasis"
+            | "mono"
+            | "code"
+            | "strike"
+            | "strikethrough"
+            | "underline"
+            | "superscript"
+            | "subscript"
+    )
+}
+
+/// The loss reported when an inline style reaches a PDF page with no face for
+/// it. The characters stay visible under the body face, so the report names the
+/// style that could not travel.
+fn inline_style_dropped_diagnostic(style: &str) -> Diagnostic {
+    Diagnostic {
+        code: "export.pdf.inline_style_dropped".to_string(),
+        severity: Severity::Warning,
+        message: format!(
+            "the PDF target has no slot for the inline style `{style}`, so the characters keep the body face without it"
+        ),
+        span: None,
+    }
+}
+
 /// The loss reported when an opaque block kind reaches a PDF page.
 ///
 /// The payload text stays visible but the page has no per-block metadata slot,
@@ -1118,6 +1151,12 @@ impl<'a> PageBuilder<'a> {
                     }
                 }
                 Inline::Styled { style, children } => {
+                    // A known style maps onto a face. An unknown name has no
+                    // typographic slot on the page, so the report names it while
+                    // the characters keep the body face.
+                    if !is_known_inline_style(style) {
+                        self.diagnostics.push(inline_style_dropped_diagnostic(style));
+                    }
                     self.compose_inline(children, size, indent, flow, face_for_style(style), href, anchor, title, image_mode);
                 }
                 Inline::InlineCode { text } => flow.pending.push(text, CODE_FACE, href, anchor, title, &mut flow.atoms),

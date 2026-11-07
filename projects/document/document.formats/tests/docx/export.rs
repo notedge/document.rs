@@ -127,6 +127,35 @@ fn docx_export_round_trips_paragraphs_and_headings() {
 }
 
 #[test]
+fn docx_export_writes_an_unknown_inline_style_as_a_run_style() {
+    let mut graph = DocumentGraph::new(DocumentId(76));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Styled {
+            style: "zzstyle".into(),
+            children: vec![Inline::Text { text: "ZZR53ZZ".into() }],
+        }],
+    });
+
+    let exported = export_docx_bytes(&graph).expect("an unknown style must not reject the DOCX export");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains(r#"w:rStyle w:val="zzstyle""#), "the style name travels as a run style: {xml}");
+    assert!(xml.contains("ZZR53ZZ"), "the wrapped text stays: {xml}");
+}
+
+#[test]
+fn docx_export_of_a_known_style_writes_no_style_id() {
+    let mut graph = DocumentGraph::new(DocumentId(77));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Styled { style: "bold".into(), children: vec![Inline::Text { text: "ZZ_BOLD_ZZ".into() }] }],
+    });
+
+    let exported = export_docx_bytes(&graph).expect("export bold run");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("<w:b/>"), "bold still maps to its native property: {xml}");
+    assert!(!xml.contains(r#"w:rStyle w:val="bold""#), "a known style needs no style id: {xml}");
+}
+
+#[test]
 fn docx_export_keeps_an_opaque_kind_and_payload_text_and_reads_them_back() {
     let mut graph = DocumentGraph::new(DocumentId(74));
     graph.push_block(Block::Opaque {
