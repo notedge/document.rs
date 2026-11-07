@@ -14,13 +14,9 @@ use document_convert::{ConvertOutput, ConvertProjectOutput, PublishedMarkdownPro
 use document_fonts::BodyFaceSet;
 use serde_json::Value;
 
-/// Load the host-authored body faces that PDF writing requires.
-///
-/// The pack sits in VuTeX beside this repository locally, and CI points
-/// `VUTEX_FONT_DIR` at a sparse checkout of it. A missing pack fails the test
-/// instead of skipping, matching the writer contract.
-pub fn pdf_body_faces() -> Arc<BodyFaceSet> {
-    let dir = std::env::var_os("VUTEX_FONT_DIR").map(PathBuf::from).unwrap_or_else(|| {
+/// Directory that carries the host-authored face pack.
+pub fn host_font_dir() -> PathBuf {
+    std::env::var_os("VUTEX_FONT_DIR").map(PathBuf::from).unwrap_or_else(|| {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .ancestors()
             .nth(4)
@@ -29,7 +25,16 @@ pub fn pdf_body_faces() -> Arc<BodyFaceSet> {
             .join("projects")
             .join("vutex.rs")
             .join("fonts")
-    });
+    })
+}
+
+/// Load the host-authored body faces that PDF writing requires.
+///
+/// The pack sits in VuTeX beside this repository locally, and CI points
+/// `VUTEX_FONT_DIR` at a sparse checkout of it. A missing pack fails the test
+/// instead of skipping, matching the writer contract.
+pub fn pdf_body_faces() -> Arc<BodyFaceSet> {
+    let dir = host_font_dir();
     assert!(dir.is_dir(), "PDF tests need the host font pack at {}, set VUTEX_FONT_DIR", dir.display());
     Arc::new(BodyFaceSet::load_from(&dir).unwrap_or_else(|error| panic!("read body faces from {}: {error}", dir.display())))
 }

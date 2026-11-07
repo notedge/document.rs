@@ -1,8 +1,10 @@
-use document_convert::{convert_bytes, convert_bytes_with_body_faces, write_document_docx, write_document_pdf};
+use document_convert::{
+    convert_bytes, convert_bytes_with_body_faces, write_document_docx, write_document_html, write_document_pdf,
+};
 use document_formats::import::{markdown::import_markdown_bytes, pdf::import_pdf_bytes};
 use document_ir::{
-    AttributePair, Attributes, Block, DocumentGraph, DocumentId, Inline, ListItem, RelationEndpoint, SemanticStatus, TableCell,
-    TableRow,
+    AttributePair, Attributes, Block, DocumentGraph, DocumentId, Inline, ListItem, MathDisplay, MathFormula, RelationEndpoint,
+    SemanticStatus, TableCell, TableRow,
 };
 
 use crate::common;
@@ -494,6 +496,108 @@ fn pdf_export_names_image_alt_only_in_the_body_paragraph_path() {
 
 fn image_with_alt(alt: &str, source: &str) -> Inline {
     Inline::Image { source: source.into(), alt: vec![Inline::Text { text: alt.into() }], title: None, asset: None }
+}
+
+/// Loss codes the PDF report carries after the write.
+fn pdf_loss_codes(graph: &DocumentGraph) -> Vec<String> {
+    graph.coverage.loss.iter().map(|loss| loss.code.clone()).collect()
+}
+
+#[test]
+fn pdf_export_reports_an_unsupported_math_language() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(98));
+    graph.push_block(Block::Math {
+        formula: MathFormula::unsupported("x", Some("typst".into()), MathDisplay::Display, "typst"),
+    });
+    write_document_pdf(&mut graph, &faces).expect("PDF write keeps the authored source");
+    let codes = pdf_loss_codes(&graph);
+    assert!(codes.iter().any(|code| code == "vutex.layout.math.unsupported_language"), "{codes:?}");
+}
+
+#[test]
+fn pdf_export_reports_an_unparsed_footnote_definition() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(98));
+    graph.push_block(Block::Opaque {
+        kind: "footnote_definition".into(),
+        payload_hint: "a footnote without the [^label]: separator".into(),
+        status: SemanticStatus::Resolved,
+    });
+    write_document_pdf(&mut graph, &faces).expect("PDF write");
+    let codes = pdf_loss_codes(&graph);
+    assert!(codes.iter().any(|code| code == "vutex.layout.footnote_definition_unparsed"), "{codes:?}");
+}
+
+#[test]
+fn pdf_export_keeps_layout_environment_warnings_out_of_the_report() {
+    use document_fonts::{BodyFace, BodyFaceSet, BodyFamily, BodyScript};
+    let base = pdf_body_faces();
+    let mut faces = base.faces().to_vec();
+    faces.push(BodyFace::new(BodyFamily::Serif, BodyScript::Latin, document_fonts::BodyFaceStyle::Italic, vec![0u8, 1, 2, 3]));
+    let set = std::sync::Arc::new(BodyFaceSet::new(faces));
+    let mut graph = DocumentGraph::new(DocumentId(98));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Hello".into() }] });
+    write_document_pdf(&mut graph, &set).expect("the readable faces still serve the page");
+    assert!(pdf_loss_codes(&graph).is_empty(), "font metrics are logger-only: {:?}", pdf_loss_codes(&graph));
+}
+
+#[test]
+fn pdf_export_keeps_diagram_parser_errors_out_of_the_report() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(98));
+    graph.push_block(Block::Diagram { language: "mermaid".into(), source: "flowchart TD\n  A[".into() });
+    write_document_pdf(&mut graph, &faces).expect("PDF write keeps the authored source text");
+    let codes = pdf_loss_codes(&graph);
+    assert!(codes.is_empty(), "diagram parser errors are logger-only, the source text stays visible: {codes:?}");
+}
+
+#[test]
+fn pdf_export_stays_clean_for_a_plain_paragraph() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(98));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Hello".into() }] });
+    write_document_pdf(&mut graph, &faces).expect("PDF write");
+    assert!(pdf_loss_codes(&graph).is_empty(), "{:?}", pdf_loss_codes(&graph));
+}
+
+#[test]
+fn html_export_reports_every_projection_loss() {
+    let mut graph = DocumentGraph::new(DocumentId(97));
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Citation { key: "ref1".into(), display: Some(vec![Inline::Text { text: "[1]".into() }]) },
+            Inline::Link {
+                target: RelationEndpoint::Unresolved { label: "missing".into() },
+                display: vec![Inline::Text { text: "here".into() }],
+                title: None,
+            },
+            image_with_alt("alt", "missing.png"),
+        ],
+    });
+    graph.push_block(Block::Opaque {
+        kind: "custom_block".into(),
+        payload_hint: "payload".into(),
+        status: SemanticStatus::Resolved,
+    });
+    write_document_html(&mut graph, &std::collections::HashMap::new()).expect("HTML write");
+    let codes: Vec<String> = graph.coverage.loss.iter().map(|loss| loss.code.clone()).collect();
+    for expected in [
+        "export.html.citation_degraded",
+        "export.html.unresolved_link",
+        "export.html.image_asset_unresolved",
+        "export.html.opaque_projection",
+    ] {
+        assert!(codes.iter().any(|code| code == expected), "expected {expected}: {codes:?}");
+    }
+}
+
+#[test]
+fn html_export_stays_clean_for_a_plain_paragraph() {
+    let mut graph = DocumentGraph::new(DocumentId(97));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Hello".into() }] });
+    write_document_html(&mut graph, &std::collections::HashMap::new()).expect("HTML write");
+    assert!(graph.coverage.loss.is_empty(), "{:?}", graph.coverage.loss);
 }
 
 fn all_text(graph: &DocumentGraph) -> String {

@@ -33,6 +33,18 @@ pub fn write_document_pdf(graph: &mut DocumentGraph, body_set: &Arc<BodyFaceSet>
         });
     }
     let (diagrams, losses) = lower_host_scenes(graph);
+    // Lowering warnings and parser errors are environment facts the logger
+    // records. A canvas that has no area is a content loss, because the page
+    // then has no picture and no scene, so only that code becomes a marker.
+    for loss in &losses {
+        if loss.fatal && loss.code.starts_with("panduck.") {
+            graph.push_loss(LossMarker {
+                code: loss.code.clone(),
+                message: loss.message.clone(),
+                status: SemanticStatus::Unsupported,
+            });
+        }
+    }
     if !losses.is_empty() {
         report_scene_losses(&losses);
     }
@@ -55,8 +67,13 @@ pub fn write_document_pdf(graph: &mut DocumentGraph, body_set: &Arc<BodyFaceSet>
     Ok(outcome.pdf)
 }
 
-/// Turn a layout diagnostic that describes dropped document semantics into a
-/// loss marker, so the conversion report never calls the export clean.
+/// Turn a layout diagnostic that dropped document content into a loss marker.
+///
+/// Only codes whose degradation removes or changes authored content belong in
+/// the conversion report. Layout also emits font-metric, typesetting-approximation
+/// and conformance-fallback diagnostics, which describe the rendering environment
+/// rather than the document, so filtering them keeps a faithful page from being
+/// reported as lossy while every content loss stays visible.
 fn pdf_layout_loss(diagnostic: &ComposeDiagnostic) -> Option<LossMarker> {
     let code = diagnostic.code.as_str();
     if !matches!(
@@ -71,6 +88,11 @@ fn pdf_layout_loss(diagnostic: &ComposeDiagnostic) -> Option<LossMarker> {
             | "export.pdf.inline_style_dropped"
             | "export.pdf.table_cell_flattened"
             | "export.pdf.raw_html_flattened"
+            | "vutex.layout.math.unsupported_language"
+            | "vutex.layout.math.not_typeset"
+            | "vutex.layout.footnote_definition_unparsed"
+            | "vutex.layout.math.outline_missing"
+            | "vutex.math.unsupported_expression"
     ) {
         return None;
     }
