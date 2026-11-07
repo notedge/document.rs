@@ -175,8 +175,8 @@ impl<'a> SvgWalk<'a> {
                 let _ = write!(
                     self.buffer,
                     r#"<g transform="translate({}, {})">"#,
-                    num(translate_x.to_f64()),
-                    num(translate_y.to_f64())
+                    translate_x.to_f64(),
+                    translate_y.to_f64()
                 );
                 let after_open = self.buffer.len();
                 for child in children {
