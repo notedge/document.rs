@@ -401,9 +401,50 @@ fn pdf_export_keeps_list_and_nested_table_cells_inside_the_table() {
     });
 
     let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert_eq!(
+        codes.iter().filter(|code| **code == "export.pdf.table_cell_flattened").count(),
+        1,
+        "one table with flattened sub-blocks must report the loss once: {codes:?}"
+    );
+    let flattened = graph
+        .coverage
+        .loss
+        .iter()
+        .find(|loss| loss.code == "export.pdf.table_cell_flattened")
+        .expect("the flattening loss must be present");
+    assert!(flattened.message.contains("`list`"), "the loss must name the list: {}", flattened.message);
+    assert!(flattened.message.contains("`table`"), "the loss must name the nested table: {}", flattened.message);
+
     let reopened = import_pdf_bytes("table-cells.pdf", &pdf).expect("reopen PDF");
     let text = all_text(&reopened);
     for expected in ["ZZ_HEAD", "ZZ_HEAD_TWO", "ZZ_PARA", "ZZ_LIST_A", "ZZ_LIST_B", "ZZ_CAPTION", "ZZ_INNER_HEAD", "ZZ_INNER"] {
+        assert!(text.contains(expected), "{expected} must reach the page: {text:?}");
+    }
+}
+
+#[test]
+fn pdf_export_reports_no_cell_flattening_for_paragraph_cells() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(12));
+    let head_text = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "ZZ_ONLY_HEAD".into() }] });
+    let body_text = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "ZZ_ONLY_BODY".into() }] });
+    graph.push_block(Block::Table {
+        caption: None,
+        head: vec![TableRow { cells: vec![TableCell { children: vec![head_text], colspan: 1, rowspan: 1 }] }],
+        body: vec![TableRow { cells: vec![TableCell { children: vec![body_text], colspan: 1, rowspan: 1 }] }],
+        foot: Vec::new(),
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(
+        !codes.contains(&"export.pdf.table_cell_flattened"),
+        "paragraph cells keep their structure and must not raise the flattening loss: {codes:?}"
+    );
+    let reopened = import_pdf_bytes("paragraph-cells.pdf", &pdf).expect("reopen PDF");
+    let text = all_text(&reopened);
+    for expected in ["ZZ_ONLY_HEAD", "ZZ_ONLY_BODY"] {
         assert!(text.contains(expected), "{expected} must reach the page: {text:?}");
     }
 }

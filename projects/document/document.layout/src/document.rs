@@ -318,6 +318,25 @@ fn image_alt_dropped_diagnostic(source: &str, alt: &str) -> Diagnostic {
     }
 }
 
+/// The loss reported when a PDF table cell holds more than plain paragraphs.
+///
+/// A PDF table cell is one text block, so a list, a nested table, a quote, or
+/// code inside it cannot own its own structure there. The values still reach
+/// the page, but the authored structure does not, and a clean report would
+/// leave the caller believing the cell kept its shape. The code names that
+/// projection loss instead of leaving it to a design note.
+fn table_cell_flattened_diagnostic(kinds: &[&str]) -> Diagnostic {
+    Diagnostic {
+        code: "export.pdf.table_cell_flattened".to_string(),
+        severity: Severity::Warning,
+        message: format!(
+            "PDF table cells flatten `{}` sub-blocks into one text run per cell, so their authored structure does not reach the page",
+            kinds.join("`, `")
+        ),
+        span: None,
+    }
+}
+
 /// The loss reported when an intra-document reference reaches a PDF page.
 fn reference_target_dropped_diagnostic(target: NodeId) -> Diagnostic {
     Diagnostic {
@@ -1359,6 +1378,7 @@ impl<'a> PageBuilder<'a> {
             self.emit_wrapped(caption, size * 0.9, SERIF, indent);
         }
         self.pad(size * 0.4);
+        let mut flattened_kinds = BTreeSet::new();
         for (row_index, (row, is_header)) in rows.iter().enumerate() {
             let header_face =
                 if *is_header && tokens.heading_bold { TextFace { family: SERIF, style: FontStyle::Bold } } else { BODY_FACE };
@@ -1368,7 +1388,8 @@ impl<'a> PageBuilder<'a> {
                 .map(|cell| {
                     let span = cell.colspan.max(1) as usize;
                     let available = (column_width * span as f64 - padding * 2.0).max(24.0);
-                    let content = cell_inlines(graph, cell);
+                    let (content, cell_flattened) = cell_inlines(graph, cell);
+                    flattened_kinds.extend(cell_flattened);
                     let atoms = self.compose_atoms(&content, size, indent, header_face, ImageMode::AltText);
                     let numeric = is_numeric_content(&content);
                     CellLines { span, available, lines: break_inline_atoms(&self.text, atoms, size, available, 0.0), numeric }
@@ -1424,6 +1445,10 @@ impl<'a> PageBuilder<'a> {
                     color: Some(tokens.table_rule_strong_color),
                 }));
             }
+        }
+        if !flattened_kinds.is_empty() {
+            let kinds: Vec<&str> = flattened_kinds.iter().copied().collect();
+            self.diagnostics.push(table_cell_flattened_diagnostic(&kinds));
         }
         self.pad(size * 0.8);
     }
@@ -1903,16 +1928,38 @@ fn break_inline_atoms(
 /// Flatten a table cell's child blocks into the inline run the layout composes.
 ///
 /// Every paragraph child keeps its inline semantics, and children are separated
-/// by a space so two authored paragraphs never glue their words together.
-fn cell_inlines(graph: &DocumentGraph, cell: &document_ir::TableCell) -> Vec<Inline> {
+/// by a space so two authored paragraphs never glue their words together. The
+/// returned kinds are the non-paragraph sub-blocks that had to be flattened,
+/// which the caller reports as a loss instead of leaving it implicit.
+fn cell_inlines(graph: &DocumentGraph, cell: &document_ir::TableCell) -> (Vec<Inline>, BTreeSet<&'static str>) {
     let mut content = Vec::new();
+    let mut flattened = BTreeSet::new();
     for child_id in &cell.children {
         if !content.is_empty() {
             content.push(Inline::Text { text: " ".into() });
         }
-        append_block_inlines(graph, *child_id, &mut content);
+        append_block_inlines(graph, *child_id, &mut content, &mut flattened);
     }
-    content
+    (content, flattened)
+}
+
+/// Name of a block kind that a PDF table cell cannot keep as structure.
+///
+/// Returns `None` for a paragraph, whose inlines compose directly in the cell.
+fn flattened_block_kind(block: &Block) -> Option<&'static str> {
+    match block {
+        Block::Paragraph { .. } => None,
+        Block::Section { .. } => Some("section"),
+        Block::List { .. } => Some("list"),
+        Block::Table { .. } => Some("table"),
+        Block::Quote { .. } => Some("quote"),
+        Block::Code { .. } => Some("code"),
+        Block::Math { .. } => Some("math"),
+        Block::Diagram { .. } => Some("diagram"),
+        Block::Chart { .. } => Some("chart"),
+        Block::Opaque { .. } => Some("opaque"),
+        Block::RawHtml { .. } => Some("raw_html"),
+    }
 }
 
 /// Project nested cell blocks into the inline flow of one cell.
@@ -1920,12 +1967,16 @@ fn cell_inlines(graph: &DocumentGraph, cell: &document_ir::TableCell) -> Vec<Inl
 /// A PDF table cell is a single text block, so a list or a nested table cannot
 /// own its own grid. Their authored values still belong in the cell, so lists
 /// keep their markers and nested tables keep their row and cell boundaries as
-/// separators instead of disappearing from the page.
-fn append_block_inlines(graph: &DocumentGraph, node_id: NodeId, out: &mut Vec<Inline>) {
+/// separators instead of disappearing from the page. Every flattened kind is
+/// recorded so the caller can report the structural loss.
+fn append_block_inlines(graph: &DocumentGraph, node_id: NodeId, out: &mut Vec<Inline>, flattened: &mut BTreeSet<&'static str>) {
     let Some(node) = graph.block(node_id)
     else {
         return;
     };
+    if let Some(kind) = flattened_block_kind(&node.block) {
+        flattened.insert(kind);
+    }
     match &node.block {
         Block::Paragraph { content } | Block::Section { title: content, .. } => out.extend(content.iter().cloned()),
         Block::Quote { children } => {
@@ -1933,7 +1984,7 @@ fn append_block_inlines(graph: &DocumentGraph, node_id: NodeId, out: &mut Vec<In
                 if !out.is_empty() {
                     out.push(Inline::Text { text: " ".into() });
                 }
-                append_block_inlines(graph, *child, out);
+                append_block_inlines(graph, *child, out, flattened);
             }
         }
         Block::List { ordered, items } => {
@@ -1947,7 +1998,7 @@ fn append_block_inlines(graph: &DocumentGraph, node_id: NodeId, out: &mut Vec<In
                 out.extend(item.content.iter().cloned());
                 for child in &item.children {
                     out.push(Inline::Text { text: " ".into() });
-                    append_block_inlines(graph, *child, out);
+                    append_block_inlines(graph, *child, out, flattened);
                 }
             }
         }
@@ -1968,7 +2019,7 @@ fn append_block_inlines(graph: &DocumentGraph, node_id: NodeId, out: &mut Vec<In
                         if !out.is_empty() {
                             out.push(Inline::Text { text: " ".into() });
                         }
-                        append_block_inlines(graph, *child_id, out);
+                        append_block_inlines(graph, *child_id, out, flattened);
                     }
                 }
             }
