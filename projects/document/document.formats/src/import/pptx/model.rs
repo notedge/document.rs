@@ -489,6 +489,8 @@ pub mod codes {
     pub const HIDDEN_SLIDE: &str = "import.pptx.hidden-slide";
     /// A table style id is detected but not applied.
     pub const TABLE_STYLE: &str = "import.pptx.table-style";
+    /// A table cell carries several authored paragraphs.
+    pub const TABLE_CELL_PARAGRAPHS: &str = "import.pptx.table-cell-paragraphs";
     /// A gradient, pattern or picture fill is flattened to no fill.
     pub const FILL_APPROXIMATED: &str = "import.pptx.fill-approximated";
     /// A theme color slot could not be resolved.

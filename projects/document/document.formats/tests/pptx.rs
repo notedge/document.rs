@@ -365,9 +365,83 @@ fn row_cells_stay_on_their_row() {
     assert_eq!(pptx_row_text(&table.rows[1]), vec!["North".to_owned(), "42".to_owned()]);
 }
 
+#[test]
+fn multi_paragraph_table_cells_keep_a_paragraph_boundary_and_name_the_loss() {
+    let bytes = sample_package_with_slide_two(SLIDE_TWO_MULTI_PARAGRAPH_CELL);
+    let presentation = import_pptx_bytes("multi-paragraph-cell.pptx", &bytes).expect("pptx import");
+    let graph = presentation_to_graph(&presentation, &GraphOptions::default());
+    let body = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { body, .. } => Some(body.as_slice()),
+            _ => None,
+        })
+        .expect("table block");
+
+    let multi = cell_paragraph_blocks(&graph, &body[1].cells[0]);
+    let texts = cell_paragraph_texts(&graph, &body[1].cells[0]);
+    assert_eq!(multi.len(), 2, "each authored cell paragraph is its own cell block: {multi:?}");
+    assert_eq!(
+        texts,
+        vec!["ALPHA_CELL_PARAGRAPH".to_owned(), "BETA_CELL_PARAGRAPH".to_owned()],
+        "the two authored paragraphs stay separate instead of gluing into one text: {texts:?}"
+    );
+
+    let single = cell_paragraph_blocks(&graph, &body[1].cells[1]);
+    assert_eq!(single.len(), 1, "a single-paragraph cell keeps one cell block: {single:?}");
+
+    let losses: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert_eq!(
+        losses.iter().filter(|code| **code == "import.pptx.table-cell-paragraphs").count(),
+        1,
+        "one marker names the multi-paragraph cell: {losses:?}"
+    );
+    let marker = graph.coverage.loss.iter().find(|loss| loss.code == "import.pptx.table-cell-paragraphs").unwrap();
+    assert!(marker.message.contains("row 2, column 1"), "the marker names the cell: {}", marker.message);
+}
+
+#[test]
+fn single_paragraph_table_cells_emit_no_paragraph_marker() {
+    let presentation = presentation();
+    let graph = presentation_to_graph(&presentation, &GraphOptions::default());
+    let losses: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(!losses.contains(&"import.pptx.table-cell-paragraphs"), "{losses:?}");
+}
+
+fn cell_paragraph_blocks<'a>(graph: &'a DocumentGraph, cell: &TableCell) -> Vec<&'a Block> {
+    cell.children
+        .iter()
+        .filter_map(|id| graph.block(*id))
+        .map(|node| &node.block)
+        .filter(|block| matches!(block, Block::Paragraph { .. }))
+        .collect()
+}
+
+fn cell_paragraph_texts(graph: &DocumentGraph, cell: &TableCell) -> Vec<String> {
+    cell.children
+        .iter()
+        .filter_map(|id| graph.block(*id))
+        .filter_map(|node| match &node.block {
+            Block::Paragraph { content } => {
+                let mut text = String::new();
+                for inline in content {
+                    flattened_text(inline, &mut text);
+                }
+                Some(text)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 // --- in-memory OOXML sample -------------------------------------------------
 
 fn sample_package() -> Vec<u8> {
+    sample_package_with_slide_two(SLIDE_TWO)
+}
+
+fn sample_package_with_slide_two(slide_two: &str) -> Vec<u8> {
     let mut parts: Vec<(&str, Vec<u8>)> = Vec::new();
     let mut text = |path: &'static str, body: &str| parts.push((path, body.as_bytes().to_vec()));
     text("[Content_Types].xml", CONTENT_TYPES);
@@ -381,7 +455,7 @@ fn sample_package() -> Vec<u8> {
     text("ppt/theme/theme1.xml", THEME);
     text("ppt/slides/slide1.xml", SLIDE_ONE);
     text("ppt/slides/_rels/slide1.xml.rels", SLIDE_ONE_RELS);
-    text("ppt/slides/slide2.xml", SLIDE_TWO);
+    text("ppt/slides/slide2.xml", slide_two);
     text("ppt/slides/_rels/slide2.xml.rels", SLIDE_TWO_RELS);
     text("ppt/notesSlides/notesSlide1.xml", NOTES_ONE);
     text("ppt/notesSlides/notesSlide2.xml", NOTES_TWO);
@@ -464,6 +538,9 @@ const SLIDE_ONE_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relatio
 const SLIDE_TWO: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Title 1\"/><p:cNvSpPr/><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"4400\"/><a:t>Data and charts</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id=\"3\" name=\"Content 2\"/><p:cNvSpPr/><p:nvPr><p:ph idx=\"1\"/></p:nvPr></p:nvSpPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"2400\"/><a:t>Second slide body</a:t></a:r></a:p></p:txBody></p:sp><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"4\" name=\"Revenue table\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x=\"457200\" y=\"2200000\"/><a:ext cx=\"5080000\" cy=\"1600200\"/></p:xfrm><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl><a:tblPr><a:tableStyleId>{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}</a:tableStyleId></a:tblPr><a:tblGrid><a:gridCol w=\"2540000\"/><a:gridCol w=\"2540000\"/></a:tblGrid><a:tr h=\"370840\"><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1800\" b=\"1\"/><a:t>Region</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1800\" b=\"1\"/><a:t>Revenue</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr><a:tr h=\"370840\"><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1800\"/><a:t>North</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1800\"/><a:t>42</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"5\" name=\"Chart 5\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x=\"5588000\" y=\"2200000\"/><a:ext cx=\"5588000\" cy=\"3000000\"/></p:xfrm><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" r:id=\"rId3\"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>";
 
 const SLIDE_TWO_RELS: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout2.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide\" Target=\"../notesSlides/notesSlide2.xml\"/><Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart\" Target=\"../charts/chart1.xml\"/></Relationships>";
+
+/// A slide whose table body cell carries two authored paragraphs.
+const SLIDE_TWO_MULTI_PARAGRAPH_CELL: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Title 1\"/><p:cNvSpPr/><p:nvPr><p:ph type=\"title\"/></p:nvPr></p:nvSpPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"4400\"/><a:t>Data and charts</a:t></a:r></a:p></p:txBody></p:sp><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id=\"4\" name=\"Revenue table\"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x=\"457200\" y=\"2200000\"/><a:ext cx=\"5080000\" cy=\"1600200\"/></p:xfrm><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/table\"><a:tbl><a:tblPr><a:tableStyleId>{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}</a:tableStyleId></a:tblPr><a:tblGrid><a:gridCol w=\"2540000\"/><a:gridCol w=\"2540000\"/></a:tblGrid><a:tr h=\"370840\"><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1800\" b=\"1\"/><a:t>Region</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1800\" b=\"1\"/><a:t>Revenue</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr><a:tr h=\"370840\"><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1800\"/><a:t>ALPHA_CELL_PARAGRAPH</a:t></a:r></a:p><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1800\"/><a:t>BETA_CELL_PARAGRAPH</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc><a:tc><a:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\" sz=\"1800\"/><a:t>42</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>";
 
 const NOTES_ONE: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><p:notes xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><p:cSld><p:spTree><p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Notes\"/><p:cNvSpPr/><p:nvPr><p:ph type=\"body\" idx=\"1\"/></p:nvPr></p:nvSpPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>Speaker notes: mention the five capability states.</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:notes>";
 

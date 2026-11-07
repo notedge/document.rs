@@ -13,7 +13,6 @@ use document_ir::{
 };
 
 use super::{
-    super::common::cell_children,
     model::{IssueStatus, Paragraph, PptxIssue, PptxPresentation, ShapeKind, TextFrame, codes},
     reader::import_pptx_bytes,
 };
@@ -127,15 +126,35 @@ pub fn presentation_to_graph(presentation: &PptxPresentation, options: &GraphOpt
                 ShapeKind::Table => {
                     if let Some(table) = &shape.table {
                         let mut body = Vec::new();
-                        for row in &table.rows {
+                        for (row_index, row) in table.rows.iter().enumerate() {
                             let mut cells = Vec::new();
-                            for cell in &row.cells {
-                                let content: Vec<_> = cell.text.paragraphs.iter().flat_map(paragraph_inlines).collect();
-                                cells.push(TableCell {
-                                    children: cell_children(&mut graph, content),
-                                    colspan: cell.colspan,
-                                    rowspan: cell.rowspan,
-                                });
+                            for (column_index, cell) in row.cells.iter().enumerate() {
+                                let paragraphs: Vec<Vec<Inline>> = cell
+                                    .text
+                                    .paragraphs
+                                    .iter()
+                                    .map(paragraph_inlines)
+                                    .filter(|content| !content.is_empty())
+                                    .collect();
+                                if paragraphs.len() > 1 {
+                                    graph.push_loss(LossMarker {
+                                        code: codes::TABLE_CELL_PARAGRAPHS.into(),
+                                        message: format!(
+                                            "slide {} table `{}` cell (row {}, column {}) carries {} paragraphs and keeps them as separate cell paragraphs without their authored spacing",
+                                            slide.index,
+                                            shape.name,
+                                            row_index + 1,
+                                            column_index + 1,
+                                            paragraphs.len()
+                                        ),
+                                        status: SemanticStatus::Partial,
+                                    });
+                                }
+                                let mut children = Vec::new();
+                                for content in paragraphs {
+                                    children.push(graph.push_block(Block::Paragraph { content }));
+                                }
+                                cells.push(TableCell { children, colspan: cell.colspan, rowspan: cell.rowspan });
                             }
                             body.push(TableRow { cells });
                         }
