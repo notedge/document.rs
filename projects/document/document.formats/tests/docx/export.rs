@@ -1373,6 +1373,41 @@ fn docx_export_keeps_table_caption_list_start_and_reference_target() {
 }
 
 #[test]
+fn docx_export_indents_plain_paragraph_children_of_list_items() {
+    let mut graph = DocumentGraph::new(DocumentId(58));
+    let child = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Child block.".into() }] });
+    graph.push_block(Block::List {
+        ordered: false,
+        items: vec![ListItem {
+            content: vec![Inline::Text { text: "Parent item".into() }],
+            children: vec![child],
+            ..Default::default()
+        }],
+    });
+
+    let exported = export_docx_bytes(&graph).expect("export list child DOCX");
+    let payload = String::from_utf8_lossy(&exported);
+    assert!(
+        payload.contains(r#"<w:pPr><w:ind w:left="720"/></w:pPr>"#),
+        "a plain child block must carry the item level indent instead of collapsing to the same level: {payload}"
+    );
+    assert!(payload.contains("Child block."), "the child block text must stay visible: {payload}");
+}
+
+#[test]
+fn docx_export_does_not_indent_top_level_paragraphs() {
+    let mut graph = DocumentGraph::new(DocumentId(59));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Top level.".into() }] });
+
+    let exported = export_docx_bytes(&graph).expect("export top-level DOCX");
+    let payload = String::from_utf8_lossy(&exported);
+    assert!(
+        !payload.contains(r#"<w:p><w:pPr><w:ind w:left="720"/></w:pPr>"#),
+        "list-child indentation must not leak to top-level paragraphs: {payload}"
+    );
+}
+
+#[test]
 fn docx_export_writes_note_display_bodies_into_footnotes_xml() {
     let mut graph = DocumentGraph::new(DocumentId(56));
     graph.push_block(Block::Paragraph {

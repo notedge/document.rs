@@ -237,6 +237,9 @@ fn write_block(
     Ok(())
 }
 
+/// Left indent per list level, in twips, used for non-list child blocks.
+const LIST_CHILD_INDENT_TWIPS: u32 = 720;
+
 fn write_list(
     out: &mut String,
     ordered: bool,
@@ -307,6 +310,23 @@ fn write_list_at_level(
             };
             if let Block::List { ordered, items } = &child.block {
                 write_list_at_level(out, *ordered, items, graph, rels, bookmarks, numbering, level + 1)?;
+            }
+            else if let Block::Paragraph { content } = &child.block {
+                // A non-list child block sits one list level deeper than its
+                // parent item. Word keeps that relation through paragraph
+                // indentation, so the block does not collapse to the item's
+                // level the way a plain `write_block` call would leave it.
+                let indent = LIST_CHILD_INDENT_TWIPS * (level + 1);
+                write!(out, "<w:p><w:pPr><w:ind w:left=\"{indent}\"/></w:pPr>").map_err(map_fmt_error)?;
+                let bookmarked = bookmarks.contains(child_id);
+                if bookmarked {
+                    let _ = write!(out, "<w:bookmarkStart w:id=\"{}\" w:name=\"node_{}\"/>", child_id.0, child_id.0);
+                }
+                write_inlines(out, content, graph, rels)?;
+                if bookmarked {
+                    let _ = write!(out, "<w:bookmarkEnd w:id=\"{}\"/>", child_id.0);
+                }
+                out.push_str("</w:p>");
             }
             else {
                 write_block(out, *child_id, &child.block, graph, rels, bookmarks, numbering)?;
