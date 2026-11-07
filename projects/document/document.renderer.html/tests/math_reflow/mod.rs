@@ -66,6 +66,7 @@ fn math_context() -> FlowMathContext {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn inline_formulas_typeset_into_baseline_aligned_svg() {
     install_host_math_fonts();
     let flow = presentation(vec![FlowBlock::Paragraph {
@@ -84,6 +85,7 @@ fn inline_formulas_typeset_into_baseline_aligned_svg() {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn display_formulas_replace_the_code_block() {
     install_host_math_fonts();
     let flow = presentation(vec![FlowBlock::Math { formula: fraction(MathDisplay::Display) }]);
@@ -96,6 +98,7 @@ fn display_formulas_replace_the_code_block() {
 }
 
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn repeated_formulas_share_each_outline_once() {
     install_host_math_fonts();
     let flow = presentation(vec![
@@ -131,6 +134,7 @@ fn referenced_outline_ids(html: &str) -> Vec<String> {
 /// paints nothing, and a duplicate id silently rebinds definitions.  Both are
 /// invisible in a passing pixel diff, so they are asserted here.
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn every_shared_reference_resolves_to_one_definition() {
     install_host_math_fonts();
     let flow = presentation(vec![
@@ -162,6 +166,7 @@ fn every_shared_reference_resolves_to_one_definition() {
 /// numbers: sharing changes markup only, so HTML text keeps sitting on the
 /// formula axis instead of drifting by the descender.
 #[test]
+#[cfg_attr(not(math_font_pack), ignore = "needs a math font pack: set `VUTEX_FONT_DIR` to `VuTeX/projects/vutex.rs/fonts`")]
 fn inline_formula_geometry_matches_the_layout_metrics() {
     install_host_math_fonts();
     let formula = fraction(MathDisplay::Inline);

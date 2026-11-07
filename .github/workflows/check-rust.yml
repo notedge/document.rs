@@ -44,6 +44,11 @@ jobs:
       - name: Tests
         env:
           VUTEX_FONT_DIR: ${{ github.workspace }}/vutex-fonts/projects/vutex.rs/fonts
+          # The formula suites turn into `#[ignore]` when the pack is missing, so
+          # a local run without fonts is not misreported as broken. CI must never
+          # accept that state: with this set the presence test fails instead and
+          # the run is red.
+          VUTEX_REQUIRE_MATH_FONTS: "1"
         run: cargo test --release
 
   # `document.formats` defaults to the `markdown` feature, so the default
