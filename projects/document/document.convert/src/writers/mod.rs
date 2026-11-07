@@ -15,6 +15,46 @@ pub use pdf::write_document_pdf;
 
 use document_ir::{Block, DocumentGraph, Inline};
 
+/// Authored raw HTML nodes a writer can only keep as literal text.
+///
+/// A writer without an arbitrary HTML slot still has to keep the authored
+/// characters visible, so the occurrence count lets the report name the gap
+/// instead of calling the projection clean.
+pub(crate) fn raw_html_occurrences(graph: &DocumentGraph) -> usize {
+    let mut count = 0;
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Section { title, .. } => count += inline_raw_html_count(title),
+            Block::Paragraph { content } => count += inline_raw_html_count(content),
+            Block::List { items, .. } => {
+                for item in items {
+                    count += inline_raw_html_count(&item.content);
+                }
+            }
+            Block::RawHtml { .. } => count += 1,
+            _ => {}
+        }
+    }
+    count
+}
+
+fn inline_raw_html_count(inlines: &[Inline]) -> usize {
+    let mut count = 0;
+    for inline in inlines {
+        match inline {
+            Inline::RawHtml { .. } => count += 1,
+            Inline::Link { display, .. } => count += inline_raw_html_count(display),
+            Inline::Styled { children, .. } | Inline::Attributed { children, .. } => {
+                count += inline_raw_html_count(children);
+            }
+            Inline::Note { display: Some(display), .. } => count += inline_raw_html_count(display),
+            Inline::Citation { display: Some(display), .. } => count += inline_raw_html_count(display),
+            _ => {}
+        }
+    }
+    count
+}
+
 /// Image sources whose bound asset carries no bytes, in document order.
 ///
 /// A writer that cannot embed the raster still has to account for the

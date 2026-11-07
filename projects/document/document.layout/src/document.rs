@@ -350,6 +350,21 @@ fn reference_target_dropped_diagnostic(target: NodeId) -> Diagnostic {
     }
 }
 
+/// The loss reported when authored raw HTML reaches a PDF page.
+///
+/// A page has no arbitrary HTML slot, so the markup cannot be rendered. Its
+/// text is painted as literal source lines and the missing slot is named
+/// instead of letting the block disappear from the page.
+fn raw_html_flattened_diagnostic() -> Diagnostic {
+    Diagnostic {
+        code: "export.pdf.raw_html_flattened".to_string(),
+        severity: Severity::Warning,
+        message: "the PDF target has no arbitrary HTML slot, so authored raw HTML is painted as its literal markup text"
+            .to_string(),
+        span: None,
+    }
+}
+
 /// The loss reported when an image title reaches a PDF page.
 ///
 /// A page image slot has no annotation or alternate-text channel, so the title
@@ -963,6 +978,14 @@ impl<'a> PageBuilder<'a> {
                 Inline::Note { label, display: None } => {
                     flow.pending.flush(&mut flow.atoms);
                     flow.atoms.extend(split_inline_atoms(&superscript_label(label), face, href, title));
+                }
+                // The PDF page has no arbitrary HTML slot, and `plain_text`
+                // would erase the node's content entirely. The literal markup
+                // stays in the flow so its visible text reaches the page, and
+                // the missing slot is reported.
+                Inline::RawHtml { html } => {
+                    self.diagnostics.push(raw_html_flattened_diagnostic());
+                    flow.pending.push(html, face, href, title, &mut flow.atoms);
                 }
                 other => flow.pending.push(&other.plain_text(), face, href, title, &mut flow.atoms),
             }
@@ -1731,8 +1754,17 @@ impl<'a> PageBuilder<'a> {
                     message: format!("opaque block `{kind}` has no layout meaning and was left out of the page"),
                     span: None,
                 }),
-                // Raw HTML is emitted as-is at render time; layout drops it.
-                Block::RawHtml { .. } => {}
+                // The PDF page has no arbitrary HTML slot, but dropping the
+                // block would drop its authored text as well. The markup stays
+                // visible as literal source lines and the missing slot is
+                // named so the report never reads as clean.
+                Block::RawHtml { html } => {
+                    self.diagnostics.push(raw_html_flattened_diagnostic());
+                    for line in html.lines() {
+                        let content = [Inline::Text { text: line.to_owned() }];
+                        self.emit_paragraph(&content, indent);
+                    }
+                }
             }
         }
     }

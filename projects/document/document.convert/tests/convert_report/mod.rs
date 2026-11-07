@@ -1,4 +1,4 @@
-use document_convert::{convert_bytes, convert_bytes_with_body_faces, write_document_pdf};
+use document_convert::{convert_bytes, convert_bytes_with_body_faces, write_document_docx, write_document_pdf};
 use document_formats::import::{markdown::import_markdown_bytes, pdf::import_pdf_bytes};
 use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, SemanticStatus, TableCell, TableRow};
 
@@ -565,4 +565,75 @@ fn markdown_missing_image_to_pdf_reports_import_and_export_loss() {
     );
     let report = serde_json::from_str::<serde_json::Value>(&output.report_json).expect("report");
     assert_eq!(report["status"].as_str(), Some("success_with_loss"), "{report}");
+}
+
+#[test]
+fn pdf_export_paints_raw_html_blocks_and_inline_markup() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(12));
+    graph.push_block(Block::RawHtml { html: "<div>ZZ_RAWBLOCK_ZZ</div>".into() });
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Text { text: "Before ".into() },
+            Inline::RawHtml { html: "<span>ZZ_RAWINLINE_ZZ</span>".into() },
+            Inline::Text { text: " after.".into() },
+        ],
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert_eq!(
+        codes.iter().filter(|code| **code == "export.pdf.raw_html_flattened").count(),
+        2,
+        "the block and the inline each name the missing HTML slot: {codes:?}"
+    );
+
+    let reopened = convert_bytes("pdf", "markdown", "raw.pdf", pdf, None).expect("reopen PDF");
+    assert!(reopened.markdown.contains("ZZ_RAWBLOCK_ZZ"), "{}", reopened.markdown);
+    assert!(reopened.markdown.contains("ZZ_RAWINLINE_ZZ"), "{}", reopened.markdown);
+}
+
+#[test]
+fn pdf_export_of_plain_text_does_not_report_raw_html() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(13));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Plain body.".into() }] });
+
+    write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(!codes.contains(&"export.pdf.raw_html_flattened"), "{codes:?}");
+}
+
+#[test]
+fn docx_export_keeps_raw_html_text_and_reports_flattening() {
+    let mut graph = DocumentGraph::new(DocumentId(14));
+    graph.push_block(Block::RawHtml { html: "<div>ZZ_DOCXRAWBLOCK_ZZ</div>".into() });
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Text { text: "Before ".into() },
+            Inline::RawHtml { html: "<span>ZZ_DOCXRAWINLINE_ZZ</span>".into() },
+            Inline::Text { text: " after.".into() },
+        ],
+    });
+
+    let docx = write_document_docx(&mut graph).expect("write DOCX");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(
+        codes.contains(&"export.docx.raw_html_flattened"),
+        "a DOCX page has no arbitrary HTML slot and must name the projection: {codes:?}"
+    );
+
+    let reopened = convert_bytes("docx", "markdown", "raw.docx", docx, None).expect("reopen DOCX");
+    assert!(reopened.markdown.contains("ZZ_DOCXRAWBLOCK_ZZ"), "{}", reopened.markdown);
+    assert!(reopened.markdown.contains("ZZ_DOCXRAWINLINE_ZZ"), "{}", reopened.markdown);
+}
+
+#[test]
+fn docx_export_of_plain_text_does_not_report_raw_html() {
+    let mut graph = DocumentGraph::new(DocumentId(15));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Plain body.".into() }] });
+
+    write_document_docx(&mut graph).expect("write DOCX");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(!codes.contains(&"export.docx.raw_html_flattened"), "{codes:?}");
 }
