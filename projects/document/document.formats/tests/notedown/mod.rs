@@ -236,6 +236,38 @@ fn notedown_import_lowers_images_as_semantic_inline_images() {
 }
 
 #[test]
+fn notedown_inline_forms_never_lower_to_an_unnamed_span_style() {
+    let source = "**bold** *italic* ~~old~~ `code` [home](https://example.com) ![diagram](assets/diagram.png)\n";
+    let graph = import_notedown_bytes("inline-forms.nd", source).expect("import notedown");
+    let styles: Vec<&str> = graph
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::Paragraph { content } => Some(
+                content
+                    .iter()
+                    .filter_map(|inline| match inline {
+                        Inline::Styled { style, .. } => Some(style.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(styles, ["bold", "italic", "strike"], "syntax names must never leak as semantic styles: {styles:?}");
+    assert!(!styles.contains(&"span"), "a grouping node must not become a style: {styles:?}");
+
+    let markdown = export_markdown(&graph).expect("export markdown");
+    for expected in
+        ["**bold**", "*italic*", "~~old~~", "`code`", "[home](https://example.com)", "![diagram](assets/diagram.png)"]
+    {
+        assert!(markdown.contains(expected), "{expected} missing from {markdown:?}");
+    }
+}
+
+#[test]
 fn notedown_import_lowers_pipe_tables() {
     let source = "| Name | Value |\n|------|-------|\n| Alpha | 1 |\n| Beta | 2 |\n";
     let graph = import_notedown_bytes("table.nd", source).expect("import notedown");

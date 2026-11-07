@@ -224,7 +224,53 @@ impl From<WireDocumentGraph> for DocumentGraph {
             }
             graph.blocks[table_index].block = Block::Table { caption, head, body, foot: Vec::new() };
         }
+        for node in &mut graph.blocks {
+            normalize_block_inline_styles(&mut node.block);
+        }
         graph
+    }
+}
+
+/// Canonicalize style aliases that older wire payloads and format adapters
+/// used, without inventing a style for names outside the spelling table.
+fn normalize_inline_styles(inlines: &mut [Inline]) {
+    for inline in inlines {
+        match inline {
+            Inline::Styled { style, children } => {
+                let canonical = match style.as_str() {
+                    "strong" => Some("bold"),
+                    "emph" | "emphasis" => Some("italic"),
+                    "strikethrough" | "strikeout" => Some("strike"),
+                    "sup" => Some("superscript"),
+                    "sub" => Some("subscript"),
+                    _ => None,
+                };
+                if let Some(canonical) = canonical {
+                    style.clear();
+                    style.push_str(canonical);
+                }
+                normalize_inline_styles(children);
+            }
+            Inline::Attributed { children, .. } => normalize_inline_styles(children),
+            Inline::Link { display, .. } => normalize_inline_styles(display),
+            Inline::Image { alt, .. } => normalize_inline_styles(alt),
+            Inline::Note { display: Some(display), .. } => normalize_inline_styles(display),
+            Inline::Citation { display: Some(display), .. } => normalize_inline_styles(display),
+            _ => {}
+        }
+    }
+}
+
+fn normalize_block_inline_styles(block: &mut Block) {
+    match block {
+        Block::Paragraph { content } => normalize_inline_styles(content),
+        Block::Section { title, .. } => normalize_inline_styles(title),
+        Block::List { items, .. } => {
+            for item in items {
+                normalize_inline_styles(&mut item.content);
+            }
+        }
+        _ => {}
     }
 }
 

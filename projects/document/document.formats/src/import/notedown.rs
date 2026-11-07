@@ -402,6 +402,13 @@ fn collect_inlines(node: RedNode<NoteLanguage>, source: &SourceText, losses: &mu
     let mut inlines = Vec::new();
     for child in node.children() {
         match child {
+            // A nested root is a transparent grouping node, not an authored
+            // style. Splicing its children avoids inventing `span`.
+            RedTree::Node(child_node) if matches!(child_node.element_type(), NoteElementType::Root) => {
+                for inline in collect_inlines(child_node, source, losses) {
+                    push_inline(&mut inlines, inline);
+                }
+            }
             RedTree::Node(child_node) => {
                 let link_like = matches!(child_node.element_type(), NoteElementType::Link | NoteElementType::Image);
                 let trailing = if link_like { trailing_link_whitespace(&child_node.text(source)) } else { String::new() };
@@ -450,18 +457,7 @@ fn lower_inline_node(node: RedNode<NoteLanguage>, source: &SourceText, losses: &
     match node.element_type() {
         NoteElementType::Link => parse_inline_link(node, source, losses),
         NoteElementType::Image => parse_inline_image(node, source),
-        NoteElementType::Root => {
-            let children = collect_inlines(node, source, losses);
-            if children.is_empty() {
-                None
-            }
-            else if children.len() == 1 {
-                children.first().cloned()
-            }
-            else {
-                Some(Inline::Styled { style: "span".into(), children })
-            }
-        }
+        NoteElementType::Root => collect_inlines(node, source, losses).into_iter().next(),
         NoteElementType::Token(token) => match token {
             NoteTokenType::Text | NoteTokenType::HeadingText | NoteTokenType::LinkText => {
                 Some(Inline::Text { text: node.text(source).into_owned() })

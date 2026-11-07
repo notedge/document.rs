@@ -217,7 +217,7 @@ fn paragraph_inlines(paragraph: &Paragraph) -> Vec<Inline> {
         }
         let mut inline = Inline::Text { text: run.text.clone() };
         for (flag, style) in [
-            (run.style.bold, "strong"),
+            (run.style.bold, "bold"),
             (run.style.italic, "italic"),
             (run.style.underline, "underline"),
             (run.style.strike, "strike"),

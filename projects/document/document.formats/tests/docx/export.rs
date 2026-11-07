@@ -1078,7 +1078,7 @@ fn docx_export_keeps_opaque_and_raw_html_payloads_visible() {
             Inline::Citation { key: "doe2020".into(), display: None },
             Inline::Text { text: " ".into() },
             Inline::Attributed {
-                attributes: document_ir::Attributes { id: None, classes: Vec::new(), pairs: Vec::new() },
+                attributes: document_ir::Attributes { id: Some("caption".into()), classes: Vec::new(), pairs: Vec::new() },
                 children: vec![Inline::Text { text: "caption".into() }],
             },
             Inline::Text { text: " ".into() },

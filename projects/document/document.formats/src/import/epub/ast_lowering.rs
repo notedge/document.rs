@@ -565,11 +565,7 @@ fn lower_list_item(
                             push_inline(&mut content, inline);
                         }
                     }
-                    _ => {
-                        if let Some(inline) = lower_inline_element(child_element, graph, member_path, losses) {
-                            push_inline(&mut content, inline);
-                        }
-                    }
+                    _ => push_inline_element(child_element, graph, member_path, losses, &mut content),
                 }
             }
             HtmlNode::Comment(_) => {}
@@ -681,14 +677,40 @@ fn collect_inlines_from_element(
             }
             HtmlNode::Element(child_element) => {
                 note_inline_style_loss(child_element, losses);
-                if let Some(inline) = lower_inline_element(child_element, graph, member_path, losses) {
-                    push_inline(&mut inlines, inline);
-                }
+                push_inline_element(child_element, graph, member_path, losses, &mut inlines);
             }
             HtmlNode::Comment(_) => {}
         }
     }
     inlines
+}
+
+/// Lower one inline element into the surrounding run. A span is a transparent
+/// grouping node, so its children are spliced in place instead of inventing an
+/// unnamed style. Authored span attributes stay as an attributed wrapper.
+fn push_inline_element(
+    element: &Element,
+    graph: &mut DocumentGraph,
+    member_path: Option<&str>,
+    losses: &mut Vec<LossMarker>,
+    inlines: &mut Vec<Inline>,
+) {
+    if element.tag_name.eq_ignore_ascii_case("span") {
+        let children = collect_inlines_from_element(element, graph, member_path, losses);
+        let attributes = inline_attributes(element);
+        if attributes.is_empty() {
+            for inline in children {
+                push_inline(inlines, inline);
+            }
+        }
+        else if !children.is_empty() {
+            push_inline(inlines, Inline::Attributed { attributes, children });
+        }
+        return;
+    }
+    if let Some(inline) = lower_inline_element(element, graph, member_path, losses) {
+        push_inline(inlines, inline);
+    }
 }
 
 fn lower_inline_element(
@@ -751,18 +773,6 @@ fn lower_inline_element(
                 style: style.into(),
                 children: collect_inlines_from_element(element, graph, member_path, losses),
             })
-        }
-        "span" => {
-            let children = collect_inlines_from_element(element, graph, member_path, losses);
-            if children.is_empty() {
-                None
-            }
-            else if children.len() == 1 {
-                children.first().cloned()
-            }
-            else {
-                Some(Inline::Styled { style: tag, children })
-            }
         }
         _ => {
             let text = descendant_text(element);

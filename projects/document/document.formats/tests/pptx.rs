@@ -195,6 +195,61 @@ fn ir_projection_keeps_slide_sections_tables_and_refusals() {
     assert!(sized, "run sizes survive the projection");
 }
 
+/// Collects style names from every inline tree reachable from a block, including
+/// table cell child blocks.
+fn collect_styles(graph: &DocumentGraph, block: &Block, styles: &mut Vec<String>) {
+    match block {
+        Block::Paragraph { content } => collect_inline_styles(content, styles),
+        Block::Section { title, .. } => collect_inline_styles(title, styles),
+        Block::List { items, .. } => {
+            for item in items {
+                collect_inline_styles(&item.content, styles);
+            }
+        }
+        Block::Table { head, body, foot, .. } => {
+            for row in head.iter().chain(body).chain(foot) {
+                for cell in &row.cells {
+                    for id in &cell.children {
+                        if let Some(node) = graph.block(*id) {
+                            collect_styles(graph, &node.block, styles);
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_inline_styles(inlines: &[Inline], styles: &mut Vec<String>) {
+    for inline in inlines {
+        match inline {
+            Inline::Styled { style, children } => {
+                styles.push(style.clone());
+                collect_inline_styles(children, styles);
+            }
+            Inline::Attributed { children, .. } => collect_inline_styles(children, styles),
+            Inline::Link { display, .. } => collect_inline_styles(display, styles),
+            Inline::Image { alt, .. } => collect_inline_styles(alt, styles),
+            Inline::Note { display: Some(display), .. } => collect_inline_styles(display, styles),
+            Inline::Citation { display: Some(display), .. } => collect_inline_styles(display, styles),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn pptx_bold_runs_use_the_canonical_bold_style_name() {
+    let presentation = presentation();
+    let graph = presentation_to_graph(&presentation, &GraphOptions::default());
+    let mut styles = Vec::new();
+    for node in &graph.blocks {
+        collect_styles(&graph, &node.block, &mut styles);
+    }
+    assert!(styles.iter().any(|style| style == "bold"), "bold runs must keep their emphasis: {styles:?}");
+    assert!(!styles.iter().any(|style| style == "strong"), "the legacy `strong` spelling must not leak: {styles:?}");
+}
+
 /// A measurer that charges 1.5 em per character, so it wraps earlier than the
 /// estimate and proves the canvas accepts injected metrics.
 struct WideMetrics;

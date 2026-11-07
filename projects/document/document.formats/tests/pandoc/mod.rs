@@ -555,3 +555,88 @@ fn export_writes_numeric_metadata_as_strings_and_reports_loss() {
     assert!(matches!(&exported.document.meta[1].1, MetaValue::String(value) if value == "0.25"));
     assert!(exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.metadata_number"), "{:?}", exported.losses);
 }
+
+fn note_labels(graph: &DocumentGraph) -> Vec<String> {
+    graph
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            IrBlock::Paragraph { content } => Some(
+                content
+                    .iter()
+                    .filter_map(|inline| match inline {
+                        IrInline::Note { label, .. } => Some(label.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn pandoc_notes_receive_deterministic_distinct_labels() {
+    let document = PandocDocument {
+        api_version: API_VERSION,
+        meta: Vec::new(),
+        blocks: vec![Block::Para(vec![
+            Inline::Str("first".into()),
+            Inline::Note(vec![Block::Para(vec![Inline::Str("body one".into())])]),
+            Inline::Str(" second".into()),
+            Inline::Note(vec![Block::Para(vec![Inline::Str("body two".into())])]),
+        ])],
+    };
+    let text = encode_text(&document);
+    let graph = import(&text);
+    assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
+    assert_eq!(note_labels(&graph), ["pandoc-note-1", "pandoc-note-2"]);
+    assert_eq!(
+        note_labels(&import(&text)),
+        ["pandoc-note-1", "pandoc-note-2"],
+        "labels must not depend on import order or clock"
+    );
+}
+
+#[test]
+fn pandoc_citations_without_a_key_are_dropped_with_a_loss() {
+    let document = PandocDocument {
+        api_version: API_VERSION,
+        meta: Vec::new(),
+        blocks: vec![Block::Para(vec![
+            Inline::Str("before ".into()),
+            Inline::Cite {
+                citations: vec![Citation {
+                    id: "  ".into(),
+                    prefix: Vec::new(),
+                    suffix: Vec::new(),
+                    mode: CitationMode::Normal,
+                    note_num: 0,
+                    hash: 0,
+                }],
+                inlines: vec![Inline::Str("[?]".into())],
+            },
+            Inline::Str("after".into()),
+        ])],
+    };
+    let graph = import(&encode_text(&document));
+    let content = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            IrBlock::Paragraph { content } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("paragraph");
+    assert_eq!(content.iter().map(document_ir::Inline::plain_text).collect::<String>(), "before after");
+    assert!(!content.iter().any(|inline| matches!(inline, IrInline::Citation { .. })));
+    let loss = graph
+        .coverage
+        .loss
+        .iter()
+        .find(|loss| loss.code == "import.pandoc-json.empty_citation")
+        .expect("a keyless citation must be recorded");
+    assert_eq!(loss.status, SemanticStatus::Unsupported);
+    assert!(graph.validate().is_valid());
+}

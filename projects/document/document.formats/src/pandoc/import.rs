@@ -90,11 +90,12 @@ struct Importer {
     graph: DocumentGraph,
     policy: PandocLossPolicy,
     losses: Vec<LossMarker>,
+    next_note: u32,
 }
 
 impl Importer {
     fn new(label: &str, policy: PandocLossPolicy) -> Self {
-        Self { graph: DocumentGraph::new(document_id_for(label)), policy, losses: Vec::new() }
+        Self { graph: DocumentGraph::new(document_id_for(label)), policy, losses: Vec::new(), next_note: 1 }
     }
 
     fn lower(mut self, document: PandocDocument) -> Result<DocumentGraph, FormatError> {
@@ -687,6 +688,15 @@ impl Importer {
             }
             Inline::Cite { citations, inlines } => {
                 let key = citations.first().map(|citation| citation.id.clone()).unwrap_or_default();
+                if key.trim().is_empty() {
+                    self.structural_loss(
+                        pointer,
+                        "import.pandoc-json.empty_citation",
+                        "citation has no key and was dropped",
+                        SemanticStatus::Unsupported,
+                    )?;
+                    return Ok(None);
+                }
                 let details_lost = citations.len() > 1
                     || citations.iter().any(|citation| {
                         !citation.prefix.is_empty() || !citation.suffix.is_empty() || citation.mode != CitationMode::Normal
@@ -789,8 +799,10 @@ impl Importer {
                     else {
                         unreachable!()
                     };
+                    let label = format!("pandoc-note-{}", self.next_note);
+                    self.next_note += 1;
                     return Ok(Some(IrInline::Note {
-                        label: String::new(),
+                        label,
                         display: Some(self.lower_inlines(inlines, &format!("{pointer}/c/0/c"))?),
                     }));
                 }
@@ -800,10 +812,9 @@ impl Importer {
                     "note bodies other than a single paragraph were flattened into inline display content",
                     SemanticStatus::Partial,
                 )?;
-                Ok(Some(IrInline::Note {
-                    label: String::new(),
-                    display: Some(self.flatten_blocks(blocks, &format!("{pointer}/c"))?),
-                }))
+                let label = format!("pandoc-note-{}", self.next_note);
+                self.next_note += 1;
+                Ok(Some(IrInline::Note { label, display: Some(self.flatten_blocks(blocks, &format!("{pointer}/c"))?) }))
             }
             Inline::Span { attr, inlines } => Ok(Some(IrInline::Attributed {
                 attributes: attributes(attr),

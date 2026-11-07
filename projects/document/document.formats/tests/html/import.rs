@@ -594,6 +594,35 @@ fn html_import_preserves_authored_inline_identity_and_classes() {
 }
 
 #[test]
+fn html_import_records_dropped_inline_style_declarations() {
+    let source = r#"<body><p><span style="color: red">red</span> tail</p></body>"#;
+    let graph = import_html_text("inline-style.html", source).expect("import html");
+    let (index, loss) = graph
+        .coverage
+        .loss
+        .iter()
+        .enumerate()
+        .find(|(_, loss)| loss.code == "import.html.inline_style_unsupported")
+        .expect("inline CSS must be recorded as a loss");
+    assert_eq!(loss.status, SemanticStatus::Unsupported);
+    let span = graph.loss_span(index).expect("the loss keeps the authored span");
+    assert!(
+        source.get(span.start as usize..span.end as usize).is_some(),
+        "the recorded span must point inside the source: {span:?}"
+    );
+
+    let Block::Paragraph { content } = &graph.blocks[0].block
+    else {
+        panic!("paragraph expected")
+    };
+    assert_eq!(content.iter().map(Inline::plain_text).collect::<String>(), "red tail");
+    assert!(
+        !content.iter().any(|inline| matches!(inline, Inline::Styled { .. } | Inline::Attributed { .. })),
+        "a style declaration must not be invented as a semantic style: {content:?}"
+    );
+}
+
+#[test]
 fn html_import_maps_inline_styles_to_canonical_ir_names() {
     let graph = import_html_text(
         "styles.html",

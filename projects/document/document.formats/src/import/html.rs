@@ -1544,6 +1544,18 @@ fn inline_attributes(element: &Element, graph: &mut DocumentGraph) -> Attributes
             attributes.classes =
                 attribute.value.as_deref().unwrap_or_default().split_whitespace().map(str::to_string).collect();
         }
+        else if attribute.name.eq_ignore_ascii_case("style") {
+            // CSS declarations have no IR field. Recording the loss keeps the
+            // dropped style from passing through silently.
+            graph.push_loss_at(
+                LossMarker {
+                    code: "import.html.inline_style_unsupported".into(),
+                    message: "inline CSS declarations have no IR field and were dropped".into(),
+                    status: SemanticStatus::Unsupported,
+                },
+                element_source_span(element),
+            );
+        }
         else if attribute.value.is_none() {
             // Boolean attribute: HTML spells it without a value. Keeping it as
             // an empty valued pair means the exporter can still write it.

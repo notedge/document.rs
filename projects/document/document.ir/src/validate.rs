@@ -93,6 +93,28 @@ pub enum ValidationIssue {
         /// Inline kind name for diagnostics.
         kind: String,
     },
+    /// Inline image has neither a source location nor a bound asset.
+    EmptyInlineImageSource {
+        /// Source node id.
+        from: NodeId,
+    },
+    /// Inline attributed wrapper carries no attribute at all.
+    EmptyInlineAttributes {
+        /// Source node id.
+        from: NodeId,
+    },
+    /// Inline attribute carries an empty id, class, or key.
+    EmptyInlineAttributeName {
+        /// Source node id.
+        from: NodeId,
+        /// Attribute slot name for diagnostics.
+        slot: String,
+    },
+    /// Inline styled wrapper carries an empty style name.
+    EmptyInlineStyle {
+        /// Source node id.
+        from: NodeId,
+    },
     /// Relation endpoint refers to a missing node or asset.
     UnknownRelationEndpoint {
         /// Relation id with the invalid endpoint.
@@ -454,11 +476,14 @@ fn check_inline_refs(from: NodeId, inlines: &[Inline], context: &InlineContext<'
                 }
                 check_inline_refs(from, display, context, report);
             }
-            Inline::Image { alt, asset, .. } => {
+            Inline::Image { source, alt, asset, .. } => {
                 if let Some(asset) = asset {
                     if !context.asset_ids.contains(asset) {
                         report.issues.push(ValidationIssue::UnknownInlineImageAsset { from, asset: *asset });
                     }
+                }
+                else if source.trim().is_empty() {
+                    report.issues.push(ValidationIssue::EmptyInlineImageSource { from });
                 }
                 check_inline_refs(from, alt, context, report);
             }
@@ -474,7 +499,29 @@ fn check_inline_refs(from: NodeId, inlines: &[Inline], context: &InlineContext<'
                     check_inline_refs(from, display, context, report);
                 }
             }
-            Inline::Styled { children, .. } | Inline::Attributed { children, .. } => {
+            Inline::Styled { style, children } => {
+                if style.trim().is_empty() {
+                    report.issues.push(ValidationIssue::EmptyInlineStyle { from });
+                }
+                check_inline_refs(from, children, context, report);
+            }
+            Inline::Attributed { attributes, children } => {
+                if attributes.is_empty() {
+                    report.issues.push(ValidationIssue::EmptyInlineAttributes { from });
+                }
+                if attributes.id.as_deref().is_some_and(|id| id.trim().is_empty()) {
+                    report.issues.push(ValidationIssue::EmptyInlineAttributeName { from, slot: "id".into() });
+                }
+                for class in &attributes.classes {
+                    if class.trim().is_empty() {
+                        report.issues.push(ValidationIssue::EmptyInlineAttributeName { from, slot: "class".into() });
+                    }
+                }
+                for pair in &attributes.pairs {
+                    if pair.key.trim().is_empty() {
+                        report.issues.push(ValidationIssue::EmptyInlineAttributeName { from, slot: "key".into() });
+                    }
+                }
                 check_inline_refs(from, children, context, report);
             }
             _ => {}
