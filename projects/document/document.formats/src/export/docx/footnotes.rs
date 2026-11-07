@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use document_ir::{Block, DocumentGraph};
+use document_ir::{Block, DocumentGraph, Inline};
 
 use crate::FormatError;
 
@@ -51,6 +51,23 @@ pub fn collect_footnote_catalog(graph: &DocumentGraph) -> FootnoteCatalog {
             }
         }
     }
+    // An inline note may carry its body in `Note.display` without a separate
+    // `footnote_definition` block. `render_footnotes_xml` already writes
+    // catalog bodies, so collecting the display here is what keeps the whole
+    // note body from disappearing on export. An explicit definition still wins
+    // when both forms name the same label.
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Section { title, .. } => collect_inline_notes(title, &mut bodies),
+            Block::Paragraph { content } => collect_inline_notes(content, &mut bodies),
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_inline_notes(&item.content, &mut bodies);
+                }
+            }
+            _ => {}
+        }
+    }
 
     let mut used = BTreeSet::new();
     let mut ids = BTreeMap::new();
@@ -75,6 +92,28 @@ pub fn collect_footnote_catalog(graph: &DocumentGraph) -> FootnoteCatalog {
     }
 
     FootnoteCatalog { bodies, ids }
+}
+
+/// Collect inline note bodies, including notes nested in styled or linked runs.
+fn collect_inline_notes(inlines: &[Inline], bodies: &mut BTreeMap<String, String>) {
+    for inline in inlines {
+        match inline {
+            Inline::Note { label, display: Some(display) } => {
+                let body: String = display.iter().map(Inline::plain_text).collect();
+                let body = body.trim();
+                if !body.is_empty() {
+                    bodies.entry(label.clone()).or_insert_with(|| body.to_string());
+                }
+                collect_inline_notes(display, bodies);
+            }
+            Inline::Styled { children, .. } | Inline::Attributed { children, .. } | Inline::Link { display: children, .. } => {
+                collect_inline_notes(children, bodies)
+            }
+            Inline::Image { alt, .. } => collect_inline_notes(alt, bodies),
+            Inline::Citation { display: Some(display), .. } => collect_inline_notes(display, bodies),
+            _ => {}
+        }
+    }
 }
 
 /// Parse GFM footnote definition text such as `[^1]: body` or `[^note]: body`.

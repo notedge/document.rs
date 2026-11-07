@@ -1371,3 +1371,33 @@ fn docx_export_keeps_table_caption_list_start_and_reference_target() {
     assert!(xml.contains(r#"<w:bookmarkStart w:id="1" w:name="node_1"/>"#), "the reference target needs a bookmark: {xml}");
     assert!(xml.contains(r#"<w:hyperlink w:anchor="node_1">"#), "the reference must hyperlink to its target: {xml}");
 }
+
+#[test]
+fn docx_export_writes_note_display_bodies_into_footnotes_xml() {
+    let mut graph = DocumentGraph::new(DocumentId(56));
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Text { text: "Body".into() },
+            Inline::Note { label: "note".into(), display: Some(vec![Inline::Text { text: "ZZ_NOTE_BODY_ZZ".into() }]) },
+        ],
+    });
+
+    let exported = export_docx_bytes(&graph).expect("export note DOCX");
+    let payload = String::from_utf8_lossy(&exported);
+    assert!(payload.contains("word/footnotes.xml"), "a note display body needs a footnotes part: {payload}");
+    assert!(payload.contains("ZZ_NOTE_BODY_ZZ"), "the note display body must reach footnotes.xml: {payload}");
+    assert!(payload.contains(r#"<w:footnoteReference w:id="1"/>"#), "the note must reference the part: {payload}");
+}
+
+#[test]
+fn docx_export_of_a_note_without_display_keeps_the_token_and_no_footnotes_part() {
+    let mut graph = DocumentGraph::new(DocumentId(57));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Text { text: "Body".into() }, Inline::Note { label: "note".into(), display: None }],
+    });
+
+    let exported = export_docx_bytes(&graph).expect("export note DOCX");
+    let payload = String::from_utf8_lossy(&exported);
+    assert!(!payload.contains("word/footnotes.xml"), "a note without a body must not invent a footnotes part: {payload}");
+    assert!(payload.contains("[^note]"), "the authored token must stay visible: {payload}");
+}
