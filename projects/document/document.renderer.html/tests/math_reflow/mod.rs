@@ -5,8 +5,10 @@ use std::path::{Path, PathBuf};
 use document_compose::math::FontStyle;
 use document_fonts::{MathFontPack, install_math_fonts};
 use document_ir::{MathAtom, MathClass, MathDisplay, MathExpression, MathFormula, MathFractionLine};
+use document_layout::math::layout_formula_for;
 use document_presentation::flow::{FlowBlock, FlowPresentation, FlowRun};
 use document_renderer_html::{FlowMathContext, render_html_reflow, render_html_reflow_with_math};
+use document_renderer_svg::math::render_formula_result;
 use document_text::math::MathFontFamily;
 
 /// Host font pack directory, overridable through `VUTEX_FONT_DIR`.
@@ -109,6 +111,81 @@ fn repeated_formulas_share_each_outline_once() {
     assert_eq!(html.markup.matches("<svg class=\"vutex-math-defs\"").count(), 1, "{}", html.markup);
 }
 
+/// Ids declared by the hidden definitions container, in document order.
+fn defined_outline_ids(html: &str) -> Vec<String> {
+    let start = html.find("<svg class=\"vutex-math-defs\"").expect("defs container");
+    let end = start + html[start..].find("</svg>").expect("defs container end");
+    html[start..end]
+        .split("<path id=\"")
+        .skip(1)
+        .map(|chunk| chunk[..chunk.find('"').expect("id terminator")].to_string())
+        .collect()
+}
+
+/// Ids referenced by `<use>` anywhere in the document, in document order.
+fn referenced_outline_ids(html: &str) -> Vec<String> {
+    html.split("<use href=\"#").skip(1).map(|chunk| chunk[..chunk.find('"').expect("href terminator")].to_string()).collect()
+}
+
+/// Sharing is only safe while every reference resolves: a dangling `<use>`
+/// paints nothing, and a duplicate id silently rebinds definitions.  Both are
+/// invisible in a passing pixel diff, so they are asserted here.
+#[test]
+fn every_shared_reference_resolves_to_one_definition() {
+    install_host_math_fonts();
+    let flow = presentation(vec![
+        FlowBlock::Paragraph {
+            runs: vec![math_run(fraction(MathDisplay::Inline)), text_run(" and "), math_run(fraction(MathDisplay::Inline))],
+        },
+        FlowBlock::Math { formula: fraction(MathDisplay::Display) },
+    ]);
+    let html = render_html_reflow_with_math(&flow, &math_context()).expect("reflow");
+    let defined = defined_outline_ids(&html.markup);
+    let referenced = referenced_outline_ids(&html.markup);
+    assert!(!defined.is_empty(), "{}", html.markup);
+    assert!(referenced.len() > defined.len(), "references {:?} definitions {:?}", referenced, defined);
+    let mut unique = defined.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), defined.len(), "outline ids must be unique: {defined:?}");
+    for id in &referenced {
+        assert!(defined.contains(id), "dangling reference `#{id}`, defined {defined:?}");
+    }
+    // The definitions must precede the content that uses them.
+    let defs_at = html.markup.find("<svg class=\"vutex-math-defs\"").expect("defs");
+    let flow_at = html.markup.find("class=\"vutex-flow\"").expect("flow article");
+    assert!(defs_at < flow_at, "definitions must be resolvable before the body: {defs_at} vs {flow_at}");
+    assert_eq!(html.markup.matches("<svg class=\"vutex-math-defs\"").count(), 1, "{}", html.markup);
+}
+
+/// The wrapper's width, height and baseline offset must be the layout's own
+/// numbers: sharing changes markup only, so HTML text keeps sitting on the
+/// formula axis instead of drifting by the descender.
+#[test]
+fn inline_formula_geometry_matches_the_layout_metrics() {
+    install_host_math_fonts();
+    let formula = fraction(MathDisplay::Inline);
+    let (result, _root, diagnostics) = layout_formula_for(&formula, 11.0, MathFontFamily::LmMath).expect("layout");
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    let standalone = render_formula_result(&result);
+
+    let flow = presentation(vec![FlowBlock::Paragraph { runs: vec![math_run(formula)] }]);
+    let html = render_html_reflow_with_math(&flow, &math_context()).expect("reflow");
+
+    let style = format!(
+        "width:{:.3}pt;height:{:.3}pt;vertical-align:-{:.3}pt",
+        standalone.width,
+        standalone.height,
+        standalone.height - standalone.baseline,
+    );
+    assert!(html.markup.contains(&style), "expected `{style}` in {}", html.markup);
+    // The embedded viewport is the standalone one, so a preview and the page
+    // scale the same outlines into the same box.
+    let viewport = &standalone.markup["<svg ".len()..];
+    let viewport = &viewport[..viewport.find('>').expect("root tag")];
+    assert!(html.markup.contains(viewport), "embedded viewport differs from `{viewport}`");
+}
+
 #[test]
 fn formulas_without_math_context_keep_their_source() {
     let flow = presentation(vec![
@@ -119,6 +196,7 @@ fn formulas_without_math_context_keep_their_source() {
     assert!(html.contains("<pre data-vutex-block=\"code\"><code>\\frac{a}{b}</code></pre>"), "{html}");
     assert!(html.contains("\\frac{a}{b}"), "{html}");
     assert!(!html.contains("<svg"), "{html}");
+    assert!(!html.contains("<use"), "the fallback must not reference outlines it never defined: {html}");
 }
 
 #[test]

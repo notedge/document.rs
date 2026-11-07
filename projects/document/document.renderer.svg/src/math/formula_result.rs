@@ -533,6 +533,62 @@ mod tests {
         );
     }
 
+    /// One formula with the same glyph painted twice at different positions.
+    fn repeated_glyph_result() -> FormulaLayoutResult {
+        let mut res = rect_result();
+        let glyph = |x: f64| PaintNode::GlyphRun {
+            font_id: "lmr".to_string(),
+            glyph_ids: vec![65],
+            chars: vec![Some('A')],
+            family: "latin-modern-math".to_string(),
+            positions: vec![(Fixed::from_f64(x), Fixed::from_f64(4.0))],
+            size: Fixed::from_f64(16.0),
+            path_data: vec![Some("M 0 0 L 1 1 Z".to_string())],
+            spans: vec![None],
+        };
+        res.paint =
+            PaintNode::Group { children: vec![glyph(3.0), glyph(9.0)], translate_x: Fixed::ZERO, translate_y: Fixed::ZERO };
+        res
+    }
+
+    /// The standalone path must stay liftable out of the document: no `<use>`,
+    /// no shared ids, one self-contained path per occurrence.  Hosts that need
+    /// a single-formula preview rely on this.
+    #[test]
+    fn standalone_render_never_references_shared_outlines() {
+        let out = render_formula_result(&repeated_glyph_result());
+        assert!(!out.markup.contains("<use"), "standalone SVG must not reference defs:\n{}", out.markup);
+        assert!(!out.markup.contains("id=\"vutex-g"), "standalone SVG must not declare shared ids:\n{}", out.markup);
+        assert_eq!(out.markup.matches("<path d=").count(), 2, "each occurrence paints its own outline:\n{}", out.markup);
+    }
+
+    /// Sharing replaces repeated outlines with references: one definition per
+    /// distinct `d`, one `<use>` per occurrence, and the definitions name the
+    /// same ids the markup points at.
+    #[test]
+    fn shared_outlines_are_written_once_and_referenced() {
+        let mut glyphs = GlyphDefs::new();
+        let out = render_formula_result_with_glyph_defs(&repeated_glyph_result(), &mut glyphs);
+        assert_eq!(glyphs.len(), 1, "the same outline must be registered once");
+        assert_eq!(glyphs.defs().matches("<path id=\"vutex-g0\"").count(), 1, "{}", glyphs.defs());
+        assert_eq!(out.markup.matches("<use href=\"#vutex-g0\"").count(), 2, "{}", out.markup);
+        assert!(!out.markup.contains("<path d="), "shared markup paints no outline inline:\n{}", out.markup);
+    }
+
+    /// Sharing is a markup change only: the viewport and baseline a caller
+    /// aligns to must not move, or HTML text would drift off the formula axis.
+    #[test]
+    fn sharing_keeps_viewport_and_baseline() {
+        let res = repeated_glyph_result();
+        let alone = render_formula_result(&res);
+        let mut glyphs = GlyphDefs::new();
+        let shared = render_formula_result_with_glyph_defs(&res, &mut glyphs);
+        assert_eq!(alone.width.to_bits(), shared.width.to_bits());
+        assert_eq!(alone.height.to_bits(), shared.height.to_bits());
+        assert_eq!(alone.baseline.to_bits(), shared.baseline.to_bits());
+        assert_eq!(alone.markup.split('>').next(), shared.markup.split('>').next(), "root viewport differs");
+    }
+
     /// A glyph the face ships no outline for is skipped with a warning and
     /// never pulled in through a host font, matching the document path.  The
     /// warning keeps the glyph's source span so a host can point at it.
