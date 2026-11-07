@@ -222,6 +222,93 @@ fn docx_import_reports_field_semantics_that_are_not_in_ir() {
 }
 
 #[test]
+fn docx_import_reads_citation_keys_from_simple_fields() {
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:fldSimple w:instr=" CITATION smith2024 "><w:r><w:t>(Smith 2024)</w:t></w:r></w:fldSimple></w:p></w:body>
+</w:document>"#;
+    let graph = import_docx_bytes("citation.docx", &docx_zip(document_xml)).expect("import citation DOCX");
+    let Block::Paragraph { content } = &graph.blocks[0].block
+    else {
+        panic!("paragraph expected")
+    };
+    assert!(
+        matches!(&content[0], Inline::Citation { key, display: Some(display) }
+            if key == "smith2024"
+                && matches!(&display[0], Inline::Text { text } if text == "(Smith 2024)")),
+        "{content:?}"
+    );
+    assert!(
+        !graph.coverage.loss.iter().any(|loss| loss.code == "reader.docx.fields"),
+        "a mapped citation field must not be reported as an unmapped field"
+    );
+}
+
+#[test]
+fn docx_import_keeps_unmapped_simple_field_text_and_reports_fields() {
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:fldSimple w:instr=" PAGE "><w:r><w:t>7</w:t></w:r></w:fldSimple></w:p></w:body>
+</w:document>"#;
+    let graph = import_docx_bytes("page-field.docx", &docx_zip(document_xml)).expect("import page field DOCX");
+    let markdown = export_markdown(&graph).expect("export markdown");
+    assert!(markdown.contains('7'), "{markdown}");
+    assert!(graph.coverage.loss.iter().any(|loss| loss.code == "reader.docx.fields"));
+    assert!(!format!("{:?}", graph.blocks).contains("Citation"), "a PAGE field must not become a citation");
+}
+
+#[test]
+fn docx_import_reads_hyperlink_tooltips_and_image_titles() {
+    let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+            xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+  <w:body>
+    <w:p>
+      <w:hyperlink r:id="rId1" w:tooltip="Example tooltip"><w:r><w:t>Example</w:t></w:r></w:hyperlink>
+    </w:p>
+    <w:p>
+      <w:r>
+        <w:drawing>
+          <wp:inline>
+            <wp:docPr descr="Logo" title="Logo title"/>
+            <a:graphic><a:graphicData><a:blip r:embed="rId2"/></a:graphicData></a:graphic>
+          </wp:inline>
+        </w:drawing>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"#;
+    let rels_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"
+    Target="https://example.com" TargetMode="External"/>
+  <Relationship Id="rId2"
+    Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+    Target="media/logo.png"/>
+</Relationships>"#;
+    let zip = stored_zip(&[
+        ("word/document.xml", document_xml),
+        ("word/_rels/document.xml.rels", rels_xml),
+        ("media/logo.png", b"\x89PNG\r\n"),
+    ]);
+    let graph = import_docx_bytes("titles.docx", &zip).expect("import titles DOCX");
+
+    let Block::Paragraph { content } = &graph.blocks[0].block
+    else {
+        panic!("link paragraph expected")
+    };
+    assert!(matches!(&content[0], Inline::Link { title: Some(title), .. } if title == "Example tooltip"), "{content:?}");
+    let Block::Paragraph { content } = &graph.blocks[1].block
+    else {
+        panic!("image paragraph expected")
+    };
+    assert!(matches!(&content[0], Inline::Image { title: Some(title), .. } if title == "Logo title"), "{content:?}");
+}
+
+#[test]
 fn docx_import_reports_unmapped_embedded_objects() {
     let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">

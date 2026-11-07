@@ -639,6 +639,63 @@ fn docx_export_keeps_citation_keys_and_titles() {
 }
 
 #[test]
+fn docx_reader_recovers_citation_keys_and_titles_it_writes() {
+    let mut graph = graph_with_image(png_header(1, 1), "media/logo.png");
+    let Block::Paragraph { content } = &mut graph.blocks[0].block
+    else {
+        panic!("image paragraph expected")
+    };
+    let Inline::Image { title, .. } = &mut content[0]
+    else {
+        panic!("image expected: {content:?}")
+    };
+    *title = Some("Logo title".into());
+
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Citation { key: "smith2024".into(), display: Some(vec![Inline::Text { text: "(Smith 2024)".into() }]) },
+            Inline::Text { text: " ".into() },
+            Inline::Link {
+                target: RelationEndpoint::ExternalUri("https://example.com".into()),
+                display: vec![Inline::Text { text: "Example".into() }],
+                title: Some("Example tooltip".into()),
+            },
+        ],
+    });
+
+    let exported = export_docx_bytes(&graph).expect("export docx");
+    let reopened = import_docx_bytes("fields-round.docx", &exported).expect("reopen docx");
+    let dumped = format!("{:?}", reopened.blocks);
+
+    let mut citation = None;
+    let mut link = None;
+    let mut image = None;
+    for node in &reopened.blocks {
+        let Block::Paragraph { content } = &node.block
+        else {
+            continue;
+        };
+        for inline in content {
+            match inline {
+                Inline::Citation { key, display } => citation = Some((key.clone(), display.clone())),
+                Inline::Link { title, .. } => link = Some(title.clone()),
+                Inline::Image { title, .. } => image = Some(title.clone()),
+                _ => {}
+            }
+        }
+    }
+
+    assert_eq!(citation.as_ref().map(|entry| entry.0.as_str()), Some("smith2024"), "{dumped}");
+    assert_eq!(
+        citation.as_ref().and_then(|entry| entry.1.as_ref()),
+        Some(&vec![Inline::Text { text: "(Smith 2024)".into() }]),
+        "{dumped}"
+    );
+    assert_eq!(link, Some(Some("Example tooltip".into())), "{dumped}");
+    assert_eq!(image, Some(Some("Logo title".into())), "{dumped}");
+}
+
+#[test]
 fn docx_export_round_trips_embedded_images() {
     let document_xml = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"

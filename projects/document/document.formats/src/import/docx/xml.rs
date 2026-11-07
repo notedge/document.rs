@@ -57,7 +57,7 @@ pub fn parse_document_xml(
         }
         Ok(false)
     };
-    if has_any(&["fldChar", "instrText", "delInstrText"])? {
+    if has_any(&["fldChar", "instrText", "delInstrText"])? || fld_simple_carries_an_unmapped_field(root)? {
         graph.push_loss(LossMarker {
             code: "reader.docx.fields".into(),
             message: "field boundaries and field instructions are detected but dynamic field semantics are not represented in notedown-ir"
@@ -339,6 +339,23 @@ fn parse_paragraph_element(
         else if element_is(child, "footnoteReference") {
             push_footnote_reference(graph, &mut paragraph.inlines, footnotes, referenced_footnotes, u32_attribute(child, "id"));
         }
+        else if element_is(child, "fldSimple") {
+            let instr = attribute_value(child, "instr").unwrap_or_default();
+            let display = parse_field_result(child, rels, graph, footnotes, referenced_footnotes)?;
+            if let Some(key) = citation_key(&instr) {
+                // The exporter writes the semantic key into `w:instr` and the
+                // authored display into the field result, so both sides of a
+                // citation survive a DOCX round trip.
+                paragraph
+                    .inlines
+                    .push(Inline::Citation { key, display: if display.is_empty() { None } else { Some(display) } });
+            }
+            else {
+                // An unmapped field keeps its visible result; the document-level
+                // `reader.docx.fields` loss names the dynamic semantics gap.
+                paragraph.inlines.extend(display);
+            }
+        }
         else if element_is(child, "oMathPara") {
             for formula in omath_children(child) {
                 paragraph.math_blocks.push(lower_docx_math(graph, formula, MathDisplay::Display));
@@ -396,6 +413,10 @@ fn append_paragraph_run(
             for (index, blip) in elements_by_local_name(child, "blip")?.iter().enumerate() {
                 if let Some(rel_id) = attribute_value(blip, "embed") {
                     paragraph.pending_image_alt = doc_prs.get(index).and_then(|doc_pr| attribute_value(doc_pr, "descr"));
+                    paragraph.pending_image_title = doc_prs
+                        .get(index)
+                        .and_then(|doc_pr| attribute_value(doc_pr, "title"))
+                        .filter(|title| !title.is_empty());
                     paragraph.push_image(&rel_id, rels, graph);
                 }
             }
@@ -417,7 +438,11 @@ fn parse_hyperlink_element(
     footnotes: &FootnoteCatalog,
     referenced_footnotes: &mut HashSet<u32>,
 ) -> Result<HyperlinkState, FormatError> {
-    let mut link = HyperlinkState { rel_id: attribute_value(element, "id"), inlines: Vec::new() };
+    let mut link = HyperlinkState {
+        rel_id: attribute_value(element, "id"),
+        title: attribute_value(element, "tooltip"),
+        inlines: Vec::new(),
+    };
     for child in element.children.iter().filter_map(XmlValue::as_element) {
         if element_is(child, "r") {
             let mut paragraph = ParagraphState::default();
@@ -429,6 +454,52 @@ fn parse_hyperlink_element(
         }
     }
     Ok(link)
+}
+
+/// Whether any `w:fldSimple` carries instructions other than a citation.
+///
+/// A citation field is mapped to `Inline::Citation`, so only the remaining
+/// simple fields still need the document-level dynamic-field loss.
+fn fld_simple_carries_an_unmapped_field(root: &XmlElement) -> Result<bool, FormatError> {
+    for field in elements_by_local_name(root, "fldSimple")? {
+        let instr = attribute_value(field, "instr").unwrap_or_default();
+        if citation_key(&instr).is_none() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Citation key from a Word field instruction such as ` CITATION smith2024 `.
+fn citation_key(instr: &str) -> Option<String> {
+    let mut tokens = instr.split_whitespace();
+    let field = tokens.next()?;
+    let key = tokens.next()?;
+    field.eq_ignore_ascii_case("CITATION").then(|| key.to_owned())
+}
+
+/// Visible inlines of a simple field result.
+///
+/// The exporter stores the authored display inside `w:fldSimple`, so reading
+/// the child runs back is what keeps the citation display from disappearing.
+fn parse_field_result(
+    element: &XmlElement,
+    rels: &HashMap<String, String>,
+    graph: &mut DocumentGraph,
+    footnotes: &FootnoteCatalog,
+    referenced_footnotes: &mut HashSet<u32>,
+) -> Result<Vec<Inline>, FormatError> {
+    let mut paragraph = ParagraphState::default();
+    for child in element.children.iter().filter_map(XmlValue::as_element) {
+        if element_is(child, "r") {
+            append_paragraph_run(child, &mut paragraph, rels, graph, footnotes, referenced_footnotes)?;
+        }
+        else if element_is(child, "hyperlink") {
+            let link = parse_hyperlink_element(child, rels, graph, footnotes, referenced_footnotes)?;
+            paragraph.push_hyperlink(&link, rels, graph);
+        }
+    }
+    Ok(paragraph.inlines)
 }
 
 fn parse_run_element(element: &XmlElement) -> RunState {
@@ -505,6 +576,7 @@ struct ParagraphState {
     inlines: Vec<Inline>,
     math_blocks: Vec<Block>,
     pending_image_alt: Option<String>,
+    pending_image_title: Option<String>,
     is_list_item: bool,
     num_id: Option<u32>,
     ilvl: Option<u32>,
@@ -552,7 +624,7 @@ impl ParagraphState {
                         .into(),
                 status: SemanticStatus::Partial,
             });
-            let mut segment = HyperlinkState { rel_id: link.rel_id.clone(), inlines: Vec::new() };
+            let mut segment = HyperlinkState { rel_id: link.rel_id.clone(), title: link.title.clone(), inlines: Vec::new() };
             for inline in &link.inlines {
                 if is_image_inline(inline) {
                     self.push_hyperlink(&segment, rels, graph);
@@ -573,7 +645,11 @@ impl ParagraphState {
         if let Some(url) = url {
             push_inline(
                 &mut self.inlines,
-                Inline::Link { target: RelationEndpoint::ExternalUri(url.clone()), display: link.inlines.clone(), title: None },
+                Inline::Link {
+                    target: RelationEndpoint::ExternalUri(url.clone()),
+                    display: link.inlines.clone(),
+                    title: link.title.clone(),
+                },
             );
             return;
         }
@@ -588,8 +664,8 @@ impl ParagraphState {
     }
 
     fn push_image(&mut self, rel_id: &str, rels: &HashMap<String, String>, graph: &mut DocumentGraph) {
-        let alt = self.pending_image_alt.clone().unwrap_or_default();
-        self.pending_image_alt = None;
+        let alt = self.pending_image_alt.take().unwrap_or_default();
+        let title = self.pending_image_title.take();
         let target = rels.get(rel_id);
         if let Some(target) = target {
             let asset_id = AssetId(graph.assets.len() as u64 + 1);
@@ -607,7 +683,7 @@ impl ParagraphState {
                 Inline::Image {
                     source: target.clone(),
                     alt: if alt.is_empty() { Vec::new() } else { vec![Inline::Text { text: alt }] },
-                    title: None,
+                    title,
                     asset: Some(asset_id),
                 },
             );
@@ -628,6 +704,7 @@ fn is_image_inline(inline: &Inline) -> bool {
 #[derive(Debug, Default)]
 struct HyperlinkState {
     rel_id: Option<String>,
+    title: Option<String>,
     inlines: Vec<Inline>,
 }
 
