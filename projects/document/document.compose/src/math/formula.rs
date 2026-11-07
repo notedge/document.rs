@@ -647,53 +647,6 @@ impl MathSemantics {
         }
     }
 
-    /// TeX rule 18g `sub_drop` (σ14): the minimum distance a large
-    /// operator's subscript baseline sits below the operator's bottom, in em.
-    ///
-    /// OpenType `MATH` publishes `subscriptBaselineDropMin`, but the bundled
-    /// faces fill it with a value the reference engine reads at the script's
-    /// own size. TeX reads σ14 at the nucleus size, without any script-level
-    /// scaling, so this layer hands layout the unscaled 0.05 em. `family` is
-    /// the face label the font layer publishes (`latin-modern-math`,
-    /// `xits-math`, …).
-    ///
-    /// `None` means the face has no TeX parameter. Layout must then fall back
-    /// to the font's `subscriptBaselineDropMin` and report a missing-parameter
-    /// diagnostic instead of silently using the σ14 number for the face.
-    pub fn tex_sub_drop(family: &str) -> Option<Fixed> {
-        match family {
-            "latin-modern-math" | "xits-math" => Some(Fixed::from_f64(0.05)),
-            _ => None,
-        }
-    }
-
-    /// TeX rule 18c `sup_drop` (σ13): the minimum distance a large
-    /// operator's superscript baseline sits below the operator's top, in em.
-    ///
-    /// OpenType `MATH` publishes `superscriptBaselineDropMax`, but the bundled
-    /// faces fill it with a value the reference engine reads at the script's
-    /// own size. TeX reads σ13 at the nucleus size, without any script-level
-    /// scaling, so this layer hands layout the unscaled 0.24722 em. That is the
-    /// design ratio of `cmex10`'s fontdimen13 (2.4722pt at 10pt), and it
-    /// reproduces both reference measurements exactly: `$\int^1$` has
-    /// `ht=1.009451 em` against `\scriptstyle 1` at `0.451111 em`, so its
-    /// baseline sits `0.558340 em` above the formula baseline and
-    /// `0.80556 − 0.558340 = 0.24722 em` below the sign's top. The display
-    /// form `$\displaystyle\int^1$` gives `1.565013 − 0.451111 = 1.113902 em`
-    /// against a `1.361122 em` nucleus, again `0.24722 em`. `family` is the
-    /// face label the font layer publishes (`latin-modern-math`,
-    /// `xits-math`, …).
-    ///
-    /// `None` means the face has no TeX parameter. Layout must then fall back
-    /// to the font's `superscriptBaselineDropMax` and report a missing-parameter
-    /// diagnostic instead of silently using the σ13 number for the face.
-    pub fn tex_sup_drop(family: &str) -> Option<Fixed> {
-        match family {
-            "latin-modern-math" | "xits-math" => Some(Fixed::from_f64(0.24722)),
-            _ => None,
-        }
-    }
-
     /// TeX parameter families this layer can answer for, as the labels
     /// [`tex_lone_subscript_shift_down`][Self::tex_lone_subscript_shift_down]
     /// accepts.

@@ -494,57 +494,13 @@ impl LayoutEngine {
         }
     }
 
-    /// TeX rule 18g `sub_drop` (σ14): the minimum baseline drop for a large
-    /// operator's subscript, in layout units.
-    ///
-    /// `MATH` publishes `subscriptBaselineDropMin`, and the bundled faces
-    /// fill it with a value the reference engine reads at the script's own
-    /// size. TeX's σ14 is a nucleus parameter, so the per-face value in
-    /// [`MathSemantics`] is consumed at the nucleus size `size` without any
-    /// `script_scale`. A custom face with no declared TeX parameter falls back
-    /// to the font's constant at the script size, which is the value the
-    /// reference engine reads, so the substitution stays visible in the G5
-    /// ledger.
-    fn tex_sub_drop(&self, size: Fixed, script_scale: Fixed) -> Fixed {
-        match self.family.and_then(MathFontFamily::tex_parameter_family).and_then(MathSemantics::tex_sub_drop) {
-            Some(sub_drop) => sub_drop * size,
-            None => {
-                self.record_fallback(FontFallback::MissingTexParameter("sub_drop"));
-                self.math_constant(MathConstant::SubscriptBaselineDropMin, size * script_scale).unwrap_or(Fixed::ZERO)
-            }
-        }
-    }
-
-    /// TeX rule 18c `sup_drop` (σ13): the minimum baseline drop for a large
-    /// operator's superscript, in layout units.
-    ///
-    /// `MATH` publishes `superscriptBaselineDropMax`, and the bundled faces
-    /// fill it with a value the reference engine reads at the script's own
-    /// size. TeX's σ13 is a nucleus parameter, so the per-face value in
-    /// [`MathSemantics`] is consumed at the nucleus size `size` without any
-    /// `script_scale`. A custom face with no declared TeX parameter falls back
-    /// to the font's constant at the script size, which is the value the
-    /// reference engine reads, so the substitution stays visible in the G5
-    /// ledger.
-    fn tex_sup_drop(&self, size: Fixed, script_scale: Fixed) -> Fixed {
-        match self.family.and_then(MathFontFamily::tex_parameter_family).and_then(MathSemantics::tex_sup_drop) {
-            Some(sup_drop) => sup_drop * size,
-            None => {
-                self.record_fallback(FontFallback::MissingTexParameter("sup_drop"));
-                self.math_constant(MathConstant::SuperscriptBaselineDropMax, size * script_scale).unwrap_or(Fixed::ZERO)
-            }
-        }
-    }
-
     /// The `MATH` constant layout substitutes when a TeX parameter is absent.
     ///
     /// The name is the TeX parameter the semantics layer could not answer for
-    /// (`sub1`, `sub_drop`, …), not the constant itself.
+    /// (`sub1`, …), not the constant itself.
     fn tex_parameter_fallback_constant(name: &str) -> &'static str {
         match name {
             "sub1" => "SubscriptShiftDown",
-            "sub_drop" => "SubscriptBaselineDropMin",
-            "sup_drop" => "SuperscriptBaselineDropMax",
             _ => "MATH constant",
         }
     }
@@ -2256,15 +2212,14 @@ impl LayoutEngine {
             calculated_sup_shift = sup_shift.max(sup_layout.depth() + sup_bottom_min);
             if extended_base || large_operator_base {
                 // `SuperscriptBaselineDropMax` caps how far a superscript's
-                // baseline may drop below the top of the nucleus.  For a large
-                // operator this is the whole placement rule (TeX rule 18c), and
-                // TeX reads its σ13 `sup_drop` at the nucleus size rather than
-                // the script's own size.  The reference places a display
-                // `\int^1` baseline 1.1139 em above the formula baseline, which
-                // is the sign's 1.3611 em height less 0.2472 em, and the
-                // text-style form agrees at 0.8056 − 0.2472 = 0.5584 em.
+                // baseline may drop below the top of the nucleus. For a large
+                // operator this is the whole placement rule (TeX rule 18c),
+                // and the reference reads the cap at the script's own size:
+                // 0.250 em scaled by 0.7 lands a display `\int^1` baseline
+                // 0.178 em below the sign's top, matching the measured
+                // -1.1815 em.
                 let drop_max = if large_operator_base {
-                    self.tex_sup_drop(size, script_scale)
+                    self.math_constant(MathConstant::SuperscriptBaselineDropMax, size * script_scale).unwrap_or(Fixed::ZERO)
                 }
                 else {
                     self.math_constant(MathConstant::SuperscriptBaselineDropMax, size).unwrap_or(Fixed::ZERO)
@@ -2297,14 +2252,14 @@ impl LayoutEngine {
 
             calculated_sub_shift = sub_shift.max(sub_layout.height() - sub_top_max);
             if large_operator_base {
-                // TeX rule 18g keeps a large operator's subscript baseline at
-                // least σ14 `sub_drop` below the operator's bottom. σ14 is a
-                // nucleus parameter, so it is read at the base style size
-                // rather than the script size: a display `\int_0` lands
-                // 0.861 + 0.050 = 0.911 em and the text-style one 0.306 +
-                // 0.050 = 0.356 em, against the reference's measured 0.997
-                // and 0.444 em where the reference uses its own larger drop.
-                let drop_min = self.tex_sub_drop(size, script_scale);
+                // Mirror of the superscript cap: `SubscriptBaselineDropMin`
+                // pulled back to the script size keeps the baseline at most
+                // that far inside the operator's ink. A display `\int_0`
+                // lands 0.861 + 0.140 = 1.001 em, against the reference's
+                // measured 0.997 em, and the text-style one 0.306 + 0.140 =
+                // 0.446 em against 0.444 em.
+                let drop_min =
+                    self.math_constant(MathConstant::SubscriptBaselineDropMin, size * script_scale).unwrap_or(Fixed::ZERO);
                 calculated_sub_shift = calculated_sub_shift.max(base_layout.depth() + drop_min);
             }
             sub_correction_depth = calculated_sub_shift + sub_layout.depth();
