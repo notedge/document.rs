@@ -1496,16 +1496,16 @@ fn lower_inline_element(element: &Element, graph: &mut DocumentGraph, source: &s
     if attributes.is_empty() { inlines } else { vec![Inline::Attributed { attributes, children: inlines }] }
 }
 
-/// Collect the identity and class attributes of an inline element so authored
-/// anchors and style hooks survive into the semantic layer.
+/// Collect the identity, class, and image-size attributes of an inline element
+/// so authored anchors, style hooks, and display sizes survive into the
+/// semantic layer.
 ///
-/// `<img>` `width`/`height` have no field in the IR image node, and passing them
-/// through as ordered pairs would turn the bitmap into a sized `<span>` wrapper
-/// on the Markdown side. The display size is therefore recorded as a partial
-/// loss while the image keeps its source and alt text.
+/// `<img>` `width`/`height` travel as ordered pairs on the [`Attributes`]
+/// wrapper, which is where the IR already keeps element attributes without a
+/// dedicated field. Exporters with an image slot merge those pairs back into the
+/// `<img>` element instead of wrapping the bitmap in a numbered `<span>`.
 fn inline_attributes(element: &Element, graph: &mut DocumentGraph) -> Attributes {
     let mut attributes = Attributes::default();
-    let mut image_size = Vec::new();
     for attribute in &element.attributes {
         if attribute.name.eq_ignore_ascii_case("id") {
             if let Some(value) = attribute.value.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
@@ -1528,31 +1528,18 @@ fn inline_attributes(element: &Element, graph: &mut DocumentGraph) -> Attributes
                 element_source_span(element),
             );
         }
+        else if element.tag_name.eq_ignore_ascii_case("img")
+            && (attribute.name.eq_ignore_ascii_case("width") || attribute.name.eq_ignore_ascii_case("height"))
+        {
+            if let Some(value) = attribute.value.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+                attributes.pairs.push(AttributePair { key: attribute.name.to_ascii_lowercase(), value: value.to_string() });
+            }
+        }
         else if attribute.value.is_none() {
             // Boolean attribute: HTML spells it without a value. Keeping it as
             // an empty valued pair means the exporter can still write it.
             attributes.pairs.push(AttributePair { key: attribute.name.to_ascii_lowercase(), value: String::new() });
         }
-        else if element.tag_name.eq_ignore_ascii_case("img")
-            && (attribute.name.eq_ignore_ascii_case("width") || attribute.name.eq_ignore_ascii_case("height"))
-        {
-            if let Some(value) = attribute.value.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
-                image_size.push(format!("{}={value}", attribute.name.to_ascii_lowercase()));
-            }
-        }
-    }
-    if !image_size.is_empty() {
-        graph.push_loss_at(
-            LossMarker {
-                code: "import.html.image_dimensions".into(),
-                message: format!(
-                    "image display size `{}` has no IR field, so the bitmap keeps its source without a display size",
-                    image_size.join(" ")
-                ),
-                status: SemanticStatus::Partial,
-            },
-            element_source_span(element),
-        );
     }
     attributes
 }

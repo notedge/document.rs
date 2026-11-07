@@ -554,6 +554,32 @@ fn write_inline(
                 }
             }
         },
+        Inline::Attributed { attributes, children }
+            if matches!(children.as_slice(), [Inline::Image { .. }]) && !attributes.is_empty() =>
+        {
+            // An image wrapper carries the display size or identity of the bitmap
+            // itself. Inline HTML keeps those on the `<img>` element, where every
+            // downstream tool reads them; a `<span width="…">` would be invalid
+            // markup that no consumer treats as a size.
+            let Inline::Image { source, alt, title, asset: _ } = &children[0]
+            else {
+                unreachable!("the guard matched one image")
+            };
+            let url = image_urls.and_then(|map| map.get(source)).map(String::as_str).unwrap_or(source.as_str());
+            out.push_str(r#"<img src=""#);
+            write_html_attribute_value(out, url);
+            out.push('"');
+            out.push_str(r#" alt=""#);
+            write_html_attribute_value(out, &alt.iter().map(inline_plain_text).collect::<String>());
+            out.push('"');
+            if let Some(title) = title {
+                out.push_str(r#" title=""#);
+                write_html_attribute_value(out, title);
+                out.push('"');
+            }
+            write_span_attributes(out, attributes)?;
+            out.push('>');
+        }
         Inline::Attributed { attributes, children } => {
             // Markdown accepts inline HTML, which is the only spelling that
             // keeps the authored `id`/`class` attributes instead of dropping

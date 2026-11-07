@@ -499,6 +499,26 @@ fn write_inlines(
                 BreakKind::Hard => out.push_str("<br/>"),
                 BreakKind::Soft => out.push('\n'),
             },
+            Inline::Attributed { attributes, children }
+                if matches!(children.as_slice(), [Inline::Image { .. }]) && !attributes.is_empty() =>
+            {
+                // A size or identity wrapper around one bitmap belongs on the
+                // `<img>` element, never on a `<span>` where `width`/`height`
+                // would be inert.
+                let Inline::Image { source, alt, title, asset: _ } = &children[0]
+                else {
+                    unreachable!("the guard matched one image")
+                };
+                let href = rewrite_image_href(source, source_map);
+                out.push_str("<img alt=\"");
+                escape_attribute(out, &alt.iter().map(|i| i.plain_text()).collect::<String>());
+                out.push_str("\" src=\"");
+                escape_attribute(out, &href);
+                out.push('"');
+                write_optional_title(out, title.as_deref());
+                write_attributes(out, attributes)?;
+                out.push_str("/>");
+            }
             Inline::Attributed { attributes, children } => {
                 out.push_str("<span");
                 write_attributes(out, attributes)?;

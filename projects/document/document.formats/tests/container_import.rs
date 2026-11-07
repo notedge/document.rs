@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use document_formats::{
-    export::markdown::export_markdown,
+    export::{html::export_html, markdown::export_markdown},
     import::{
         epub::import_epub_bytes,
         html::{import_html_bytes, import_html_text},
@@ -232,15 +232,26 @@ fn html_inline_style_is_a_recorded_loss() {
     assert!(markdown.contains("Red text"), "{markdown}");
 }
 
-/// `<img width>`/`<height>` keep the bitmap and record the dropped display size
-/// instead of becoming a sized `<span>` wrapper.
+/// `<img width>`/`<height>` stay on the image element through the IR and reach
+/// the Markdown projection as valid `<img>` attributes, never as a `<span>`.
 #[test]
-fn html_image_size_is_a_recorded_loss() {
+fn html_image_size_survives_as_img_attributes() {
     let graph = import_fixture_html("img-size.html");
-    assert_eq!(loss(&graph, "import.html.image_dimensions"), SemanticStatus::Partial, "{:?}", loss_codes(&graph));
+    assert!(
+        !loss_codes(&graph).iter().any(|code| code == "import.html.image_dimensions"),
+        "a display size now has a slot: {:?}",
+        loss_codes(&graph)
+    );
     let markdown = export_markdown(&graph).expect("markdown export");
-    assert!(markdown.contains("![chart](chart.png)"), "{markdown}");
-    assert!(!markdown.contains("<span"), "{markdown}");
+    assert!(markdown.contains(r#"<img src="chart.png" alt="chart" width="320" height="180">"#), "{markdown}");
+    assert!(!markdown.contains("<span"), "the size belongs on the image element: {markdown}");
+
+    let html = export_html(&graph).expect("html export");
+    assert!(
+        html.contains(r#"<img alt="chart" src="chart.png" width="320" height="180">"#),
+        "the HTML projection keeps the size on the image: {html}"
+    );
+    assert!(!html.contains("<span width"), "the HTML projection must not invent a sized span: {html}");
 }
 
 /// Ordered EPUB list items carry strictly increasing numbers, including

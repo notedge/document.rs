@@ -609,6 +609,25 @@ fn write_inlines(out: &mut String, inlines: &[Inline], footnote_refs: &mut Footn
                 BreakKind::Hard => out.push_str("<br>"),
                 BreakKind::Soft => out.push('\n'),
             },
+            Inline::Attributed { attributes, children }
+                if matches!(children.as_slice(), [Inline::Image { .. }]) && !attributes.is_empty() =>
+            {
+                // Attributes that wrap only a bitmap belong on the `<img>` element.
+                // Writing them on a `<span>` would leave `width`/`height` as inert
+                // attributes that no consumer treats as a display size.
+                let Inline::Image { source, alt, title, asset: _ } = &children[0]
+                else {
+                    unreachable!("the guard matched one image")
+                };
+                out.push_str(r#"<img alt=""#);
+                escape_attribute(out, &alt.iter().map(inline_plain_text).collect::<String>());
+                out.push_str(r#"" src=""#);
+                escape_attribute(out, source);
+                out.push('"');
+                write_optional_title(out, title.as_deref());
+                write_attributes(out, attributes)?;
+                out.push('>');
+            }
             Inline::Attributed { attributes, children } => {
                 out.push_str("<span");
                 write_attributes(out, attributes)?;

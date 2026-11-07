@@ -1,7 +1,7 @@
 use document_formats::{
     export::{html::export_html, markdown::export_markdown},
     import::{
-        html::HtmlAssetSource,
+        html::{HtmlAssetSource, import_html_text},
         markdown::{import_markdown_bytes, import_markdown_bytes_with_assets},
     },
 };
@@ -42,6 +42,30 @@ fn cell_text(graph: &DocumentGraph, cell: &TableCell) -> String {
             _ => Vec::new(),
         })
         .collect()
+}
+
+#[test]
+fn markdown_export_keeps_html_image_width_and_height() {
+    let graph = import_html_text(
+        "img-size.html",
+        r#"<body><img src="chart.png" alt="chart" width="320" height="180"></body>"#,
+    )
+    .expect("import html image size");
+    let markdown = export_markdown(&graph).expect("export markdown");
+    assert!(
+        markdown.contains(r#"<img src="chart.png" alt="chart" width="320" height="180">"#),
+        "an image size needs the `<img>` element attributes: {markdown}"
+    );
+    assert!(!markdown.contains("<span width"), "a span width is not an image size: {markdown}");
+}
+
+#[test]
+fn markdown_export_of_an_unsized_image_stays_markdown() {
+    let graph = import_html_text("img-plain.html", r#"<body><img src="chart.png" alt="chart"></body>"#)
+        .expect("import html image");
+    let markdown = export_markdown(&graph).expect("export markdown");
+    assert!(markdown.contains("![chart](chart.png)"), "a plain image stays markdown: {markdown}");
+    assert!(!markdown.contains("<img"), "no size means no inline HTML: {markdown}");
 }
 
 #[test]

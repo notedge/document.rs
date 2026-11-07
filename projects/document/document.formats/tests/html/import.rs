@@ -195,12 +195,17 @@ fn html_import_keeps_image_only_mermaid_container_as_bitmap_with_loss() {
         .next()
         .unwrap_or_else(|| panic!("the bitmap must survive as an image: {:?}", graph.blocks));
     assert_eq!(image.0, "assets/flow.png");
-    // The authored display size has no IR field, so the bitmap keeps its source
-    // and the size surfaces as a structured loss instead of a `<span>` wrapper.
-    assert!(image.1.is_empty(), "the bitmap must not become a sized inline wrapper: {:?}", image.1);
+    // The authored display size stays on the image wrapper as attribute pairs,
+    // so it reaches exporters as a real `<img width height>` instead of a loss.
+    assert_eq!(
+        image.1,
+        vec![("width".to_string(), "640".to_string()), ("height".to_string(), "480".to_string())],
+        "the bitmap keeps its display size: {:?}",
+        image.1
+    );
     assert!(
-        graph.coverage.loss.iter().any(|loss| loss.code == "import.html.image_dimensions"),
-        "the dropped display size must surface a structured loss: {:?}",
+        !graph.coverage.loss.iter().any(|loss| loss.code == "import.html.image_dimensions"),
+        "a display size no longer needs a loss: {:?}",
         graph.coverage.loss
     );
 
