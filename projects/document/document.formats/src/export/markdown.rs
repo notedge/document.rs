@@ -38,6 +38,7 @@ pub fn export_markdown_with_image_urls_for_roots(
     let mut output = String::new();
     let mut footnotes = Vec::new();
     let nested = nested_block_ids(graph);
+    let mut written_roots = Vec::new();
     for node in &graph.blocks {
         if nested.contains(&node.id) {
             continue;
@@ -47,6 +48,7 @@ pub fn export_markdown_with_image_urls_for_roots(
                 continue;
             }
         }
+        written_roots.push(node.id);
         if let Block::Opaque { kind, payload_hint, .. } = &node.block {
             if kind == "footnote_definition" {
                 footnotes.push(payload_hint.as_str());
@@ -59,7 +61,111 @@ pub fn export_markdown_with_image_urls_for_roots(
         output.push_str(footnote);
         output.push_str("\n\n");
     }
+    for (label, display) in synthesized_footnotes(graph, &written_roots) {
+        let mut body = String::new();
+        write_inlines(&mut body, &display, image_urls)?;
+        let body = body.replace('\n', "\n    ");
+        output.push_str("[^");
+        output.push_str(&label);
+        output.push_str("]: ");
+        output.push_str(&body);
+        output.push_str("\n\n");
+    }
     Ok(output)
+}
+
+/// Definitions already authored as opaque blocks, keyed by their GFM label.
+fn authored_footnote_labels(graph: &DocumentGraph) -> HashSet<String> {
+    graph
+        .blocks
+        .iter()
+        .filter_map(|node| match &node.block {
+            Block::Opaque { kind, payload_hint, .. } if kind == "footnote_definition" => {
+                footnote_definition_label(payload_hint).map(str::to_string)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn footnote_definition_label(payload: &str) -> Option<&str> {
+    payload.trim_start().strip_prefix("[^")?.split_once("]:").map(|(label, _)| label)
+}
+
+/// Synthesizes GFM definitions for note references that carry authored display
+/// content, which is how Pandoc notes arrive. A label is defined once, first
+/// occurrence wins.
+fn synthesized_footnotes(graph: &DocumentGraph, roots: &[NodeId]) -> Vec<(String, Vec<Inline>)> {
+    let authored = authored_footnote_labels(graph);
+    let mut seen = authored;
+    let mut definitions = Vec::new();
+    for id in roots {
+        collect_block_footnotes(graph, *id, &mut seen, &mut definitions);
+    }
+    definitions
+}
+
+fn collect_block_footnotes(
+    graph: &DocumentGraph,
+    id: NodeId,
+    seen: &mut HashSet<String>,
+    definitions: &mut Vec<(String, Vec<Inline>)>,
+) {
+    let Some(node) = graph.block(id)
+    else {
+        return;
+    };
+    match &node.block {
+        Block::Paragraph { content } => collect_inline_footnotes(content, seen, definitions),
+        Block::Section { title, children, .. } => {
+            collect_inline_footnotes(title, seen, definitions);
+            for child in children {
+                collect_block_footnotes(graph, *child, seen, definitions);
+            }
+        }
+        Block::Quote { children } => {
+            for child in children {
+                collect_block_footnotes(graph, *child, seen, definitions);
+            }
+        }
+        Block::List { items, .. } => {
+            for item in items {
+                collect_inline_footnotes(&item.content, seen, definitions);
+                for child in &item.children {
+                    collect_block_footnotes(graph, *child, seen, definitions);
+                }
+            }
+        }
+        Block::Table { head, body, foot, .. } => {
+            for cell in head.iter().chain(body).chain(foot).flat_map(|row| row.cells.iter()) {
+                for child in &cell.children {
+                    collect_block_footnotes(graph, *child, seen, definitions);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_inline_footnotes(inlines: &[Inline], seen: &mut HashSet<String>, definitions: &mut Vec<(String, Vec<Inline>)>) {
+    for inline in inlines {
+        match inline {
+            Inline::Note { label, display } => {
+                if let Some(display) = display {
+                    if !display.is_empty() && seen.insert(label.clone()) {
+                        definitions.push((label.clone(), display.clone()));
+                    }
+                    collect_inline_footnotes(display, seen, definitions);
+                }
+            }
+            Inline::Styled { children, .. } | Inline::Attributed { children, .. } | Inline::Link { display: children, .. } => {
+                collect_inline_footnotes(children, seen, definitions)
+            }
+            Inline::Image { alt, .. } => collect_inline_footnotes(alt, seen, definitions),
+            Inline::Citation { display: Some(display), .. } => collect_inline_footnotes(display, seen, definitions),
+            _ => {}
+        }
+    }
 }
 
 fn nested_block_ids(graph: &DocumentGraph) -> HashSet<NodeId> {
@@ -393,13 +499,7 @@ fn write_inline(
             write_markdown_title(out, title.as_deref())?;
             out.push(')');
         }
-        Inline::Note { label, display } => {
-            if display.is_some() {
-                return Err(FormatError::unsupported(
-                    "markdown",
-                    "note reference display content has no Markdown spelling, so writing it would lose authored content",
-                ));
-            }
+        Inline::Note { label, .. } => {
             out.push_str("[^");
             out.push_str(label);
             out.push(']');

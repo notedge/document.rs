@@ -1,13 +1,17 @@
 //! Pandoc JSON codec and IR adapter tests.
 
-use document_formats::pandoc::{
-    PandocBudget, PandocImportOptions,
-    codec::{decode, encode},
-    export_pandoc_json, import_pandoc_json_bytes_with,
-    model::{
-        API_VERSION, Alignment, Attr, Block, Caption, Cell, Citation, CitationMode, ColSpec, Inline, ListNumberDelim,
-        ListNumberStyle, MathType, MetaValue, OrderedList, PandocDocument, QuoteType, Row, Table, TableBody, TableFoot,
-        TableHead, Target,
+use document_formats::{
+    export::markdown::export_markdown,
+    import::markdown::import_markdown_bytes,
+    pandoc::{
+        PandocBudget, PandocImportOptions,
+        codec::{decode, encode},
+        export_pandoc_json, import_pandoc_json_bytes_with,
+        model::{
+            API_VERSION, Alignment, Attr, Block, Caption, Cell, Citation, CitationMode, ColSpec, Inline, ListNumberDelim,
+            ListNumberStyle, MathType, MetaValue, OrderedList, PandocDocument, QuoteType, Row, Table, TableBody, TableFoot,
+            TableHead, Target,
+        },
     },
 };
 use document_ir::{Block as IrBlock, DocumentGraph, Inline as IrInline, SemanticStatus};
@@ -639,4 +643,25 @@ fn pandoc_citations_without_a_key_are_dropped_with_a_loss() {
         .expect("a keyless citation must be recorded");
     assert_eq!(loss.status, SemanticStatus::Unsupported);
     assert!(graph.validate().is_valid());
+}
+
+#[test]
+fn pandoc_note_body_survives_a_markdown_round_trip() {
+    let document = PandocDocument {
+        api_version: API_VERSION,
+        meta: Vec::new(),
+        blocks: vec![Block::Para(vec![
+            Inline::Str("See".into()),
+            Inline::Note(vec![Block::Para(vec![Inline::Str("body one".into())])]),
+        ])],
+    };
+    let graph = import(&encode_text(&document));
+    let markdown = export_markdown(&graph).expect("a pandoc note body must have a Markdown footnote spelling");
+    assert!(markdown.contains("[^pandoc-note-1]"), "{markdown:?}");
+    assert!(markdown.contains("[^pandoc-note-1]: body one"), "{markdown:?}");
+
+    let reopened = import_markdown_bytes("pandoc-note-round.md", &markdown).expect("reopen markdown");
+    let exported = export_pandoc_json(&reopened).expect("export pandoc json");
+    let json = encode_text(&exported.document);
+    assert!(json.contains("body one"), "the note body must survive pandoc-json -> markdown -> pandoc-json: {json}");
 }

@@ -632,6 +632,48 @@ fn markdown_footnote_reopen_preserves_reference_body_and_following_text() {
 }
 
 #[test]
+fn markdown_footnote_definition_covers_inline_display_content() {
+    let mut graph = DocumentGraph::new(DocumentId(43));
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Text { text: "See".into() },
+            Inline::Note { label: "pandoc-note-1".into(), display: Some(vec![Inline::Text { text: "Body.".into() }]) },
+            Inline::Text { text: " after".into() },
+        ],
+    });
+    let markdown = export_markdown(&graph).expect("inline note display must have a footnote spelling");
+    assert!(markdown.contains("See[^pandoc-note-1] after"), "{markdown:?}");
+    assert!(markdown.contains("[^pandoc-note-1]: Body."), "{markdown:?}");
+
+    let reopened = import_markdown_bytes("inline-note-display.md", &markdown).expect("reopen");
+    let Block::Paragraph { content } = &reopened.blocks[0].block
+    else {
+        panic!("paragraph expected: {:#?}", reopened.blocks)
+    };
+    assert_eq!(content[1], Inline::Note { label: "pandoc-note-1".into(), display: None });
+    assert!(reopened.blocks.iter().any(|node| matches!(&node.block,
+        Block::Opaque { kind, payload_hint, .. }
+            if kind == "footnote_definition" && payload_hint.trim() == "[^pandoc-note-1]: Body."
+    )));
+}
+
+#[test]
+fn markdown_authored_footnote_definition_wins_over_synthesized_display() {
+    let mut graph = DocumentGraph::new(DocumentId(44));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Note { label: "1".into(), display: Some(vec![Inline::Text { text: "Reference".into() }]) }],
+    });
+    graph.push_block(Block::Opaque {
+        kind: "footnote_definition".into(),
+        payload_hint: "[^1]: Authored.".into(),
+        status: SemanticStatus::Resolved,
+    });
+    let markdown = export_markdown(&graph).expect("export");
+    assert_eq!(markdown.matches("[^1]:").count(), 1, "the label must be defined once: {markdown:?}");
+    assert!(markdown.contains("[^1]: Authored."), "{markdown:?}");
+}
+
+#[test]
 fn export_from_programmatic_ir() {
     let mut graph = DocumentGraph::new(DocumentId(42));
     graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "plain ir".into() }] });
