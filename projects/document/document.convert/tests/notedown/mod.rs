@@ -3,9 +3,9 @@ use document_convert::{convert_bytes, read_notedown_bytes, write_document_markdo
 #[test]
 fn notedown_reader_lowers_heading_and_paragraph() {
     let source = "# Title\n\nHello world.\n";
-    let graph = read_notedown_bytes("sample.nd", source.to_string()).expect("read notedown");
+    let mut graph = read_notedown_bytes("sample.nd", source.to_string()).expect("read notedown");
     assert!(graph.blocks.len() >= 2);
-    let markdown = write_document_markdown(&graph).expect("write markdown");
+    let markdown = write_document_markdown(&mut graph).expect("write markdown");
     assert!(markdown.contains("# Title"));
 }
 

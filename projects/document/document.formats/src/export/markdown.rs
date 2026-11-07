@@ -4,14 +4,32 @@ use std::{
 };
 
 use document_ir::{
-    Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, NodeId, RelationEndpoint, TableCell, TableRow,
+    Attributes, Block, BreakKind, DocumentGraph, Inline, ListItem, LossMarker, NodeId, RelationEndpoint, TableCell,
+    TableRow,
 };
 
 use crate::FormatError;
 
+/// Markdown text plus the semantics the export explicitly declares as lost.
+///
+/// The channel is not a diagnostic sink. Only codes written down here, at a
+/// known degradation point, may be pushed. No Markdown code is declared yet,
+/// so `losses` is empty; the convenience string APIs below discard it.
+pub struct MarkdownExport {
+    /// The serialized Markdown text.
+    pub text: String,
+    /// Declared losses, one marker per known degradation.
+    pub losses: Vec<LossMarker>,
+}
+
 /// Export `notedown-ir` to Markdown text.
 pub fn export_markdown(graph: &DocumentGraph) -> Result<String, FormatError> {
-    export_markdown_with_image_urls(graph, None)
+    Ok(export_markdown_report(graph)?.text)
+}
+
+/// Export `notedown-ir` to Markdown text and report declared losses.
+pub fn export_markdown_report(graph: &DocumentGraph) -> Result<MarkdownExport, FormatError> {
+    export_markdown_report_with_image_urls_for_roots(graph, None, None)
 }
 
 /// Export Markdown while rewriting inline image destinations through
@@ -20,7 +38,7 @@ pub fn export_markdown_with_image_urls(
     graph: &DocumentGraph,
     image_urls: Option<&HashMap<String, String>>,
 ) -> Result<String, FormatError> {
-    export_markdown_with_image_urls_for_roots(graph, None, image_urls)
+    Ok(export_markdown_report_with_image_urls_for_roots(graph, None, image_urls)?.text)
 }
 
 /// Export Markdown for selected top-level block roots.
@@ -29,6 +47,15 @@ pub fn export_markdown_with_image_urls_for_roots(
     roots: Option<&[NodeId]>,
     image_urls: Option<&HashMap<String, String>>,
 ) -> Result<String, FormatError> {
+    Ok(export_markdown_report_with_image_urls_for_roots(graph, roots, image_urls)?.text)
+}
+
+/// Export Markdown for selected roots and report declared losses.
+pub fn export_markdown_report_with_image_urls_for_roots(
+    graph: &DocumentGraph,
+    roots: Option<&[NodeId]>,
+    image_urls: Option<&HashMap<String, String>>,
+) -> Result<MarkdownExport, FormatError> {
     let validation = graph.validate();
     if !validation.is_valid() {
         return Err(FormatError::invalid_input(format!("invalid document graph: {:?}", validation.issues)));
@@ -71,7 +98,7 @@ pub fn export_markdown_with_image_urls_for_roots(
         output.push_str(&body);
         output.push_str("\n\n");
     }
-    Ok(output)
+    Ok(MarkdownExport { text: output, losses: Vec::new() })
 }
 
 /// Definitions already authored as opaque blocks, keyed by their GFM label.

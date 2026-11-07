@@ -1,5 +1,8 @@
 use document_formats::{
-    export::{epub::export_epub_bytes, markdown::export_markdown},
+    export::{
+        epub::{export_epub_bytes, export_epub_report},
+        markdown::export_markdown,
+    },
     import::epub::import_epub_bytes,
 };
 use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, SemanticStatus, SourceKind};
@@ -1103,4 +1106,15 @@ fn epub_export_writes_task_checkboxes_and_leaves_plain_items_alone() {
         "an open item needs an unchecked XHTML checkbox: {package}"
     );
     assert_eq!(package.matches(r#"class="task-list-item""#).count(), 2, "the plain item must stay marker-free: {package}");
+}
+
+#[test]
+fn epub_export_reports_only_declared_losses() {
+    use document_formats::import::markdown::import_markdown_bytes;
+
+    let graph = import_markdown_bytes("epub-loss-channel", "# Title\n\nBody.\n").expect("markdown import");
+    let export = export_epub_report(&graph).expect("epub export");
+    assert!(!export.bytes.is_empty());
+    let codes: Vec<&str> = export.losses.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(codes.is_empty(), "no EPUB loss code is declared yet, but the channel reported {codes:?}");
 }

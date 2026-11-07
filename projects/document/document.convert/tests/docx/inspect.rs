@@ -74,8 +74,8 @@ fn minimal_docx_zip() -> Vec<u8> {
 
 #[test]
 fn docx_import_via_document_formats() {
-    let graph = import_docx_bytes("sample.docx", &minimal_docx_zip()).expect("read docx");
-    let markdown = write_document_markdown(&graph).expect("write markdown");
+    let mut graph = import_docx_bytes("sample.docx", &minimal_docx_zip()).expect("read docx");
+    let markdown = write_document_markdown(&mut graph).expect("write markdown");
     assert!(markdown.contains("Hello DOCX"));
 }
 

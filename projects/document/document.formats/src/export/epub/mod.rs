@@ -24,12 +24,32 @@ mod xhtml;
 
 use std::{collections::HashMap, path::Path};
 
-use document_ir::{DocumentGraph, NodeId};
+use document_ir::{DocumentGraph, LossMarker, NodeId};
 
 use crate::FormatError;
 
+/// EPUB bytes plus the semantics the export explicitly declares as lost.
+///
+/// The channel is not a diagnostic sink. Only codes written down here, at a
+/// known degradation point, may be pushed. Render and layout diagnostics stay
+/// with the logger and never arrive through this path.
+///
+/// No EPUB code is declared yet: metadata beyond the first author and the
+/// table head/foot band flattening are still silent, so the list is empty.
+pub struct EpubExport {
+    /// The finished OCF package.
+    pub bytes: Vec<u8>,
+    /// Declared losses, one marker per known degradation.
+    pub losses: Vec<LossMarker>,
+}
+
 /// Export a document graph to EPUB 3 bytes.
 pub fn export_epub_bytes(graph: &DocumentGraph) -> Result<Vec<u8>, FormatError> {
+    Ok(export_epub_report(graph)?.bytes)
+}
+
+/// Export a document graph to EPUB 3 bytes and report declared losses.
+pub fn export_epub_report(graph: &DocumentGraph) -> Result<EpubExport, FormatError> {
     let validation = graph.validate();
     if !validation.is_valid() {
         return Err(FormatError::invalid_input(format!("invalid document graph: {:?}", validation.issues)));
@@ -101,7 +121,7 @@ pub fn export_epub_bytes(graph: &DocumentGraph) -> Result<Vec<u8>, FormatError> 
     let opf_xml = opf::content_opf(graph, &opf_items, &spine_items)?;
     entries.push(("OEBPS/content.opf".to_string(), opf_xml.as_bytes().to_vec()));
 
-    Ok(package::build_epub_package(&entries))
+    Ok(EpubExport { bytes: package::build_epub_package(&entries), losses: Vec::new() })
 }
 
 /// Export a document graph to an EPUB file on disk.

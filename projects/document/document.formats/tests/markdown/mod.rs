@@ -1,5 +1,8 @@
 use document_formats::{
-    export::{html::export_html, markdown::export_markdown},
+    export::{
+        html::export_html,
+        markdown::{export_markdown, export_markdown_report},
+    },
     import::{
         html::{HtmlAssetSource, import_html_text},
         markdown::{import_markdown_bytes, import_markdown_bytes_with_assets},
@@ -1415,3 +1418,12 @@ fn markdown_export_keeps_table_caption_through_the_html_fallback() {
 
 mod export_project;
 mod roundtrip;
+
+#[test]
+fn markdown_export_reports_only_declared_losses() {
+    let graph = import_markdown_bytes("md-loss-channel", "# Title\n\nBody.\n").expect("markdown import");
+    let export = export_markdown_report(&graph).expect("markdown export");
+    assert!(export.text.contains("# Title"), "{}", export.text);
+    let codes: Vec<&str> = export.losses.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(codes.is_empty(), "no Markdown loss code is declared yet, but the channel reported {codes:?}");
+}
