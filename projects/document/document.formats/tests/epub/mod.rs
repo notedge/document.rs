@@ -514,6 +514,90 @@ fn epub_with_block_elements_zip() -> Vec<u8> {
     ])
 }
 
+fn epub_with_block_cell_zip() -> Vec<u8> {
+    let container = br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#;
+    let opf = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Cell Blocks Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+    stored_zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container),
+        ("OEBPS/content.opf", opf),
+        (
+            "OEBPS/chapter.xhtml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body>
+    <table>
+      <tr><th>Header</th></tr>
+      <tr><td><p>one</p><ul><li>item</li></ul></td></tr>
+    </table>
+  </body>
+</html>"#,
+        ),
+    ])
+}
+
+fn first_body_cell(graph: &document_ir::DocumentGraph) -> &document_ir::TableCell {
+    graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { body, .. } => body.first().and_then(|row| row.cells.first()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("table body cell expected, got {:?}", graph.blocks))
+}
+
+fn cell_block_kinds(graph: &document_ir::DocumentGraph, cell: &document_ir::TableCell) -> Vec<&'static str> {
+    cell.children
+        .iter()
+        .filter_map(|id| graph.block(*id))
+        .map(|node| match &node.block {
+            Block::Paragraph { .. } => "paragraph",
+            Block::List { .. } => "list",
+            Block::Table { .. } => "table",
+            _ => "other",
+        })
+        .collect()
+}
+
+#[test]
+fn epub_import_preserves_table_cell_blocks_and_round_trips() {
+    let zip = epub_with_block_cell_zip();
+    let graph = import_epub_bytes("cell-blocks.epub", &zip).expect("import epub");
+    let cell = first_body_cell(&graph);
+    assert_eq!(cell_block_kinds(&graph, cell), ["paragraph", "list"], "cell blocks stay separate: {cell:?}");
+
+    let markdown = export_markdown(&graph).expect("export markdown");
+    assert!(markdown.contains("<p>one</p>"), "multi-block cells fall back to an inline HTML table: {markdown}");
+    assert!(markdown.contains("<li>item</li>"), "{markdown}");
+
+    let bytes = export_epub_bytes(&graph).expect("export epub");
+    let reopened = import_epub_bytes("cell-blocks-roundtrip.epub", &bytes).expect("reopen epub");
+    let reopened_cell = first_body_cell(&reopened);
+    assert_eq!(
+        cell_block_kinds(&reopened, reopened_cell),
+        ["paragraph", "list"],
+        "an EPUB round trip keeps the block shape of the cell: {reopened_cell:?}"
+    );
+}
+
 #[test]
 fn epub_import_lowers_container_blockquote_code_and_hr() {
     let zip = epub_with_block_elements_zip();

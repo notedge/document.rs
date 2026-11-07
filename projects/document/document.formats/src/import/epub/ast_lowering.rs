@@ -5,10 +5,7 @@ use document_ir::{
 };
 use oak_html::ast::{Element, HtmlDocument, HtmlNode};
 
-use crate::import::{
-    common::cell_children,
-    math_ml::{lower_math_element, math_display, single_display_math_child},
-};
+use crate::import::math_ml::{lower_math_element, math_display, single_display_math_child};
 
 use super::{
     assets::register_image_from_src,
@@ -591,7 +588,25 @@ fn collect_table_rows(
     losses: &mut Vec<LossMarker>,
 ) -> (Vec<TableRow>, Vec<TableRow>) {
     let mut rows = Vec::new();
-    walk_table_rows(element, graph, member_path, losses, &mut rows);
+    // Only direct rows and rows inside one section are collected. Descending
+    // into `<td>` would pull the rows of a nested table into the outer grid.
+    for child in direct_child_elements(element) {
+        let tag = child.tag_name.to_ascii_lowercase();
+        if tag == "tr" {
+            rows.push(collect_table_row(child, graph, member_path, losses));
+            continue;
+        }
+        if !matches!(tag.as_str(), "thead" | "tbody" | "tfoot") {
+            continue;
+        }
+        let section_header = tag == "thead";
+        for row in direct_child_elements(child) {
+            if element_is(row, "tr") {
+                let (row_is_header, table_row) = collect_table_row(row, graph, member_path, losses);
+                rows.push((section_header || row_is_header, table_row));
+            }
+        }
+    }
     let mut head = Vec::new();
     let mut body = Vec::new();
     let mut leading_header = true;
@@ -607,20 +622,85 @@ fn collect_table_rows(
     (head, body)
 }
 
-fn walk_table_rows(
-    element: &Element,
+/// Collect the block children of a table cell.
+///
+/// A cell body is a block container, so authored paragraphs, lists and nested
+/// tables stay separate blocks. Inline markup and bare text between them are
+/// grouped into one paragraph per run, which keeps mixed `<td>` content
+/// faithful instead of flattening it into a single paragraph.
+fn collect_cell_children(
+    cell: &Element,
     graph: &mut DocumentGraph,
     member_path: Option<&str>,
     losses: &mut Vec<LossMarker>,
-    rows: &mut Vec<(bool, TableRow)>,
-) {
-    if element_is(element, "tr") {
-        rows.push(collect_table_row(element, graph, member_path, losses));
+) -> Vec<document_ir::NodeId> {
+    let mut children = Vec::new();
+    let mut run = Vec::new();
+    for child in &cell.children {
+        match child {
+            HtmlNode::Text(text) => {
+                let normalized = normalize_whitespace(&text.content);
+                if !normalized.is_empty() {
+                    push_inline(&mut run, Inline::Text { text: normalized });
+                }
+            }
+            HtmlNode::Element(element) if is_block_element_tag(&element.tag_name.to_ascii_lowercase()) => {
+                flush_cell_inline_run(&mut run, &mut children, graph);
+                let mut blocks = Vec::new();
+                collect_semantic_blocks(element, &mut blocks, losses, graph, member_path, false);
+                children.extend(blocks.into_iter().map(|block| graph.push_block(block)));
+            }
+            HtmlNode::Element(element) => {
+                note_inline_style_loss(element, losses);
+                push_inline_element(element, graph, member_path, losses, &mut run);
+            }
+            HtmlNode::Comment(_) => {}
+        }
+    }
+    flush_cell_inline_run(&mut run, &mut children, graph);
+    children
+}
+
+fn flush_cell_inline_run(run: &mut Vec<Inline>, children: &mut Vec<document_ir::NodeId>, graph: &mut DocumentGraph) {
+    if run.is_empty() {
         return;
     }
-    for child in direct_child_elements(element) {
-        walk_table_rows(child, graph, member_path, losses, rows);
+    trim_inline_edges(run);
+    if run.is_empty() {
+        return;
     }
+    children.push(graph.push_block(Block::Paragraph { content: std::mem::take(run) }));
+}
+
+/// Tags that carry block semantics inside a table cell.
+fn is_block_element_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "p" | "blockquote"
+            | "pre"
+            | "ul"
+            | "ol"
+            | "table"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "hr"
+            | "dl"
+            | "math"
+            | "figcaption"
+            | "svg"
+            | "img"
+            | "section"
+            | "article"
+            | "main"
+            | "div"
+            | "figure"
+            | "nav"
+            | "aside"
+    )
 }
 
 fn collect_table_row(
@@ -637,9 +717,8 @@ fn collect_table_row(
             if tag == "th" {
                 is_header = true;
             }
-            let mut content = collect_inlines_from_element(child, graph, member_path, losses);
-            trim_inline_edges(&mut content);
-            cells.push(TableCell { children: cell_children(graph, content), colspan: 1, rowspan: 1 });
+            let children = collect_cell_children(child, graph, member_path, losses);
+            cells.push(TableCell { children, colspan: 1, rowspan: 1 });
         }
     }
     (is_header, TableRow { cells })
