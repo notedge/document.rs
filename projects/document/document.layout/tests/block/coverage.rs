@@ -140,6 +140,111 @@ fn lays_out_quote_code_table_break_and_image() {
 }
 
 #[test]
+fn table_rowspan_keeps_later_cells_in_their_column_and_skips_the_crossing_rule() {
+    let mut graph = DocumentGraph::new(DocumentId(7));
+    let spanned = graph.push_block(Block::Paragraph { content: vec![text("Spanned")] });
+    let first = graph.push_block(Block::Paragraph { content: vec![text("First")] });
+    let later = graph.push_block(Block::Paragraph { content: vec![text("Later")] });
+    graph.push_block(Block::Table {
+        caption: None,
+        head: Vec::new(),
+        body: vec![
+            TableRow {
+                cells: vec![
+                    TableCell { children: vec![spanned], colspan: 1, rowspan: 2 },
+                    TableCell { children: vec![first], colspan: 1, rowspan: 1 },
+                ],
+            },
+            TableRow { cells: vec![TableCell { children: vec![later], colspan: 1, rowspan: 1 }] },
+        ],
+        foot: Vec::new(),
+    });
+
+    let plan = layout(&graph);
+    let page = &plan.pages[0];
+    let runs = text_runs(page);
+    let spanned = runs.iter().find(|run| run.text == "Spanned").expect("spanned row run");
+    let first = runs.iter().find(|run| run.text == "First").expect("first row run");
+    let later = runs.iter().find(|run| run.text == "Later").expect("later row run");
+    assert!(
+        later.x > spanned.x,
+        "a cell in the second row must stay in column two instead of sliding under the rowspan cell: {runs:?}"
+    );
+    assert_eq!(later.x, first.x, "both cells belong to the same column: {runs:?}");
+
+    let boxes: Vec<_> = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            LayoutItem::Rect(rect) if !rect.filled && rect.stroke.is_some() => Some(rect),
+            _ => None,
+        })
+        .collect();
+    let spanned_box = boxes.iter().min_by(|left, right| left.x.partial_cmp(&right.x).unwrap()).expect("rowspan box");
+    assert!(spanned_box.height > later.y - first.y, "the rowspan cell must cover both rows: {spanned_box:?}");
+    assert!(spanned_box.x <= first.x, "the box must start at the spanned cell, not the neighbour");
+
+    let rules: Vec<_> = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            LayoutItem::Rule(rule) => Some(rule),
+            _ => None,
+        })
+        .collect();
+    let full = rules.iter().map(|rule| rule.x2 - rule.x1).fold(0.0f64, f64::max);
+    assert!(
+        rules.iter().any(|rule| rule.x2 - rule.x1 < full - 1.0),
+        "the row boundary must skip the columns the rowspan cell owns: {rules:?}"
+    );
+}
+
+#[test]
+fn table_without_rowspan_draws_no_span_box_or_split_rule() {
+    let mut graph = DocumentGraph::new(DocumentId(8));
+    let a = graph.push_block(Block::Paragraph { content: vec![text("A")] });
+    let b = graph.push_block(Block::Paragraph { content: vec![text("B")] });
+    let c = graph.push_block(Block::Paragraph { content: vec![text("C")] });
+    let d = graph.push_block(Block::Paragraph { content: vec![text("D")] });
+    graph.push_block(Block::Table {
+        caption: None,
+        head: Vec::new(),
+        body: vec![
+            TableRow {
+                cells: vec![
+                    TableCell { children: vec![a], colspan: 1, rowspan: 1 },
+                    TableCell { children: vec![b], colspan: 1, rowspan: 1 },
+                ],
+            },
+            TableRow {
+                cells: vec![
+                    TableCell { children: vec![c], colspan: 1, rowspan: 1 },
+                    TableCell { children: vec![d], colspan: 1, rowspan: 1 },
+                ],
+            },
+        ],
+        foot: Vec::new(),
+    });
+
+    let plan = layout(&graph);
+    let page = &plan.pages[0];
+    assert!(
+        !page.items.iter().any(|item| matches!(item, LayoutItem::Rect(rect) if !rect.filled && rect.stroke.is_some())),
+        "a table without rowspan needs no cell box"
+    );
+    let rules: Vec<_> = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            LayoutItem::Rule(rule) => Some(rule.x2 - rule.x1),
+            _ => None,
+        })
+        .collect();
+    let widest = rules.iter().copied().fold(0.0f64, f64::max);
+    assert!(rules.iter().all(|width| (width - widest).abs() < 1e-6), "row rules must stay full width: {rules:?}");
+}
+
+#[test]
 fn layout_draws_task_boxes_and_keeps_plain_list_markers() {
     let mut graph = DocumentGraph::new(DocumentId(6));
     graph.push_block(Block::List {

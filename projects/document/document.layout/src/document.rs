@@ -1458,9 +1458,40 @@ impl<'a> PageBuilder<'a> {
         }
         self.pad(size * 0.4);
         let mut flattened_kinds = BTreeSet::new();
-        for (row_index, (row, is_header)) in rows.iter().enumerate() {
+        // A rowspan cell owns its columns in every row it covers, so later
+        // rows must start after the occupied slots instead of sliding under it.
+        let mut grid = vec![vec![false; columns]; rows.len()];
+        let mut placements: Vec<Vec<(usize, usize)>> = Vec::with_capacity(rows.len());
+        for (row_index, (row, _)) in rows.iter().enumerate() {
+            let mut row_placements = Vec::with_capacity(row.cells.len());
+            for cell in &row.cells {
+                let span_cols = cell.colspan.max(1) as usize;
+                let span_rows = cell.rowspan.max(1) as usize;
+                let mut column = 0usize;
+                while column + span_cols <= columns && (0..span_cols).any(|offset| grid[row_index][column + offset]) {
+                    column += 1;
+                }
+                let column = column.min(columns.saturating_sub(span_cols));
+                for row_offset in 0..span_rows {
+                    let Some(slots) = grid.get_mut(row_index + row_offset)
+                    else {
+                        break;
+                    };
+                    for offset in 0..span_cols {
+                        if let Some(slot) = slots.get_mut(column + offset) {
+                            *slot = true;
+                        }
+                    }
+                }
+                row_placements.push((column, span_rows));
+            }
+            placements.push(row_placements);
+        }
+
+        let mut cell_rows: Vec<Vec<CellLines>> = Vec::with_capacity(rows.len());
+        for &(row, is_header) in rows.iter() {
             let header_face =
-                if *is_header && tokens.heading_bold { TextFace { family: SERIF, style: FontStyle::Bold } } else { BODY_FACE };
+                if is_header && tokens.heading_bold { TextFace { family: SERIF, style: FontStyle::Bold } } else { BODY_FACE };
             let cells: Vec<CellLines> = row
                 .cells
                 .iter()
@@ -1474,10 +1505,46 @@ impl<'a> PageBuilder<'a> {
                     CellLines { span, available, lines: break_inline_atoms(&self.text, atoms, size, available, 0.0), numeric }
                 })
                 .collect();
-            let max_lines = cells.iter().map(|cell| cell.lines.len()).max().unwrap_or(1).max(1);
-            let height = max_lines as f64 * line_box + tokens.table_pad_v * 2.0;
+            cell_rows.push(cells);
+        }
+
+        let mut heights = vec![0.0f64; rows.len()];
+        // `(start row, column, column span, row span, content height)`.
+        let mut spanning: Vec<(usize, usize, usize, usize, f64)> = Vec::new();
+        for (row_index, &(row, _)) in rows.iter().enumerate() {
+            let mut max_lines = 1usize;
+            for (cell_index, cell) in row.cells.iter().enumerate() {
+                let lines = cell_rows[row_index][cell_index].lines.len().max(1);
+                let (column, span_rows) = placements[row_index][cell_index];
+                if span_rows == 1 {
+                    max_lines = max_lines.max(lines);
+                }
+                else {
+                    let span_cols = cell.colspan.max(1) as usize;
+                    let required = lines as f64 * line_box + tokens.table_pad_v * 2.0;
+                    spanning.push((row_index, column, span_cols, span_rows, required));
+                }
+            }
+            heights[row_index] = max_lines as f64 * line_box + tokens.table_pad_v * 2.0;
+        }
+        // A spanning cell taller than the rows it covers pushes the deficit
+        // into the last covered row, so its text keeps its full height.
+        for &(start, _, _, span_rows, required) in &spanning {
+            let end = (start + span_rows).min(rows.len());
+            let available: f64 = heights[start..end].iter().sum();
+            if available < required {
+                heights[end - 1] += required - available;
+            }
+        }
+
+        let mut row_tops = vec![0.0f64; rows.len()];
+        let mut row_pages = vec![0usize; rows.len()];
+        for (row_index, (row, is_header)) in rows.iter().enumerate() {
+            let height = heights[row_index];
             self.ensure_space(height);
             let top = self.cursor;
+            row_tops[row_index] = top;
+            row_pages[row_index] = self.pages.len();
             if *is_header && let Some(tint) = tokens.table_header_tint {
                 self.push(LayoutItem::Rect(Rect {
                     x,
@@ -1493,17 +1560,43 @@ impl<'a> PageBuilder<'a> {
             let header_thickness = if *is_header { tokens.table_header_rule } else { tokens.table_row_rule };
             if header_thickness > 0.0 {
                 let color = if *is_header { tokens.table_rule_strong_color } else { tokens.table_rule_color };
-                self.push(LayoutItem::Rule(Rule {
-                    x1: x,
-                    y1: top,
-                    x2: x + width,
-                    y2: top,
-                    thickness: header_thickness,
-                    color: Some(color),
-                }));
+                // A rowspan cell crossing this boundary owns its columns, so
+                // the rule is painted in segments around them.
+                let mut blocked: Vec<(f64, f64)> = spanning
+                    .iter()
+                    .filter(|&&(start, _, _, span_rows, _)| start < row_index && start + span_rows > row_index)
+                    .map(|&(_, column, span_cols, _, _)| {
+                        (x + column_width * column as f64, x + column_width * (column + span_cols) as f64)
+                    })
+                    .collect();
+                blocked.sort_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(std::cmp::Ordering::Equal));
+                let mut cursor_x = x;
+                for (start_x, end_x) in blocked {
+                    if start_x > cursor_x {
+                        self.push(LayoutItem::Rule(Rule {
+                            x1: cursor_x,
+                            y1: top,
+                            x2: start_x,
+                            y2: top,
+                            thickness: header_thickness,
+                            color: Some(color),
+                        }));
+                    }
+                    cursor_x = cursor_x.max(end_x);
+                }
+                if cursor_x < x + width {
+                    self.push(LayoutItem::Rule(Rule {
+                        x1: cursor_x,
+                        y1: top,
+                        x2: x + width,
+                        y2: top,
+                        thickness: header_thickness,
+                        color: Some(color),
+                    }));
+                }
             }
-            let mut column = 0usize;
-            for cell in &cells {
+            for (cell_index, cell) in cell_rows[row_index].iter().enumerate() {
+                let column = placements[row_index][cell_index].0;
                 let cell_x = x + column_width * column as f64 + padding;
                 let mut line_top = top + tokens.table_pad_v;
                 for line in &cell.lines {
@@ -1511,7 +1604,6 @@ impl<'a> PageBuilder<'a> {
                     self.paint_line(line, size, cell_x + shift, line_top + ASCENT * size, cell.available, None, cell.numeric);
                     line_top += line_box;
                 }
-                column += cell.span;
             }
             self.cursor = top + height;
             if row_index + 1 == rows.len() && tokens.table_final_rule > 0.0 {
@@ -1524,6 +1616,26 @@ impl<'a> PageBuilder<'a> {
                     color: Some(tokens.table_rule_strong_color),
                 }));
             }
+        }
+        // The box is the visible body of a rowspan cell: it spans the rows it
+        // owns and replaces the row rules that would otherwise cut through it.
+        for &(start, column, span_cols, span_rows, _) in &spanning {
+            let end = (start + span_rows).min(rows.len()) - 1;
+            if row_pages[start] != row_pages[end] {
+                continue;
+            }
+            let top = row_tops[start];
+            let bottom = row_tops[end] + heights[end];
+            self.push(LayoutItem::Rect(Rect {
+                x: x + column_width * column as f64,
+                y: top,
+                width: column_width * span_cols as f64,
+                height: bottom - top,
+                filled: false,
+                fill: None,
+                stroke: Some(tokens.table_rule_color),
+                stroke_width: tokens.table_row_rule.max(0.5),
+            }));
         }
         if !flattened_kinds.is_empty() {
             let kinds: Vec<&str> = flattened_kinds.iter().copied().collect();
