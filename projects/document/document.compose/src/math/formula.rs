@@ -647,6 +647,26 @@ impl MathSemantics {
         }
     }
 
+    /// TeX rule 18g `sub_drop` (σ14): the minimum distance a large
+    /// operator's subscript baseline sits below the operator's bottom, in em.
+    ///
+    /// OpenType `MATH` publishes `subscriptBaselineDropMin`, but the bundled
+    /// faces fill it with a value the reference engine reads at the script's
+    /// own size. TeX reads σ14 at the nucleus size, without any script-level
+    /// scaling, so this layer hands layout the unscaled 0.05 em. `family` is
+    /// the face label the font layer publishes (`latin-modern-math`,
+    /// `xits-math`, …).
+    ///
+    /// `None` means the face has no TeX parameter. Layout must then fall back
+    /// to the font's `subscriptBaselineDropMin` and report a missing-parameter
+    /// diagnostic instead of silently using the σ14 number for the face.
+    pub fn tex_sub_drop(family: &str) -> Option<Fixed> {
+        match family {
+            "latin-modern-math" | "xits-math" => Some(Fixed::from_f64(0.05)),
+            _ => None,
+        }
+    }
+
     /// TeX parameter families this layer can answer for, as the labels
     /// [`tex_lone_subscript_shift_down`][Self::tex_lone_subscript_shift_down]
     /// accepts.
