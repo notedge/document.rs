@@ -317,8 +317,7 @@ fn write_flow_block(
             }
             out.push_str(&format!(">{}</code></pre>\n", escape_text(text)));
         }
-        FlowBlock::Math { formula } => match math.and_then(|context| formula_svg(formula, context, glyphs, diagnostics))
-        {
+        FlowBlock::Math { formula } => match math.and_then(|context| formula_svg(formula, context, glyphs, diagnostics)) {
             Some(svg) => write_display_math(out, &formula.source, &svg),
             // Without a MATH context, or when the engine rejects the formula,
             // the authored source stays visible as a code run: the same output

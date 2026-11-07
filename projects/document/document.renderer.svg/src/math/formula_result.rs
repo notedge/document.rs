@@ -6,8 +6,7 @@
 //! walking, so the traversal here only maps primitives onto SVG elements and
 //! tracks the painted ink for the viewport.
 
-use std::collections::HashMap;
-use std::fmt::Write;
+use std::{collections::HashMap, fmt::Write};
 
 use document_compose::{
     Diagnostic, Severity, SourceSpan,
@@ -112,10 +111,7 @@ pub fn render_formula_result(result: &FormulaLayoutResult) -> FormulaSvg {
 /// must place that `<defs>` content in the same document. In exchange, every
 /// repeated glyph or formula in a long document costs one `<use>` instead of a
 /// full outline.
-pub fn render_formula_result_with_glyph_defs(
-    result: &FormulaLayoutResult,
-    glyphs: &mut GlyphDefs,
-) -> FormulaSvg {
+pub fn render_formula_result_with_glyph_defs(result: &FormulaLayoutResult, glyphs: &mut GlyphDefs) -> FormulaSvg {
     render_formula_result_impl(result, Some(glyphs))
 }
 
@@ -172,12 +168,7 @@ impl<'a> SvgWalk<'a> {
                 let nx = ox + translate_x.to_f64();
                 let ny = oy + translate_y.to_f64();
                 let pre = self.buffer.len();
-                let _ = write!(
-                    self.buffer,
-                    r#"<g transform="translate({}, {})">"#,
-                    translate_x.to_f64(),
-                    translate_y.to_f64()
-                );
+                let _ = write!(self.buffer, r#"<g transform="translate({}, {})">"#, translate_x.to_f64(), translate_y.to_f64());
                 let after_open = self.buffer.len();
                 for child in children {
                     self.walk(child, nx, ny);
