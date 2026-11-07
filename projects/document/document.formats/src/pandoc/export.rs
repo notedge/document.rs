@@ -653,7 +653,7 @@ fn classify_footnote_body(body: &str) -> Result<Vec<IrInline>, NoteDefinitionFai
             }
         }
         let mut content = content.ok_or(NoteDefinitionFailure::Empty)?;
-        if !parsed.coverage.loss.is_empty() {
+        if parsed.coverage.loss.iter().any(|loss| loss.code != "import.markdown.asset_unresolved") {
             return Err(NoteDefinitionFailure::Unrepresentable);
         }
         if has_nested_note(&content) {

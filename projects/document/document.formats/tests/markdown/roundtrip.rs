@@ -25,6 +25,11 @@ fn round_trip(name: &str, source: &str) -> (DocumentGraph, DocumentGraph, String
 
 /// Fixtures whose full block payload must survive Markdown import, export, and
 /// re-import without diagnostics.
+///
+/// A fixture that references an image still reports
+/// `import.markdown.asset_unresolved` because Markdown carries no media bytes
+/// and no asset source is supplied here. That loss is reported, not silent, so
+/// it is the only one these fixtures may raise.
 const LOSSLESS_FIXTURES: &[(&str, &str)] = &[
     ("fence-language", "```rust title=\"sample\"\nfn main() {}\n```\n"),
     ("fence-long-inner-backticks", "````markdown\n```inner\ncode\n```\n````\n"),
@@ -44,11 +49,20 @@ const LOSSLESS_FIXTURES: &[(&str, &str)] = &[
 ];
 
 #[test]
-fn markdown_round_trip_fixture_set_keeps_block_payloads_and_reports_no_loss() {
+fn markdown_round_trip_fixture_set_keeps_block_payloads_and_reports_no_unexpected_loss() {
     for (name, source) in LOSSLESS_FIXTURES {
         let (graph, reopened, markdown) = round_trip(name, source);
-        assert!(graph.coverage.loss.is_empty(), "{name} imported lossy: {:#?}\n{markdown}", graph.coverage.loss);
-        assert!(reopened.coverage.loss.is_empty(), "{name} reopened lossy: {:#?}\n{markdown}", reopened.coverage.loss);
+        let unexpected = |graph: &DocumentGraph| {
+            graph
+                .coverage
+                .loss
+                .iter()
+                .filter(|loss| loss.code != "import.markdown.asset_unresolved")
+                .map(|loss| loss.code.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(unexpected(&graph).is_empty(), "{name} imported lossy: {:#?}\n{markdown}", unexpected(&graph));
+        assert!(unexpected(&reopened).is_empty(), "{name} reopened lossy: {:#?}\n{markdown}", unexpected(&reopened));
         assert_eq!(blocks(&graph), blocks(&reopened), "{name} changed shape\n{markdown}");
     }
 }

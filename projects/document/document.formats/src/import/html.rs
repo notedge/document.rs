@@ -160,7 +160,7 @@ pub fn import_html_with_links_and_assets(
         push_block_with_source(&mut graph, block, span);
     }
     register_image_assets(&mut graph);
-    hydrate_image_assets(&mut graph, assets);
+    hydrate_image_assets(&mut graph, assets, "import.html.asset_unresolved");
     collect_unsupported_losses(&document, &mut graph);
     if graph.blocks.is_empty() {
         graph.push_loss(LossMarker {
@@ -299,7 +299,7 @@ fn media_type_for_bytes(bytes: &[u8]) -> Option<&'static str> {
 /// lets project export deduplicate identical images under one stable `assets/`
 /// name. Every target without captured bytes raises an explicit
 /// `import.html.asset_unresolved` loss instead of disappearing from the body.
-fn hydrate_image_assets(graph: &mut DocumentGraph, source: &dyn HtmlAssetSource) {
+pub(crate) fn hydrate_image_assets(graph: &mut DocumentGraph, source: &dyn HtmlAssetSource, loss_code: &str) {
     let mut unresolved = Vec::new();
     for asset in &mut graph.assets {
         if !matches!(asset.kind, document_ir::AssetKind::Image) {
@@ -321,7 +321,7 @@ fn hydrate_image_assets(graph: &mut DocumentGraph, source: &dyn HtmlAssetSource)
     }
     for target in unresolved {
         graph.push_loss(LossMarker {
-            code: "import.html.asset_unresolved".into(),
+            code: loss_code.into(),
             message: format!(
                 "image `{target}` has no captured bytes. The asset stays Unresolved and is not materialized under assets/"
             ),

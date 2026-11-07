@@ -1,11 +1,26 @@
 use document_formats::{
     export::{html::export_html, markdown::export_markdown},
-    import::markdown::import_markdown_bytes,
+    import::{
+        html::HtmlAssetSource,
+        markdown::{import_markdown_bytes, import_markdown_bytes_with_assets},
+    },
 };
 use document_ir::{
-    Block, DocumentGraph, DocumentId, Inline, MathExpression, RelationEndpoint, RelationKind, SemanticStatus, TableCell,
-    TableRow,
+    AssetKind, Block, DocumentGraph, DocumentId, Inline, MathExpression, RelationEndpoint, RelationKind, SemanticStatus,
+    TableCell, TableRow,
 };
+
+struct Assets(std::collections::HashMap<String, Vec<u8>>);
+
+impl HtmlAssetSource for Assets {
+    fn read_asset(&self, target: &str) -> Option<Vec<u8>> {
+        self.0.get(target).cloned()
+    }
+}
+
+fn png_bytes() -> Vec<u8> {
+    vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+}
 
 fn table<'a>(graph: &'a DocumentGraph) -> (&'a [TableRow], &'a [TableRow]) {
     graph
@@ -320,6 +335,78 @@ fn markdown_spanning_table_reopens_as_a_flattened_pipe_table() {
     assert!(flattened.contains("| a | b |"), "{flattened:?}");
 }
 
+fn cell_block_kinds(graph: &DocumentGraph, cell: &TableCell) -> Vec<&'static str> {
+    cell.children
+        .iter()
+        .filter_map(|id| graph.block(*id))
+        .map(|node| match &node.block {
+            Block::Paragraph { .. } => "paragraph",
+            Block::Table { .. } => "table",
+            _ => "other",
+        })
+        .collect()
+}
+
+fn top_level_table<'a>(graph: &'a DocumentGraph) -> &'a Block {
+    let referenced: std::collections::HashSet<document_ir::NodeId> = graph
+        .blocks
+        .iter()
+        .flat_map(|node| match &node.block {
+            Block::Section { children, .. } | Block::Quote { children } => children.clone(),
+            Block::Table { head, body, foot, .. } => head
+                .iter()
+                .chain(body)
+                .chain(foot)
+                .flat_map(|row| row.cells.iter())
+                .flat_map(|cell| cell.children.iter().copied())
+                .collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    &graph
+        .blocks
+        .iter()
+        .find(|node| matches!(node.block, Block::Table { .. }) && !referenced.contains(&node.id))
+        .unwrap_or_else(|| panic!("top-level table expected: {:#?}", graph.blocks))
+        .block
+}
+
+#[test]
+fn markdown_html_table_with_a_nested_table_round_trips_as_blocks() {
+    const SOURCE: &str = "<table><tr><td><p>outer</p><table><tr><td>inner</td></tr></table></td></tr></table>";
+    let graph = import_markdown_bytes("nested-cell-table.md", SOURCE).expect("import markdown");
+    assert!(
+        !graph.blocks.iter().any(|node| matches!(node.block, Block::RawHtml { .. })),
+        "a nested table inside a cell must lower to blocks: {:#?}",
+        graph.blocks
+    );
+    assert!(
+        !graph.coverage.loss.iter().any(|loss| loss.code == "import.markdown.raw_html_unrendered"),
+        "{:?}",
+        graph.coverage.loss
+    );
+
+    let Block::Table { body, .. } = top_level_table(&graph)
+    else {
+        panic!("top-level table expected: {:#?}", graph.blocks)
+    };
+    let cell = &body[0].cells[0];
+    assert_eq!(cell_block_kinds(&graph, cell), ["paragraph", "table"], "cell blocks stay separate: {cell:?}");
+
+    let markdown = export_markdown(&graph).expect("export markdown");
+    let reopened = import_markdown_bytes("nested-cell-table-roundtrip.md", &markdown).expect("reopen markdown");
+    let Block::Table { body: reopened_body, .. } = top_level_table(&reopened)
+    else {
+        panic!("top-level table expected after round trip: {:#?}", reopened.blocks)
+    };
+    let reopened_cell = &reopened_body[0].cells[0];
+    assert_eq!(
+        cell_block_kinds(&reopened, reopened_cell),
+        ["paragraph", "table"],
+        "round trip keeps the nested table: {markdown}"
+    );
+}
+
 #[test]
 fn markdown_definition_list_lowers_to_paragraphs_with_a_loss_code() {
     let source = "Term\n: definition\n: second\n";
@@ -491,6 +578,94 @@ fn markdown_undefined_shortcut_is_literal_without_link_loss() {
     let markdown = export_markdown(&graph).expect("export");
     let reopened = import_markdown_bytes("literal-output.md", &markdown).expect("reopen");
     assert_eq!(reopened.blocks[0].block, graph.blocks[0].block);
+}
+
+fn collect_links<'a>(inlines: &'a [Inline], links: &mut Vec<&'a Vec<Inline>>) {
+    for inline in inlines {
+        match inline {
+            Inline::Link { display, .. } => {
+                links.push(display);
+                collect_links(display, links);
+            }
+            Inline::Styled { children, .. } | Inline::Attributed { children, .. } => collect_links(children, links),
+            Inline::Image { alt, .. } => collect_links(alt, links),
+            Inline::Note { display: Some(display), .. } => collect_links(display, links),
+            _ => {}
+        }
+    }
+}
+
+fn link_displays(graph: &DocumentGraph) -> Vec<&Vec<Inline>> {
+    let mut links = Vec::new();
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Paragraph { content } => collect_links(content, &mut links),
+            Block::Section { title, .. } => collect_links(title, &mut links),
+            Block::List { items, .. } => {
+                for item in items {
+                    collect_links(&item.content, &mut links);
+                }
+            }
+            _ => {}
+        }
+    }
+    links
+}
+
+fn only_link_display(graph: &DocumentGraph) -> &Vec<Inline> {
+    let links = link_displays(graph);
+    assert_eq!(links.len(), 1, "one link expected: {:#?}", graph.blocks);
+    links[0]
+}
+
+#[test]
+fn markdown_image_inside_a_link_keeps_the_image() {
+    let cases = [
+        ("[![alt](a.png)](https://example.com)\n", vec![("alt", "a.png")]),
+        ("[cover ![alt](a.png)](https://example.com)\n", vec![("alt", "a.png")]),
+        ("# [![alt](a.png)](https://example.com)\n", vec![("alt", "a.png")]),
+        ("- [![alt](a.png)](https://example.com)\n", vec![("alt", "a.png")]),
+        ("| [![alt](a.png)](https://example.com) |\n| --- |\n", vec![("alt", "a.png")]),
+        ("[![alt][img]][link]\n\n[img]: a.png\n[link]: https://example.com\n", vec![("alt", "a.png")]),
+    ];
+    for (source, expected) in cases {
+        let graph = import_markdown_bytes("image-in-link.md", source).expect("import markdown");
+        let display = only_link_display(&graph);
+        let images: Vec<(&str, &str)> = display
+            .iter()
+            .filter_map(|inline| match inline {
+                Inline::Image { source, alt, .. } => {
+                    let alt = alt.iter().map(Inline::plain_text).collect::<String>();
+                    Some((Box::leak(alt.into_boxed_str()) as &str, source.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(images, expected, "image in link label must survive: {source:?} -> {display:#?}");
+        assert!(
+            !graph.coverage.loss.iter().any(|loss| loss.code == "import.markdown.unresolved_reference_link"),
+            "a resolvable image in a link must not report an unresolved label: {source:?} -> {:#?}",
+            graph.coverage.loss
+        );
+    }
+}
+
+#[test]
+fn markdown_image_in_a_mixed_link_label_round_trips() {
+    let source = "[cover ![alt](a.png)](https://example.com)\n";
+    let graph = import_markdown_bytes("mixed-label.md", source).expect("import markdown");
+    let display = only_link_display(&graph);
+    assert_eq!(display.len(), 2, "the label keeps its text run plus the image: {display:#?}");
+    assert!(matches!(&display[0], Inline::Text { text } if text == "cover "), "{display:#?}");
+
+    let markdown = export_markdown(&graph).expect("export markdown");
+    assert!(markdown.contains("![alt](a.png)"), "{markdown}");
+    let reopened = import_markdown_bytes("mixed-label-roundtrip.md", &markdown).expect("reopen markdown");
+    let reopened_display = only_link_display(&reopened);
+    assert!(
+        reopened_display.iter().any(|inline| matches!(inline, Inline::Image { source, .. } if source == "a.png")),
+        "the image survives the round trip: {reopened_display:#?}"
+    );
 }
 
 #[test]
@@ -1112,6 +1287,29 @@ fn markdown_front_matter_is_reported_as_an_unmapped_loss_with_provenance() {
         graph.blocks
     );
     assert!(export_markdown(&graph).is_err(), "front matter export stays fail-closed");
+}
+
+#[test]
+fn markdown_images_without_bytes_report_asset_unresolved() {
+    let graph = import_markdown_bytes("images.md", "A local ![alt](pic.png) and a remote ![r](https://example.com/r.png)\n")
+        .expect("import markdown");
+    let codes = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect::<Vec<_>>();
+    assert_eq!(codes, vec!["import.markdown.asset_unresolved", "import.markdown.asset_unresolved"], "{codes:?}");
+    assert!(graph.coverage.loss.iter().all(|loss| loss.status == SemanticStatus::Partial), "{:#?}", graph.coverage.loss);
+    assert_eq!(graph.assets.iter().filter(|asset| asset.kind == AssetKind::Image).count(), 2);
+    assert!(graph.assets.iter().all(|asset| asset.status == SemanticStatus::Unresolved && asset.bytes.is_none()));
+}
+
+#[test]
+fn markdown_images_with_supplied_bytes_resolve_assets() {
+    let mut assets = Assets(std::collections::HashMap::new());
+    assets.0.insert("pic.png".into(), png_bytes());
+    let graph = import_markdown_bytes_with_assets("images.md", "A ![alt](pic.png)\n", &assets).expect("import with assets");
+    assert!(graph.coverage.loss.is_empty(), "{:#?}", graph.coverage.loss);
+    let asset = graph.assets.iter().find(|asset| asset.kind == AssetKind::Image).expect("image asset");
+    assert_eq!(asset.status, SemanticStatus::Resolved);
+    assert_eq!(asset.bytes.as_deref(), Some(png_bytes().as_slice()));
+    assert_eq!(asset.media_type.as_deref(), Some("image/png"));
 }
 
 mod export_project;

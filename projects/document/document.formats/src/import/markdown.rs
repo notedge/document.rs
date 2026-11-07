@@ -11,6 +11,7 @@ use oak_markdown::{
 
 use super::{
     common::{cell_children, decode_escaped_text, register_image_assets},
+    html::{HtmlAssetSource, NoHtmlAssets, hydrate_image_assets},
     tex_math::lower_formula_source,
 };
 use crate::FormatError;
@@ -55,7 +56,21 @@ fn markdown_import_language() -> MarkdownLanguage {
 /// those two carries directly. Importing alone loses nothing, so this profile
 /// records no footnote loss.
 pub fn import_markdown_bytes(label: &str, text: &str) -> Result<DocumentGraph, FormatError> {
-    import_markdown_bytes_with_footnote_flow(label, text, false)
+    import_markdown_bytes_with_source(label, text, false, &NoHtmlAssets)
+}
+
+/// Import Markdown with caller-supplied image bytes.
+///
+/// Markdown itself never carries media, so a caller that owns the referenced
+/// files supplies them through the same asset source the HTML reader uses.
+/// Targets without captured bytes stay `Unresolved` and raise
+/// `import.markdown.asset_unresolved`.
+pub fn import_markdown_bytes_with_assets(
+    label: &str,
+    text: &str,
+    assets: &dyn HtmlAssetSource,
+) -> Result<DocumentGraph, FormatError> {
+    import_markdown_bytes_with_source(label, text, false, assets)
 }
 
 /// Import Markdown for a flow-only target such as SVG/PDF reflow.
@@ -64,13 +79,14 @@ pub fn import_markdown_bytes(label: &str, text: &str) -> Result<DocumentGraph, F
 /// loss markers are recorded: a flow target has no footnote collection, so the
 /// body is never placed and the reference keeps only its textual marker.
 pub fn import_markdown_bytes_for_flow(label: &str, text: &str) -> Result<DocumentGraph, FormatError> {
-    import_markdown_bytes_with_footnote_flow(label, text, true)
+    import_markdown_bytes_with_source(label, text, true, &NoHtmlAssets)
 }
 
-fn import_markdown_bytes_with_footnote_flow(
+fn import_markdown_bytes_with_source(
     label: &str,
     text: &str,
     flow_footnotes: bool,
+    assets: &dyn HtmlAssetSource,
 ) -> Result<DocumentGraph, FormatError> {
     let language = markdown_import_language();
     let masked = mask_fenced_code_angles(text);
@@ -80,7 +96,7 @@ fn import_markdown_bytes_with_footnote_flow(
     let parser = MarkdownParser::new(&language);
     let parsed = parser.parse(&lex_source, &[], &mut cache);
     let green_tree = parsed.result.map_err(|error| FormatError::parse("markdown", error.to_string()))?;
-    lower_markdown_tree(label, green_tree, &source, flow_footnotes)
+    lower_markdown_tree(label, green_tree, &source, flow_footnotes, assets)
 }
 
 /// Hide `<` inside fenced code bodies from the lexer.
@@ -159,6 +175,7 @@ fn lower_markdown_tree(
     green_tree: &GreenNode<MarkdownLanguage>,
     source: &SourceText,
     flow_footnotes: bool,
+    assets: &dyn HtmlAssetSource,
 ) -> Result<DocumentGraph, FormatError> {
     let red_root = RedNode::new(green_tree, 0);
     let mut graph = DocumentGraph::new(document_id_for(label));
@@ -350,6 +367,7 @@ fn lower_markdown_tree(
     }
 
     register_image_assets(&mut graph);
+    hydrate_image_assets(&mut graph, assets, "import.markdown.asset_unresolved");
 
     if graph.blocks.is_empty() && graph.coverage.loss.is_empty() {
         graph.push_loss(LossMarker {
@@ -394,7 +412,7 @@ fn setext_heading(
     source: &SourceText,
     context: &mut LinkContext,
 ) -> Option<(usize, Block)> {
-    if node.element_type() != MarkdownElementType::Paragraph || parse_link_definition(node.text(source).trim()).is_some() {
+    if node.element_type() != MarkdownElementType::Paragraph || is_link_definition_only(&node.text(source)) {
         return None;
     }
     let mut underline = None;
@@ -475,26 +493,50 @@ fn register_link_definition_node(node: RedNode<MarkdownLanguage>, source: &Sourc
         return;
     }
     let text = node.text(source);
-    let raw = text.trim();
-    if let Some((label, destination, title)) = parse_link_definition(raw) {
-        context.definitions.entry(label).or_insert(LinkDefinition { destination, title });
-        return;
-    }
-    if raw.starts_with('[') && raw.contains("]:") {
-        let span = node.span();
-        context.losses.push((
-            LossMarker {
-                code: "import.markdown.invalid_link_definition".into(),
-                message: format!("unsupported or invalid link definition: {}", raw),
-                status: SemanticStatus::Partial,
-            },
-            Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
-        ));
+    let span = node.span();
+    // Adjacent definitions arrive as one paragraph, so each line is a
+    // candidate definition instead of only the first one.
+    for line in text.lines() {
+        let raw = line.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        if let Some((label, destination, title)) = parse_link_definition(raw) {
+            context.definitions.entry(label).or_insert(LinkDefinition { destination, title });
+            continue;
+        }
+        if raw.starts_with('[') && raw.contains("]:") {
+            context.losses.push((
+                LossMarker {
+                    code: "import.markdown.invalid_link_definition".into(),
+                    message: format!("unsupported or invalid link definition: {raw}"),
+                    status: SemanticStatus::Partial,
+                },
+                Some(SourceSpan { start: span.start as u32, end: span.end as u32 }),
+            ));
+        }
     }
 }
 
+/// True when every non-empty line parses as a link definition, so the
+/// paragraph carries metadata rather than document content.
+fn is_link_definition_only(text: &str) -> bool {
+    let mut saw_definition = false;
+    for line in text.lines() {
+        let raw = line.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        if parse_link_definition(raw).is_none() {
+            return false;
+        }
+        saw_definition = true;
+    }
+    saw_definition
+}
+
 fn parse_link_definition(raw: &str) -> Option<(String, String, Option<String>)> {
-    let close = reference_label_close(raw.strip_prefix('[')?)? + 1;
+    let close = outer_label_end(raw)?;
     if !raw[close..].starts_with("]:") {
         return None;
     }
@@ -511,33 +553,17 @@ fn normalize_link_label(label: &str) -> String {
     decode_escaped_text(label).split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
 }
 
-fn reference_label_close(content: &str) -> Option<usize> {
-    let mut escaped = false;
-    for (index, character) in content.char_indices() {
-        if escaped {
-            escaped = false;
-        }
-        else if character == '\\' {
-            escaped = true;
-        }
-        else if character == ']' {
-            return Some(index);
-        }
-    }
-    None
-}
-
 fn split_reference_link(raw: &str) -> Option<(String, String, bool)> {
-    let content = raw.strip_prefix('[').or_else(|| raw.strip_prefix("!["))?;
-    let close = reference_label_close(content)?;
-    let text = decode_escaped_text(&content[..close]);
-    let suffix = &content[close + 1..];
+    let end = outer_label_end(raw)?;
+    let prefix = if raw.starts_with("![") { 2 } else { 1 };
+    let text = decode_escaped_text(raw[prefix..end].trim());
+    let suffix = raw[end + 1..].trim_end();
+    if suffix.is_empty() {
+        return Some((text.clone(), text, false));
+    }
     if let Some(reference) = suffix.strip_prefix('[').and_then(|value| value.strip_suffix(']')) {
         let label = if reference.is_empty() { text.clone() } else { decode_escaped_text(reference) };
         return Some((text, label, true));
-    }
-    if suffix.is_empty() {
-        return Some((text.clone(), text, false));
     }
     None
 }
@@ -568,7 +594,7 @@ fn lower_block_node(
                 return BlockOutcome::Block(code);
             }
             let text = node.text(source);
-            if parse_link_definition(text.trim()).is_some() {
+            if is_link_definition_only(&text) {
                 BlockOutcome::Skip
             }
             else {
@@ -1058,7 +1084,11 @@ fn parse_inline_link(node: RedNode<MarkdownLanguage>, source: &SourceText, conte
     let span = node.span();
     let site = SourceSpan { start: span.start as u32, end: span.end as u32 };
     if let Some((_, url, title)) = resolve_link_destination(raw.as_ref(), context, site) {
-        return Some(Inline::Link { target: RelationEndpoint::ExternalUri(url), display: link_display(raw.as_ref()), title });
+        return Some(Inline::Link {
+            target: RelationEndpoint::ExternalUri(url),
+            display: link_display(raw.as_ref(), context),
+            title,
+        });
     }
     Some(Inline::Text { text: decode_escaped_text(raw.trim_end()) })
 }
@@ -1155,22 +1185,81 @@ fn outer_label_end(raw: &str) -> Option<usize> {
 
 /// Link text as inline content, so text nested inside the label keeps its own
 /// form instead of collapsing into its markup spelling.
-fn link_display(raw: &str) -> Vec<Inline> {
+///
+/// A link text may hold an image, and a pure image label is just the common
+/// case of that. Images resolve inline destinations and reference labels
+/// against the same document definitions as any other image token.
+fn link_display(raw: &str, context: &mut LinkContext) -> Vec<Inline> {
     let Some(end) = outer_label_end(raw)
     else {
         return vec![Inline::Text { text: decode_escaped_text(raw.trim_end()) }];
     };
     let label = raw[..end].trim();
-    // The label keeps its own `[` prefix, so strip it before looking at what
-    // the link text is made of.
+    // The label keeps its own `[` prefix, so strip it before scanning its
+    // content.
     let inner = label.strip_prefix('[').unwrap_or(label);
-    if let Some((alt, url, title)) = split_markdown_link(inner) {
-        if inner.starts_with("![") {
-            return vec![Inline::Image { source: url, alt: vec![Inline::Text { text: alt }], title, asset: None }];
+    let inlines = link_label_inlines(inner, context);
+    if inlines.is_empty() {
+        return vec![Inline::Text { text: decode_escaped_text(inner) }];
+    }
+    inlines
+}
+
+/// Split a link label into text runs and the images it contains.
+fn link_label_inlines(label: &str, context: &mut LinkContext) -> Vec<Inline> {
+    let mut inlines = Vec::new();
+    let mut cursor = 0;
+    let mut text_start = 0;
+    while cursor < label.len() {
+        let Some(offset) = label[cursor..].find("![")
+        else {
+            break;
+        };
+        let start = cursor + offset;
+        let slice = &label[start..];
+        let resolved = split_markdown_link(slice).or_else(|| {
+            let (alt, reference, _) = split_reference_link(slice)?;
+            let definition = context.definitions.get(&normalize_link_label(&reference))?;
+            Some((alt, definition.destination.clone(), definition.title.clone()))
+        });
+        let (Some((alt, url, title)), Some(length)) = (resolved, image_token_length(slice))
+        else {
+            cursor = start + 2;
+            continue;
+        };
+        if start > text_start {
+            let text = decode_escaped_text(&label[text_start..start]);
+            if !text.is_empty() {
+                inlines.push(Inline::Text { text });
+            }
+        }
+        inlines.push(Inline::Image { source: url, alt: vec![Inline::Text { text: alt }], title, asset: None });
+        cursor = start + length;
+        text_start = cursor;
+    }
+    if text_start < label.len() {
+        let text = decode_escaped_text(&label[text_start..]);
+        if !text.is_empty() {
+            inlines.push(Inline::Text { text });
         }
     }
-    let text = inner.strip_prefix("![").or_else(|| inner.strip_prefix('[')).unwrap_or(inner);
-    vec![Inline::Text { text: decode_escaped_text(text) }]
+    inlines
+}
+
+/// Byte length of the image token that starts `raw`.
+fn image_token_length(raw: &str) -> Option<usize> {
+    let end = outer_label_end(raw)?;
+    let after = raw.get(end + 1..)?;
+    if let Some(inside) = after.strip_prefix('(') {
+        let close = link_destination_close(inside)?;
+        return Some(end + 2 + close + 1);
+    }
+    if let Some(reference) = after.strip_prefix('[')
+        && let Some(close) = reference.find(']')
+    {
+        return Some(end + 2 + close + 1);
+    }
+    Some(end + 1)
 }
 
 /// Split a CommonMark destination from its optional trailing title.
@@ -1849,35 +1938,18 @@ fn lower_html_table_block(html: &str, graph: &mut DocumentGraph) -> Option<Block
     let imported = crate::import::html::import_html_text("markdown-html-table", trimmed).ok()?;
     // Cell content is a child block now, so the imported graph holds one
     // paragraph block per populated cell in addition to the table. The table
-    // stays the only semantic block, and every other block must be referenced
-    // by a cell or the block is not one standalone table.
-    let table = imported.blocks.iter().find(|node| matches!(node.block, Block::Table { .. }))?;
-    let cell_children: std::collections::HashSet<NodeId> = match &table.block {
-        Block::Table { head, body, foot, .. } => head
-            .iter()
-            .chain(body)
-            .chain(foot)
-            .flat_map(|row| row.cells.iter())
-            .flat_map(|cell| cell.children.iter().copied())
-            .collect(),
-        _ => return None,
-    };
-    if imported.blocks.iter().any(|node| node.id != table.id && !cell_children.contains(&node.id)) {
+    // stays the only semantic block, and every other block must be reachable
+    // from it through cell children or deeper nesting.
+    // A nested table is itself a `Table` node, so the outer table is the one
+    // no other block references.
+    let table = root_table(&imported.blocks)?;
+    let reachable = reachable_block_ids(&imported.blocks, table.id);
+    if imported.blocks.iter().any(|node| node.id != table.id && !reachable.contains(&node.id)) {
         return None;
     }
-    let mut remap = std::collections::HashMap::new();
-    for node in &imported.blocks {
-        if node.id == table.id {
-            continue;
-        }
-        remap.insert(node.id, graph.push_block(node.block.clone()));
-    }
+    let mut remap = HashMap::new();
     let mut block = table.block.clone();
-    if let Block::Table { head, body, foot, .. } = &mut block {
-        for cell in head.iter_mut().chain(body).chain(foot).flat_map(|row| row.cells.iter_mut()) {
-            cell.children = cell.children.iter().map(|child| remap.get(child).copied()).collect::<Option<Vec<_>>>()?;
-        }
-    }
+    remap_block_references(&mut block, &imported.blocks, graph, &mut remap)?;
     // The nested HTML import flattens merged cells. Carry the table losses
     // back so the reopen never downgrades silently.
     for loss in imported
@@ -1889,6 +1961,98 @@ fn lower_html_table_block(html: &str, graph: &mut DocumentGraph) -> Option<Block
         graph.push_loss(loss);
     }
     Some(block)
+}
+
+/// Find the single table that no other block references.
+fn root_table(blocks: &[document_ir::BlockNode]) -> Option<&document_ir::BlockNode> {
+    let referenced: std::collections::HashSet<NodeId> =
+        blocks.iter().flat_map(|node| direct_block_references(&node.block)).collect();
+    let mut roots = blocks.iter().filter(|node| matches!(node.block, Block::Table { .. }) && !referenced.contains(&node.id));
+    let root = roots.next()?;
+    roots.next().is_none().then_some(root)
+}
+
+/// Child block ids directly owned by `block`.
+fn direct_block_references(block: &Block) -> Vec<NodeId> {
+    match block {
+        Block::Section { children, .. } | Block::Quote { children } => children.clone(),
+        Block::List { items, .. } => items.iter().flat_map(|item| item.children.iter().copied()).collect(),
+        Block::Table { head, body, foot, .. } => head
+            .iter()
+            .chain(body)
+            .chain(foot)
+            .flat_map(|row| row.cells.iter())
+            .flat_map(|cell| cell.children.iter().copied())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Collect every block id reachable from `root` through block-child references.
+fn reachable_block_ids(blocks: &[document_ir::BlockNode], root: NodeId) -> std::collections::HashSet<NodeId> {
+    let mut reachable = std::collections::HashSet::new();
+    let mut pending = vec![root];
+    while let Some(id) = pending.pop() {
+        if !reachable.insert(id) {
+            continue;
+        }
+        let Some(node) = blocks.iter().find(|node| node.id == id)
+        else {
+            continue;
+        };
+        pending.extend(direct_block_references(&node.block));
+    }
+    reachable
+}
+
+/// Re-host one imported block into `graph`, remapping its child references.
+fn remap_imported_block(
+    blocks: &[document_ir::BlockNode],
+    id: NodeId,
+    graph: &mut DocumentGraph,
+    remap: &mut HashMap<NodeId, NodeId>,
+) -> Option<NodeId> {
+    if let Some(existing) = remap.get(&id) {
+        return Some(*existing);
+    }
+    let node = blocks.iter().find(|node| node.id == id)?;
+    let mut block = node.block.clone();
+    remap_block_references(&mut block, blocks, graph, remap)?;
+    let new_id = graph.push_block(block);
+    remap.insert(id, new_id);
+    Some(new_id)
+}
+
+/// Rewrite every child reference inside `block` to its re-hosted id.
+fn remap_block_references(
+    block: &mut Block,
+    blocks: &[document_ir::BlockNode],
+    graph: &mut DocumentGraph,
+    remap: &mut HashMap<NodeId, NodeId>,
+) -> Option<()> {
+    match block {
+        Block::Section { children, .. } | Block::Quote { children } => {
+            for child in children.iter_mut() {
+                *child = remap_imported_block(blocks, *child, graph, remap)?;
+            }
+        }
+        Block::List { items, .. } => {
+            for item in items {
+                for child in item.children.iter_mut() {
+                    *child = remap_imported_block(blocks, *child, graph, remap)?;
+                }
+            }
+        }
+        Block::Table { head, body, foot, .. } => {
+            for cell in head.iter_mut().chain(body).chain(foot).flat_map(|row| row.cells.iter_mut()) {
+                for child in cell.children.iter_mut() {
+                    *child = remap_imported_block(blocks, *child, graph, remap)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Some(())
 }
 
 /// Lower a blockquote into a quote whose children carry its whole body.
