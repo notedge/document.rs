@@ -349,6 +349,66 @@ fn pdf_export_names_image_alt_when_the_page_cannot_carry_it() {
 }
 
 #[test]
+fn pdf_export_keeps_list_and_nested_table_cells_inside_the_table() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(11));
+    let head_text = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "ZZ_HEAD".into() }] });
+    let head_text_two = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "ZZ_HEAD_TWO".into() }] });
+    let paragraph_cell = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "ZZ_PARA".into() }] });
+    let list_cell = graph.push_block(Block::List {
+        ordered: true,
+        items: vec![
+            ListItem {
+                content: vec![Inline::Text { text: "ZZ_LIST_A".into() }],
+                children: Vec::new(),
+                number: Some(1),
+                ..Default::default()
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "ZZ_LIST_B".into() }],
+                children: Vec::new(),
+                number: Some(2),
+                ..Default::default()
+            },
+        ],
+    });
+    let inner_head = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "ZZ_INNER_HEAD".into() }] });
+    let inner_cell = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "ZZ_INNER".into() }] });
+    let inner_table = graph.push_block(Block::Table {
+        caption: Some("ZZ_CAPTION".into()),
+        head: vec![TableRow { cells: vec![TableCell { children: vec![inner_head], colspan: 1, rowspan: 1 }] }],
+        body: vec![TableRow { cells: vec![TableCell { children: vec![inner_cell], colspan: 1, rowspan: 1 }] }],
+        foot: Vec::new(),
+    });
+    graph.push_block(Block::Table {
+        caption: None,
+        head: vec![TableRow {
+            cells: vec![
+                TableCell { children: vec![head_text], colspan: 1, rowspan: 1 },
+                TableCell { children: vec![head_text_two], colspan: 1, rowspan: 1 },
+            ],
+        }],
+        body: vec![
+            TableRow {
+                cells: vec![
+                    TableCell { children: vec![paragraph_cell], colspan: 1, rowspan: 1 },
+                    TableCell { children: vec![list_cell], colspan: 1, rowspan: 1 },
+                ],
+            },
+            TableRow { cells: vec![TableCell { children: vec![inner_table], colspan: 2, rowspan: 1 }] },
+        ],
+        foot: Vec::new(),
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let reopened = import_pdf_bytes("table-cells.pdf", &pdf).expect("reopen PDF");
+    let text = all_text(&reopened);
+    for expected in ["ZZ_HEAD", "ZZ_HEAD_TWO", "ZZ_PARA", "ZZ_LIST_A", "ZZ_LIST_B", "ZZ_CAPTION", "ZZ_INNER_HEAD", "ZZ_INNER"] {
+        assert!(text.contains(expected), "{expected} must reach the page: {text:?}");
+    }
+}
+
+#[test]
 fn pdf_export_names_image_alt_only_in_the_body_paragraph_path() {
     let faces = pdf_body_faces();
     let mut graph = DocumentGraph::new(DocumentId(10));

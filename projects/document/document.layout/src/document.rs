@@ -1907,20 +1907,75 @@ fn break_inline_atoms(
 fn cell_inlines(graph: &DocumentGraph, cell: &document_ir::TableCell) -> Vec<Inline> {
     let mut content = Vec::new();
     for child_id in &cell.children {
-        let Some(child) = graph.block(*child_id)
-        else {
-            continue;
-        };
-        let Block::Paragraph { content: paragraph } = &child.block
-        else {
-            continue;
-        };
         if !content.is_empty() {
             content.push(Inline::Text { text: " ".into() });
         }
-        content.extend(paragraph.iter().cloned());
+        append_block_inlines(graph, *child_id, &mut content);
     }
     content
+}
+
+/// Project nested cell blocks into the inline flow of one cell.
+///
+/// A PDF table cell is a single text block, so a list or a nested table cannot
+/// own its own grid. Their authored values still belong in the cell, so lists
+/// keep their markers and nested tables keep their row and cell boundaries as
+/// separators instead of disappearing from the page.
+fn append_block_inlines(graph: &DocumentGraph, node_id: NodeId, out: &mut Vec<Inline>) {
+    let Some(node) = graph.block(node_id)
+    else {
+        return;
+    };
+    match &node.block {
+        Block::Paragraph { content } | Block::Section { title: content, .. } => out.extend(content.iter().cloned()),
+        Block::Quote { children } => {
+            for child in children {
+                if !out.is_empty() {
+                    out.push(Inline::Text { text: " ".into() });
+                }
+                append_block_inlines(graph, *child, out);
+            }
+        }
+        Block::List { ordered, items } => {
+            for (index, item) in items.iter().enumerate() {
+                if !out.is_empty() {
+                    out.push(Inline::Text { text: " ".into() });
+                }
+                let number = item.number.unwrap_or(index as u32 + 1);
+                let marker = if *ordered { format!("{number}. ") } else { "• ".to_string() };
+                out.push(Inline::Text { text: marker });
+                out.extend(item.content.iter().cloned());
+                for child in &item.children {
+                    out.push(Inline::Text { text: " ".into() });
+                    append_block_inlines(graph, *child, out);
+                }
+            }
+        }
+        Block::Table { caption, head, body, foot } => {
+            if let Some(caption) = caption {
+                out.push(Inline::Text { text: caption.clone() });
+                out.push(Inline::Text { text: " ".into() });
+            }
+            for (row_index, row) in head.iter().chain(body.iter()).chain(foot.iter()).enumerate() {
+                if row_index > 0 {
+                    out.push(Inline::Text { text: "  ".into() });
+                }
+                for (cell_index, cell) in row.cells.iter().enumerate() {
+                    if cell_index > 0 {
+                        out.push(Inline::Text { text: " | ".into() });
+                    }
+                    for child_id in &cell.children {
+                        if !out.is_empty() {
+                            out.push(Inline::Text { text: " ".into() });
+                        }
+                        append_block_inlines(graph, *child_id, out);
+                    }
+                }
+            }
+        }
+        Block::Code { content, .. } => out.push(Inline::Text { text: content.clone() }),
+        _ => {}
+    }
 }
 
 /// Whether a table cell holds a number and should align to the right.
