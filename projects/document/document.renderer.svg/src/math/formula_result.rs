@@ -6,12 +6,67 @@
 //! walking, so the traversal here only maps primitives onto SVG elements and
 //! tracks the painted ink for the viewport.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use document_compose::{
     Diagnostic, Severity, SourceSpan,
     math::{Fixed, FormulaLayoutResult, PaintNode},
 };
+
+/// Shared outline registry for documents that embed many formulas.
+///
+/// Outlines are keyed by the path data itself: layout emits glyph outlines in
+/// font units, so the same glyph in the same face always carries the same `d`
+/// regardless of where or at what size it is placed. A registry writes each
+/// outline once and every occurrence references it with
+/// `<use href="#vutex-gN" transform="…"/>`.
+///
+/// Sharing makes formulas depend on the registry: an SVG lifted out of the
+/// document no longer paints. Use [`render_formula_result`] when a formula
+/// must stand alone.
+#[derive(Debug, Default)]
+pub struct GlyphDefs {
+    index: HashMap<String, usize>,
+    outlines: Vec<String>,
+}
+
+impl GlyphDefs {
+    /// Empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Number of distinct outlines registered so far.
+    pub fn len(&self) -> usize {
+        self.outlines.len()
+    }
+
+    /// Whether no outline has been registered yet.
+    pub fn is_empty(&self) -> bool {
+        self.outlines.is_empty()
+    }
+
+    /// Register one outline and return the id later occurrences reference.
+    fn intern(&mut self, d: &str) -> String {
+        if let Some(index) = self.index.get(d) {
+            return format!("vutex-g{index}");
+        }
+        let index = self.outlines.len();
+        self.index.insert(d.to_string(), index);
+        self.outlines.push(d.to_string());
+        format!("vutex-g{index}")
+    }
+
+    /// `<defs>` content for every registered outline.
+    pub fn defs(&self) -> String {
+        let mut out = String::new();
+        for (index, d) in self.outlines.iter().enumerate() {
+            let _ = write!(out, r#"<path id="vutex-g{}" d="{}" fill="currentColor"/>"#, index, d);
+        }
+        out
+    }
+}
 
 /// Output of [`render_formula_result`]: the SVG document plus the warnings
 /// collected while walking the paint tree (glyphs the face ships no outline
@@ -48,8 +103,25 @@ pub struct FormulaSvg {
 /// host-font `<text>` run and never a hard render failure.  Callers that gate
 /// on completeness assert the returned diagnostics are empty.
 pub fn render_formula_result(result: &FormulaLayoutResult) -> FormulaSvg {
+    render_formula_result_impl(result, None)
+}
+
+/// Render a formula whose outlines are written once into `glyphs`.
+///
+/// The returned markup references ids from [`GlyphDefs::defs`], so the caller
+/// must place that `<defs>` content in the same document. In exchange, every
+/// repeated glyph or formula in a long document costs one `<use>` instead of a
+/// full outline.
+pub fn render_formula_result_with_glyph_defs(
+    result: &FormulaLayoutResult,
+    glyphs: &mut GlyphDefs,
+) -> FormulaSvg {
+    render_formula_result_impl(result, Some(glyphs))
+}
+
+fn render_formula_result_impl(result: &FormulaLayoutResult, glyphs: Option<&mut GlyphDefs>) -> FormulaSvg {
     let metrics = &result.metrics;
-    let mut walk = SvgWalk { buffer: String::new(), ink: None, diagnostics: Vec::new() };
+    let mut walk = SvgWalk { buffer: String::new(), ink: None, diagnostics: Vec::new(), glyphs };
     walk.walk(&result.paint, 0.0, 0.0);
     let width = metrics.width.to_f64();
     let height = (metrics.height + metrics.depth).to_f64();
@@ -84,21 +156,28 @@ impl Bounds {
     }
 }
 
-struct SvgWalk {
+struct SvgWalk<'a> {
     buffer: String,
     /// Bounds of everything painted so far, in canvas pixels.
     ink: Option<Bounds>,
     diagnostics: Vec<Diagnostic>,
+    /// Shared outline registry, absent when the document must stand alone.
+    glyphs: Option<&'a mut GlyphDefs>,
 }
 
-impl SvgWalk {
+impl<'a> SvgWalk<'a> {
     fn walk(&mut self, node: &PaintNode, ox: f64, oy: f64) {
         match node {
             PaintNode::Group { children, translate_x, translate_y } => {
                 let nx = ox + translate_x.to_f64();
                 let ny = oy + translate_y.to_f64();
                 let pre = self.buffer.len();
-                let _ = write!(self.buffer, r#"<g transform="translate({}, {})">"#, translate_x.to_f64(), translate_y.to_f64());
+                let _ = write!(
+                    self.buffer,
+                    r#"<g transform="translate({}, {})">"#,
+                    num(translate_x.to_f64()),
+                    num(translate_y.to_f64())
+                );
                 let after_open = self.buffer.len();
                 for child in children {
                     self.walk(child, nx, ny);
@@ -184,6 +263,18 @@ impl SvgWalk {
             bounds.include_point(wx, wy);
         });
         self.ink = ink;
+        if let Some(glyphs) = self.glyphs.as_mut() {
+            let id = glyphs.intern(d);
+            let _ = write!(
+                self.buffer,
+                "<use href=\"#{id}\" transform=\"translate({}, {}) scale({}, {})\" />",
+                num(rx),
+                num(ry),
+                num(scale),
+                num(-scale),
+            );
+            return;
+        }
         let _ = write!(
             self.buffer,
             r#"<path d="{}" transform="translate({}, {}) scale({}, {})" fill="currentColor" />"#,

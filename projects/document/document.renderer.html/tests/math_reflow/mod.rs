@@ -73,6 +73,8 @@ fn inline_formulas_typeset_into_baseline_aligned_svg() {
     assert!(html.markup.contains("<span class=\"vutex-math\""), "{}", html.markup);
     assert!(html.markup.contains("vertical-align:-"), "{}", html.markup);
     assert!(html.markup.contains("<svg"), "{}", html.markup);
+    assert!(html.markup.contains("<svg class=\"vutex-math-defs\""), "{}", html.markup);
+    assert!(html.markup.contains("<use href=\"#vutex-g"), "{}", html.markup);
     // The authored source only survives as the image label, never as body
     // text or a code run.
     assert!(!html.markup.contains("<code>\\frac{a}{b}"), "{}", html.markup);
@@ -87,7 +89,24 @@ fn display_formulas_replace_the_code_block() {
     assert!(html.markup.contains("<div class=\"vutex-math\" data-vutex-block=\"math\""), "{}", html.markup);
     assert!(!html.markup.contains("<pre data-vutex-block=\"code\">"), "{}", html.markup);
     assert!(html.markup.contains("<svg"), "{}", html.markup);
+    assert!(html.markup.contains("<use href=\"#vutex-g"), "{}", html.markup);
     assert!(html.diagnostics.is_empty(), "{:?}", html.diagnostics);
+}
+
+#[test]
+fn repeated_formulas_share_each_outline_once() {
+    install_host_math_fonts();
+    let flow = presentation(vec![
+        FlowBlock::Math { formula: fraction(MathDisplay::Inline) },
+        FlowBlock::Math { formula: fraction(MathDisplay::Inline) },
+    ]);
+    let html = render_html_reflow_with_math(&flow, &math_context()).expect("reflow");
+    let outlines = html.markup.matches("<path id=\"vutex-g").count();
+    let references = html.markup.matches("<use href=\"#vutex-g").count();
+    // Two copies of one formula reference the same outlines instead of
+    // painting a second copy of each glyph.
+    assert!(references > outlines, "outlines {outlines} references {references}");
+    assert_eq!(html.markup.matches("<svg class=\"vutex-math-defs\"").count(), 1, "{}", html.markup);
 }
 
 #[test]

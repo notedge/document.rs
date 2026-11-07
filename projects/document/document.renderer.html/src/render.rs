@@ -7,7 +7,7 @@ use document_presentation::{
     flow::{FlowBlock, FlowPresentation, FlowRun, FlowTableRow},
 };
 use document_renderer::is_safe_href;
-use document_renderer_svg::math::{FormulaSvg, render_formula_result};
+use document_renderer_svg::math::{FormulaSvg, GlyphDefs, render_formula_result_with_glyph_defs};
 use document_text::math::MathFontFamily;
 
 /// MATH family and body size a reflow render typesets formulas with.
@@ -101,11 +101,22 @@ fn render_flow(presentation: &FlowPresentation, math: Option<FlowMathContext>) -
     out.push_str(
         "<!doctype html>\n<html lang=\"und\">\n<head>\n<meta charset=\"utf-8\">\n<title>VuTeX document</title>\n<style>.vutex-link{color:#2B5B84;text-decoration:underline;text-decoration-thickness:.5pt}.vutex-math svg{display:block}</style>\n</head>\n<body>\n",
     );
-    out.push_str(&format!("<{} class=\"vutex-flow\" data-vutex=\"flow\">\n", presentation.root_tag,));
+    let mut blocks = String::new();
     let mut diagnostics = Vec::new();
+    let mut glyphs = GlyphDefs::new();
     for block in &presentation.blocks {
-        write_flow_block(&mut out, block, math, &mut diagnostics);
+        write_flow_block(&mut blocks, block, math, &mut glyphs, &mut diagnostics);
     }
+    // Every formula references shared outlines, so the definitions must live
+    // in the same document. The container paints nothing but stays resolvable.
+    if !glyphs.is_empty() {
+        out.push_str(&format!(
+            "<svg class=\"vutex-math-defs\" aria-hidden=\"true\" style=\"position:absolute;width:0;height:0;overflow:hidden\"><defs>{}</defs></svg>\n",
+            glyphs.defs(),
+        ));
+    }
+    out.push_str(&format!("<{} class=\"vutex-flow\" data-vutex=\"flow\">\n", presentation.root_tag));
+    out.push_str(&blocks);
     out.push_str(&format!("</{}>\n</body>\n</html>\n", presentation.root_tag));
     Ok(FlowHtml { markup: out, diagnostics })
 }
@@ -238,20 +249,26 @@ fn write_snapshot_text(out: &mut String, run: &DisplayTextRun) {
     }
 }
 
-fn write_flow_block(out: &mut String, block: &FlowBlock, math: Option<FlowMathContext>, diagnostics: &mut Vec<Diagnostic>) {
+fn write_flow_block(
+    out: &mut String,
+    block: &FlowBlock,
+    math: Option<FlowMathContext>,
+    glyphs: &mut GlyphDefs,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     match block {
         FlowBlock::Heading { level, runs } => {
             let level = (*level).clamp(1, 6);
             out.push_str(&format!("<h{level} data-vutex-block=\"heading\">"));
             for run in runs {
-                write_flow_run(out, run, math, diagnostics);
+                write_flow_run(out, run, math, glyphs, diagnostics);
             }
             out.push_str(&format!("</h{level}>\n"));
         }
         FlowBlock::Paragraph { runs } => {
             out.push_str("<p data-vutex-block=\"paragraph\">");
             for run in runs {
-                write_flow_run(out, run, math, diagnostics);
+                write_flow_run(out, run, math, glyphs, diagnostics);
             }
             out.push_str("</p>\n");
         }
@@ -284,10 +301,10 @@ fn write_flow_block(out: &mut String, block: &FlowBlock, math: Option<FlowMathCo
                 }
                 out.push('>');
                 for run in &item.runs {
-                    write_flow_run(out, run, math, diagnostics);
+                    write_flow_run(out, run, math, glyphs, diagnostics);
                 }
                 for child in &item.children {
-                    write_flow_block(out, child, math, diagnostics);
+                    write_flow_block(out, child, math, glyphs, diagnostics);
                 }
                 out.push_str("</li>\n");
             }
@@ -300,7 +317,8 @@ fn write_flow_block(out: &mut String, block: &FlowBlock, math: Option<FlowMathCo
             }
             out.push_str(&format!(">{}</code></pre>\n", escape_text(text)));
         }
-        FlowBlock::Math { formula } => match math.and_then(|context| formula_svg(formula, context, diagnostics)) {
+        FlowBlock::Math { formula } => match math.and_then(|context| formula_svg(formula, context, glyphs, diagnostics))
+        {
             Some(svg) => write_display_math(out, &formula.source, &svg),
             // Without a MATH context, or when the engine rejects the formula,
             // the authored source stays visible as a code run: the same output
@@ -310,7 +328,7 @@ fn write_flow_block(out: &mut String, block: &FlowBlock, math: Option<FlowMathCo
         FlowBlock::Quote { runs } => {
             out.push_str("<blockquote data-vutex-block=\"quote\"><p>");
             for run in runs {
-                write_flow_run(out, run, math, diagnostics);
+                write_flow_run(out, run, math, glyphs, diagnostics);
             }
             out.push_str("</p></blockquote>\n");
         }
@@ -319,8 +337,8 @@ fn write_flow_block(out: &mut String, block: &FlowBlock, math: Option<FlowMathCo
             if let Some(caption) = caption {
                 out.push_str(&format!("<caption>{}</caption>\n", escape_text(caption)));
             }
-            write_table_rows(out, "thead", math, diagnostics, rows.iter().filter(|row| row.is_header));
-            write_table_rows(out, "tbody", math, diagnostics, rows.iter().filter(|row| !row.is_header));
+            write_table_rows(out, "thead", math, glyphs, diagnostics, rows.iter().filter(|row| row.is_header));
+            write_table_rows(out, "tbody", math, glyphs, diagnostics, rows.iter().filter(|row| !row.is_header));
             out.push_str("</table>\n");
         }
         FlowBlock::Image { alt, source } => {
@@ -346,12 +364,13 @@ fn write_flow_block(out: &mut String, block: &FlowBlock, math: Option<FlowMathCo
 fn formula_svg(
     formula: &document_ir::MathFormula,
     math: FlowMathContext,
+    glyphs: &mut GlyphDefs,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<FormulaSvg> {
     match layout_formula_for(formula, math.base_size, math.family) {
         Ok((result, _root, mut layout_diagnostics)) => {
             diagnostics.append(&mut layout_diagnostics);
-            let svg = render_formula_result(&result);
+            let svg = render_formula_result_with_glyph_defs(&result, glyphs);
             diagnostics.extend(svg.diagnostics.iter().cloned());
             Some(svg)
         }
@@ -409,13 +428,19 @@ fn write_math_source_block(out: &mut String, source: &str) {
 /// inside a link renders as `<a href="…"><strong>…</strong></a>`. Runs without a
 /// destination keep the plain output, and the link title only appears on an
 /// anchor that exists. A math run typesets instead of printing source text.
-fn write_flow_run(out: &mut String, run: &FlowRun, math: Option<FlowMathContext>, diagnostics: &mut Vec<Diagnostic>) {
+fn write_flow_run(
+    out: &mut String,
+    run: &FlowRun,
+    math: Option<FlowMathContext>,
+    glyphs: &mut GlyphDefs,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let anchor = run.href.as_deref().filter(|href| is_safe_href(href));
     if let Some(href) = anchor {
         write_anchor_open(out, href, run.title.as_deref(), None);
     }
     if let Some(formula) = &run.math {
-        match math.and_then(|context| formula_svg(formula, context, diagnostics)) {
+        match math.and_then(|context| formula_svg(formula, context, glyphs, diagnostics)) {
             Some(svg) => write_inline_math(out, &formula.source, &svg),
             None => out.push_str(&escape_text(&formula.source)),
         }
@@ -494,6 +519,7 @@ fn write_table_rows<'a>(
     out: &mut String,
     section: &str,
     math: Option<FlowMathContext>,
+    glyphs: &mut GlyphDefs,
     diagnostics: &mut Vec<Diagnostic>,
     rows: impl Iterator<Item = &'a FlowTableRow>,
 ) {
@@ -508,7 +534,7 @@ fn write_table_rows<'a>(
         for cell in &row.cells {
             out.push_str(&format!("<{cell_tag}>"));
             for run in cell {
-                write_flow_run(out, run, math, diagnostics);
+                write_flow_run(out, run, math, glyphs, diagnostics);
             }
             out.push_str(&format!("</{cell_tag}>"));
         }
