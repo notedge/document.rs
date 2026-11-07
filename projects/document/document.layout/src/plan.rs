@@ -29,10 +29,16 @@ pub struct TextRun {
     /// External link destination the run was authored inside, if any.
     ///
     /// Only [`document_ir::RelationEndpoint::ExternalUri`] targets resolve to a
-    /// destination. Internal `Node`, `Document`, and `Asset` targets stay
-    /// `None`, because layout emits no anchor ids for them and a fabricated
-    /// destination would point nowhere.
+    /// destination. Internal `Node` targets resolve through [`Self::anchor`]
+    /// instead, and `Document`, `Asset`, and `Unresolved` targets stay `None`
+    /// because a fabricated destination would point nowhere.
     pub href: Option<String>,
+    /// Internal anchor this run links to, if any.
+    ///
+    /// The name matches one [`LayoutItem::Anchor`] in the same plan. Backends
+    /// with named destinations, such as PDF, resolve it to a page jump; backends
+    /// without them keep the run and its text.
+    pub anchor: Option<String>,
     /// Hover text authored on the link that contains the run, if any.
     ///
     /// Only link display content carries a title; all other runs keep `None`.
@@ -174,6 +180,17 @@ pub enum LayoutItem {
     /// embedded font so renderers can paint the exact curves instead of
     /// relying on a system font or synthetic metrics.
     Path(Path),
+    /// A named destination at the top of a heading.
+    ///
+    /// In-document links authored as `#fragment` resolve to this name, so a
+    /// backend with link annotations can emit a jump instead of dropping the
+    /// destination and keeping only the display text.
+    Anchor {
+        /// Slug the authored fragment names, unique within the document.
+        name: String,
+        /// Top edge in points, measured from the page top.
+        y: f64,
+    },
 }
 
 /// One laid-out page before presentation lowering.

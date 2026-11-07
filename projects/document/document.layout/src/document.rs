@@ -227,15 +227,32 @@ fn face_for_style(style: &str) -> TextFace {
 
 /// Resolve the destination of a link target.
 ///
-/// Only authored external URIs become destinations. Internal `Node`,
-/// `Document`, `Asset`, and `Unresolved` targets stay without a destination,
-/// because layout emits no matching anchor ids and a fabricated URL would point
-/// nowhere.
+/// Only authored external URIs become destinations. Internal `Node` targets
+/// resolve through [`link_anchor`] instead, and `Document`, `Asset`, and
+/// `Unresolved` targets stay without a destination because a fabricated URL
+/// would point nowhere.
 fn link_href(target: &RelationEndpoint) -> Option<&str> {
     match target {
         RelationEndpoint::ExternalUri(uri) if !uri.is_empty() => Some(uri),
         _ => None,
     }
+}
+
+/// Resolve the internal destination of a link target.
+///
+/// A `Node` target names the anchor the layout pass places at the top of that
+/// block. Every other target kind has no anchor in this plan, so it resolves to
+/// `None` instead of a fabricated destination.
+fn link_anchor(target: &RelationEndpoint) -> Option<String> {
+    match target {
+        RelationEndpoint::Node(id) => Some(node_anchor(*id)),
+        _ => None,
+    }
+}
+
+/// Destination name that a node link and its block anchor share.
+fn node_anchor(id: NodeId) -> String {
+    format!("@node-{}", id.0)
 }
 
 /// Resolve the hover text of a link target.
@@ -485,6 +502,70 @@ fn root_ids(graph: &DocumentGraph) -> Vec<NodeId> {
     graph.blocks.iter().map(|node| node.id).filter(|id| !referenced.contains(id)).collect()
 }
 
+/// Node ids that some `Inline::Link` targets, so layout knows where to place an
+/// anchor before it renders the blocks.
+fn collect_node_targets(graph: &DocumentGraph) -> HashSet<NodeId> {
+    let mut targets = HashSet::new();
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Section { title, .. } => scan_link_targets(title, &mut targets),
+            Block::Paragraph { content } => scan_link_targets(content, &mut targets),
+            Block::List { items, .. } => {
+                for item in items {
+                    scan_link_targets(&item.content, &mut targets);
+                }
+            }
+            _ => {}
+        }
+    }
+    targets
+}
+
+/// Collect `Node` targets from one inline sequence, including nested content.
+fn scan_link_targets(inlines: &[Inline], targets: &mut HashSet<NodeId>) {
+    for inline in inlines {
+        match inline {
+            Inline::Link { target, display, .. } => {
+                if let RelationEndpoint::Node(id) = target {
+                    targets.insert(*id);
+                }
+                scan_link_targets(display, targets);
+            }
+            Inline::Styled { children, .. } | Inline::Attributed { children, .. } => {
+                scan_link_targets(children, targets)
+            }
+            Inline::Note { display: Some(display), .. } | Inline::Citation { display: Some(display), .. } => {
+                scan_link_targets(display, targets)
+            }
+            Inline::Image { alt, .. } => scan_link_targets(alt, targets),
+            _ => {}
+        }
+    }
+}
+
+/// Slug a heading title the way GitHub names its heading anchors.
+///
+/// Letters and digits survive in lower case, underscores survive verbatim, and
+/// whitespace and hyphens become one hyphen each. Anything else is dropped, so
+/// `[Intro]` and `## Intro` name the same destination.
+fn heading_slug(title: &[Inline]) -> String {
+    let text: String = title.iter().map(Inline::plain_text).collect();
+    let mut slug = String::new();
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            slug.extend(ch.to_lowercase());
+        }
+        else if ch == '_' {
+            slug.push('_');
+        }
+        else if ch.is_whitespace() || ch == '-' {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() { "section".to_string() } else { slug }
+}
+
 /// One indivisible atom inside a composed paragraph line.
 #[derive(Debug, Clone)]
 enum InlineAtom {
@@ -496,6 +577,8 @@ enum InlineAtom {
         face: TextFace,
         /// External destination shared with the surrounding link, if any.
         href: Option<String>,
+        /// Internal destination shared with the surrounding link, if any.
+        anchor: Option<String>,
         /// Hover text shared with the surrounding link, if any.
         title: Option<String>,
     },
@@ -512,35 +595,50 @@ struct PendingText {
     text: String,
     face: TextFace,
     href: Option<String>,
+    anchor: Option<String>,
     title: Option<String>,
     numeric: bool,
 }
 
 impl PendingText {
     fn body() -> Self {
-        Self { text: String::new(), face: BODY_FACE, href: None, title: None, numeric: false }
+        Self { text: String::new(), face: BODY_FACE, href: None, anchor: None, title: None, numeric: false }
     }
 
     fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
 
-    /// Buffer `text` under `face`, `href`, and `title`, flushing first when any
-    /// key changes.
+    /// Buffer `text` under `face`, `href`, `anchor`, and `title`, flushing
+    /// first when any key changes.
     ///
     /// Splitting on a face, destination, or hover-text change is what turns a
     /// styled span or a link into its own [`LayoutItem`], so emphasis and link
     /// metadata survive into every renderer without swallowing the neighbouring
     /// text.
-    fn push(&mut self, text: &str, face: TextFace, href: Option<&str>, title: Option<&str>, atoms: &mut Vec<InlineAtom>) {
+    fn push(
+        &mut self,
+        text: &str,
+        face: TextFace,
+        href: Option<&str>,
+        anchor: Option<&str>,
+        title: Option<&str>,
+        atoms: &mut Vec<InlineAtom>,
+    ) {
         if text.is_empty() {
             return;
         }
-        if !self.is_empty() && (self.face != face || self.href.as_deref() != href || self.title.as_deref() != title) {
+        if !self.is_empty()
+            && (self.face != face
+                || self.href.as_deref() != href
+                || self.anchor.as_deref() != anchor
+                || self.title.as_deref() != title)
+        {
             self.flush(atoms);
         }
         self.face = face;
         self.href = href.map(str::to_string);
+        self.anchor = anchor.map(str::to_string);
         self.title = title.map(str::to_string);
         self.text.push_str(text);
     }
@@ -551,7 +649,13 @@ impl PendingText {
             self.text.clear();
             return;
         }
-        atoms.extend(split_inline_atoms(&self.text, self.face, self.href.as_deref(), self.title.as_deref()));
+        atoms.extend(split_inline_atoms(
+            &self.text,
+            self.face,
+            self.href.as_deref(),
+            self.anchor.as_deref(),
+            self.title.as_deref(),
+        ));
         self.text.clear();
     }
 }
@@ -577,7 +681,10 @@ struct AtomFlow {
 impl AtomFlow {
     /// Start a flow whose unstyled text uses `face`.
     fn new(face: TextFace) -> Self {
-        Self { atoms: Vec::new(), pending: PendingText { text: String::new(), face, href: None, title: None, numeric: false } }
+        Self {
+            atoms: Vec::new(),
+            pending: PendingText { text: String::new(), face, href: None, anchor: None, title: None, numeric: false },
+        }
     }
 
     /// Close the buffered text into atoms and return the composed flow.
@@ -672,6 +779,12 @@ struct PageBuilder<'a> {
     section_starts: Vec<(usize, usize)>,
     /// Top edge of the next line box, in page coordinates.
     cursor: f64,
+    /// How many headings already claimed each anchor slug, so repeated
+    /// headings get GitHub-style `-1`, `-2` destinations.
+    anchor_counts: HashMap<String, usize>,
+    /// Blocks a link points at by node id, so the pass places an anchor at
+    /// each of them and the link has a destination to resolve.
+    internal_targets: HashSet<NodeId>,
     /// Degradations the pass applied, such as a math glyph without an outline.
     diagnostics: Vec<Diagnostic>,
 }
@@ -694,6 +807,8 @@ impl<'a> PageBuilder<'a> {
             asset_aspects,
             section_starts: Vec::new(),
             cursor: hint.margin.top,
+            anchor_counts: HashMap::new(),
+            internal_targets: collect_node_targets(graph),
             diagnostics: Vec::new(),
         }
     }
@@ -777,6 +892,7 @@ impl<'a> PageBuilder<'a> {
             style: FontStyle::Normal,
             text,
             href: None,
+            anchor: None,
             title: None,
             color: Some(self.hint.style.ink),
             numeric: false,
@@ -793,7 +909,16 @@ impl<'a> PageBuilder<'a> {
         }
     }
 
-    fn emit_heading(&mut self, level: u8, title: &[Inline], indent: f64) {
+    /// Claim a destination name for a heading, disambiguating repeats with
+    /// GitHub-style `-1`, `-2` suffixes.
+    fn unique_anchor(&mut self, base: String) -> String {
+        let count = self.anchor_counts.entry(base.clone()).or_insert(0);
+        let name = if *count == 0 { base.clone() } else { format!("{base}-{count}") };
+        *count += 1;
+        name
+    }
+
+    fn emit_heading(&mut self, level: u8, title: &[Inline], indent: f64, node: NodeId) {
         let tokens = self.hint.style;
         let base = self.body_size();
         let index = usize::from(level.clamp(1, 4)) - 1;
@@ -805,6 +930,14 @@ impl<'a> PageBuilder<'a> {
         self.pad(tokens.heading_gap_before[index]);
         // Keep the heading on the same page as its first body line.
         self.ensure_space(line_box * 2.0 + self.line_box(base));
+        // The anchor sits on the line box top of the heading that follows, so
+        // both an authored `#slug` and a node link land on the heading.
+        let y = self.cursor;
+        let slug = self.unique_anchor(heading_slug(title));
+        self.push(LayoutItem::Anchor { name: slug, y });
+        if self.internal_targets.contains(&node) {
+            self.push(LayoutItem::Anchor { name: node_anchor(node), y });
+        }
         self.section_starts.push((self.pages.len().saturating_sub(1), index));
         let face = if tokens.heading_bold { TextFace { family: SERIF, style: FontStyle::Bold } } else { BODY_FACE };
         let atoms = self.compose_atoms(title, size, indent, face, ImageMode::AltText);
@@ -863,16 +996,17 @@ impl<'a> PageBuilder<'a> {
         image_mode: ImageMode,
     ) -> Vec<InlineAtom> {
         let mut flow = AtomFlow::new(face);
-        self.compose_inline(content, size, indent, &mut flow, face, None, None, image_mode);
+        self.compose_inline(content, size, indent, &mut flow, face, None, None, None, image_mode);
         flow.finish()
     }
 
     /// Walk inline content into paragraph atoms under the enclosing face and
     /// link metadata.
     ///
-    /// A link destination and hover text are inherited by nested inline
-    /// content, so styled text inside an external link keeps its face, its
+    /// A link destination, internal anchor, and hover text are inherited by
+    /// nested inline content, so styled text inside a link keeps its face, its
     /// destination, and its tooltip.
+    #[allow(clippy::too_many_arguments)]
     fn compose_inline(
         &mut self,
         content: &[Inline],
@@ -881,6 +1015,7 @@ impl<'a> PageBuilder<'a> {
         flow: &mut AtomFlow,
         face: TextFace,
         href: Option<&str>,
+        anchor: Option<&str>,
         title: Option<&str>,
         image_mode: ImageMode,
     ) {
@@ -906,7 +1041,7 @@ impl<'a> PageBuilder<'a> {
                             self.emit_inline_lines(std::mem::take(&mut flow.atoms), size, indent);
                             self.emit_image_placeholder(&alt_text, &source, aspect, indent);
                         }
-                        ImageMode::AltText => flow.pending.push(&alt_text, face, href, title, &mut flow.atoms),
+                        ImageMode::AltText => flow.pending.push(&alt_text, face, href, anchor, title, &mut flow.atoms),
                     }
                 }
                 Inline::InlineMath { formula } => {
@@ -926,33 +1061,37 @@ impl<'a> PageBuilder<'a> {
                                 // degradation must be reported instead of
                                 // silently passing as a clean layout.
                                 self.diagnostics.push(math_not_typeset_diagnostic(formula, &error));
-                                flow.atoms.extend(split_inline_atoms(&formula.source, face, href, title));
+                                flow.atoms.extend(split_inline_atoms(&formula.source, face, href, anchor, title));
                             }
                         }
                     }
                     else {
                         self.diagnostics.push(unsupported_math_language_diagnostic(formula));
-                        flow.atoms.extend(split_inline_atoms(&formula.source, face, href, title));
+                        flow.atoms.extend(split_inline_atoms(&formula.source, face, href, anchor, title));
                     }
                 }
                 Inline::Styled { style, children } => {
-                    self.compose_inline(children, size, indent, flow, face_for_style(style), href, title, image_mode);
+                    self.compose_inline(children, size, indent, flow, face_for_style(style), href, anchor, title, image_mode);
                 }
-                Inline::InlineCode { text } => flow.pending.push(text, CODE_FACE, href, title, &mut flow.atoms),
+                Inline::InlineCode { text } => flow.pending.push(text, CODE_FACE, href, anchor, title, &mut flow.atoms),
                 // Attributes carry no printable face, but their wrapped content
                 // keeps every authored style and destination.
                 Inline::Attributed { children, .. } => {
-                    self.compose_inline(children, size, indent, flow, face, href, title, image_mode);
+                    self.compose_inline(children, size, indent, flow, face, href, anchor, title, image_mode);
                 }
                 Inline::Link { target, display, title: link_hover } => {
                     // A nested external link wins. A nested internal link keeps
                     // the enclosing destination so its text stays in the anchor.
                     let inner_href = link_href(target).or(href);
+                    let inner_anchor = link_anchor(target);
+                    let inner_anchor = inner_anchor.as_deref().or(anchor);
                     let inner_title = link_title(link_hover.as_ref()).or(title);
-                    self.compose_inline(display, size, indent, flow, face, inner_href, inner_title, image_mode);
+                    self.compose_inline(
+                        display, size, indent, flow, face, inner_href, inner_anchor, inner_title, image_mode,
+                    );
                 }
                 Inline::Note { display: Some(display), .. } => {
-                    self.compose_inline(display, size, indent, flow, face, href, title, image_mode);
+                    self.compose_inline(display, size, indent, flow, face, href, anchor, title, image_mode);
                 }
                 // A citation key has no PDF structure to carry it and the IR
                 // keeps no citation mode. The display text stays on the page,
@@ -962,8 +1101,10 @@ impl<'a> PageBuilder<'a> {
                     self.diagnostics.push(citation_degraded_diagnostic(key));
                     flow.pending.flush(&mut flow.atoms);
                     match display {
-                        Some(display) => self.compose_inline(display, size, indent, flow, face, href, title, image_mode),
-                        None => flow.atoms.extend(split_inline_atoms(&format!("[{key}]"), face, href, title)),
+                        Some(display) => {
+                            self.compose_inline(display, size, indent, flow, face, href, anchor, title, image_mode)
+                        }
+                        None => flow.atoms.extend(split_inline_atoms(&format!("[{key}]"), face, href, anchor, title)),
                     }
                 }
                 // Internal targets have no PDF destination map yet: the page
@@ -971,7 +1112,7 @@ impl<'a> PageBuilder<'a> {
                 // the report does not read as clean coverage.
                 Inline::Reference { display, target } => {
                     self.diagnostics.push(reference_target_dropped_diagnostic(*target));
-                    flow.pending.push(display, face, href, title, &mut flow.atoms);
+                    flow.pending.push(display, face, href, anchor, title, &mut flow.atoms);
                 }
                 // A footnote reference with no authored display is still a
                 // semantic marker, not the `[^label]` source literal. Paint the
@@ -979,7 +1120,7 @@ impl<'a> PageBuilder<'a> {
                 // definition body below carries the text.
                 Inline::Note { label, display: None } => {
                     flow.pending.flush(&mut flow.atoms);
-                    flow.atoms.extend(split_inline_atoms(&superscript_label(label), face, href, title));
+                    flow.atoms.extend(split_inline_atoms(&superscript_label(label), face, href, anchor, title));
                 }
                 // The PDF page has no arbitrary HTML slot, and `plain_text`
                 // would erase the node's content entirely. The literal markup
@@ -987,9 +1128,9 @@ impl<'a> PageBuilder<'a> {
                 // the missing slot is reported.
                 Inline::RawHtml { html } => {
                     self.diagnostics.push(raw_html_flattened_diagnostic());
-                    flow.pending.push(html, face, href, title, &mut flow.atoms);
+                    flow.pending.push(html, face, href, anchor, title, &mut flow.atoms);
                 }
-                other => flow.pending.push(&other.plain_text(), face, href, title, &mut flow.atoms),
+                other => flow.pending.push(&other.plain_text(), face, href, anchor, title, &mut flow.atoms),
             }
         }
     }
@@ -1086,22 +1227,25 @@ impl<'a> PageBuilder<'a> {
         let mut run_x = x;
         for atom in line {
             match atom {
-                InlineAtom::Text { text, face, href, title } => {
+                InlineAtom::Text { text, face, href, anchor, title } => {
                     if run.is_empty() {
                         run_x = x;
                         run.face = *face;
                         run.href = href.clone();
+                        run.anchor = anchor.clone();
                         run.title = title.clone();
                         run.numeric = numeric;
                     }
                     else if run.face != *face
                         || run.href.as_deref() != href.as_deref()
+                        || run.anchor.as_deref() != anchor.as_deref()
                         || run.title.as_deref() != title.as_deref()
                     {
                         self.paint_inline_run(&mut run, run_x, baseline, size, color);
                         run_x = x;
                         run.face = *face;
                         run.href = href.clone();
+                        run.anchor = anchor.clone();
                         run.title = title.clone();
                         run.numeric = numeric;
                     }
@@ -1140,7 +1284,7 @@ impl<'a> PageBuilder<'a> {
         let width = self.text.measure(&run.text, size, run.face);
         let struck = run.face.style == FontStyle::Strike;
         let tokens = self.hint.style;
-        let ink = if run.href.is_some() { Some(tokens.accent) } else { color.or(Some(tokens.ink)) };
+        let ink = if run.href.is_some() || run.anchor.is_some() { Some(tokens.accent) } else { color.or(Some(tokens.ink)) };
         self.push(LayoutItem::TextRun(TextRun {
             x,
             y: baseline,
@@ -1150,6 +1294,7 @@ impl<'a> PageBuilder<'a> {
             style: run.face.style,
             text: std::mem::take(&mut run.text),
             href: run.href.clone(),
+            anchor: run.anchor.clone(),
             title: run.title.clone(),
             color: ink,
             numeric: run.numeric,
@@ -1413,6 +1558,7 @@ impl<'a> PageBuilder<'a> {
                 style: FontStyle::Normal,
                 text: (*line).to_string(),
                 href: None,
+                anchor: None,
                 title: None,
                 color: Some(tokens.ink),
                 numeric: false,
@@ -1792,6 +1938,7 @@ impl<'a> PageBuilder<'a> {
                     style: FontStyle::Normal,
                     text: title.to_string(),
                     href: None,
+                    anchor: None,
                     title: None,
                     color: Some(tokens.header_color),
                     numeric: false,
@@ -1811,6 +1958,7 @@ impl<'a> PageBuilder<'a> {
                     style: FontStyle::Normal,
                     text: folio,
                     href: None,
+                    anchor: None,
                     title: None,
                     color: Some(tokens.folio_color),
                     numeric: true,
@@ -1845,9 +1993,17 @@ impl<'a> PageBuilder<'a> {
             else {
                 continue;
             };
+            // A block some link targets keeps a named destination. Headings
+            // already anchor inside `emit_heading`, so only other blocks are
+            // handled here, before their content takes the cursor further.
+            if self.internal_targets.contains(id) && !matches!(&node.block, Block::Section { .. }) {
+                self.ensure_space(self.line_box(self.body_size()));
+                let y = self.cursor;
+                self.push(LayoutItem::Anchor { name: node_anchor(*id), y });
+            }
             match &node.block {
                 Block::Section { level, title, children } => {
-                    self.emit_heading(*level, title, indent);
+                    self.emit_heading(*level, title, indent, *id);
                     self.render_blocks(graph, children, indent);
                 }
                 Block::Paragraph { content } => {
@@ -1985,12 +2141,24 @@ fn split_footnote_definition(payload: &str) -> Option<(String, String)> {
 
 /// Split text into paragraph atoms: words, spaces, CJK glyphs, and hard breaks.
 /// Authored newlines stay forced line endings instead of collapsing into spaces.
-fn split_inline_atoms(text: &str, face: TextFace, href: Option<&str>, title: Option<&str>) -> Vec<InlineAtom> {
+fn split_inline_atoms(
+    text: &str,
+    face: TextFace,
+    href: Option<&str>,
+    anchor: Option<&str>,
+    title: Option<&str>,
+) -> Vec<InlineAtom> {
     let mut atoms = Vec::new();
     let mut word = String::new();
     let mut in_space = false;
     let push_text = |value: String, atoms: &mut Vec<InlineAtom>| {
-        atoms.push(InlineAtom::Text { text: value, face, href: href.map(str::to_string), title: title.map(str::to_string) });
+        atoms.push(InlineAtom::Text {
+            text: value,
+            face,
+            href: href.map(str::to_string),
+            anchor: anchor.map(str::to_string),
+            title: title.map(str::to_string),
+        });
     };
     for ch in text.chars() {
         if ch == '\n' {
@@ -2045,14 +2213,15 @@ fn break_inline_atoms(
         let line_width = (max_width - if lines.is_empty() { first_indent } else { 0.0 }).max(24.0);
         match atom {
             InlineAtom::Break => finish_inline_line(&mut lines, &mut current, &mut width),
-            InlineAtom::Text { text, face, href, title } => {
+            InlineAtom::Text { text, face, href, anchor, title } => {
                 let atom_width = widths.measure(&text, size, face);
                 // Adjacent atoms that stay in one painted run are kerned as one
                 // pair, so breaking must reserve that pair as well.
                 let tail = match current.last() {
-                    Some(InlineAtom::Text { text: last, face: last_face, href: last_href, title: last_title })
+                    Some(InlineAtom::Text { text: last, face: last_face, href: last_href, anchor: last_anchor, title: last_title })
                         if *last_face == face
                             && last_href.as_deref() == href.as_deref()
+                            && last_anchor.as_deref() == anchor.as_deref()
                             && last_title.as_deref() == title.as_deref() =>
                     {
                         last.chars().last()
@@ -2063,7 +2232,7 @@ fn break_inline_atoms(
                 if text.trim().is_empty() {
                     // A space never starts a line and never widens past the column.
                     if !current.is_empty() && width + atom_width + cross <= line_width {
-                        current.push(InlineAtom::Text { text, face, href, title });
+                        current.push(InlineAtom::Text { text, face, href, anchor, title });
                         width += atom_width + cross;
                     }
                     continue;
@@ -2087,6 +2256,7 @@ fn break_inline_atoms(
                                 text: chunk.trim_end().to_string(),
                                 face,
                                 href: href.clone(),
+                                anchor: anchor.clone(),
                                 title: title.clone(),
                             }]);
                             chunk.clear();
@@ -2100,11 +2270,11 @@ fn break_inline_atoms(
                         chunk_width += advance;
                         previous = Some(ch);
                     }
-                    current.push(InlineAtom::Text { text: chunk, face, href, title });
+                    current.push(InlineAtom::Text { text: chunk, face, href, anchor, title });
                     width = chunk_width;
                     continue;
                 }
-                current.push(InlineAtom::Text { text, face, href, title });
+                current.push(InlineAtom::Text { text, face, href, anchor, title });
                 width += atom_width + cross;
             }
             InlineAtom::Math(math) => {
@@ -2275,6 +2445,7 @@ fn clamp_inline_item(item: LayoutItem, origin_x: f64, baseline: f64, scale: f64)
             style: run.style,
             text: run.text,
             href: run.href,
+            anchor: run.anchor,
             title: run.title,
             color: run.color,
             numeric: run.numeric,
@@ -2460,7 +2631,7 @@ mod kerning_tests {
     }
 
     fn atom(text: &str) -> InlineAtom {
-        InlineAtom::Text { text: text.to_string(), face: BODY_FACE, href: None, title: None }
+        InlineAtom::Text { text: text.to_string(), face: BODY_FACE, href: None, anchor: None, title: None }
     }
 
     #[test]

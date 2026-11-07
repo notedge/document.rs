@@ -8,8 +8,8 @@ use document_layout::plan::{Graphic, ImagePlaceholder, LayoutItem, LayoutPlan, P
 
 use crate::{
     display::{
-        DisplayGraphic, DisplayImage, DisplayItem, DisplayPage, DisplayPath, DisplayPresentation, DisplayRect, DisplayRule,
-        DisplayTextRun,
+        DisplayAnchor, DisplayGraphic, DisplayImage, DisplayItem, DisplayPage, DisplayPath, DisplayPresentation, DisplayRect,
+        DisplayRule, DisplayTextRun,
     },
     flow::{FlowBlock, FlowListItem, FlowPresentation, FlowRun, FlowTableRow},
 };
@@ -20,18 +20,28 @@ pub fn build_display_presentation(plan: &LayoutPlan) -> DisplayPresentation {
         pages: plan
             .pages
             .iter()
-            .map(|page| DisplayPage {
-                width: page.width,
-                height: page.height,
-                items: page.items.iter().map(lower_item).collect(),
+            .map(|page| {
+                let mut anchors = Vec::new();
+                let items = page
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
+                        LayoutItem::Anchor { name, y } => {
+                            anchors.push(DisplayAnchor { name: name.clone(), y: *y });
+                            None
+                        }
+                        other => lower_item(other),
+                    })
+                    .collect();
+                DisplayPage { width: page.width, height: page.height, items, anchors }
             })
             .collect(),
     }
 }
 
-fn lower_item(item: &LayoutItem) -> DisplayItem {
-    match item {
-        LayoutItem::TextRun(TextRun { x, y, size, width, font_family, style, text, href, title, color, numeric, artifact }) => {
+fn lower_item(item: &LayoutItem) -> Option<DisplayItem> {
+    let item = match item {
+        LayoutItem::TextRun(TextRun { x, y, size, width, font_family, style, text, href, anchor, title, color, numeric, artifact }) => {
             DisplayItem::TextRun(DisplayTextRun {
                 x: *x,
                 y: *y,
@@ -41,6 +51,7 @@ fn lower_item(item: &LayoutItem) -> DisplayItem {
                 style: *style,
                 text: text.clone(),
                 href: href.clone(),
+                anchor: anchor.clone(),
                 title: title.clone(),
                 color: *color,
                 numeric: *numeric,
@@ -81,7 +92,10 @@ fn lower_item(item: &LayoutItem) -> DisplayItem {
         LayoutItem::Path(Path { d, x, y, width, height, depth }) => {
             DisplayItem::Path(DisplayPath { d: d.clone(), x: *x, y: *y, width: *width, height: *height, depth: *depth })
         }
-    }
+        // Anchors are collected into the page before items are lowered.
+        LayoutItem::Anchor { .. } => return None,
+    };
+    Some(item)
 }
 
 /// Build the semantic flow presentation of a Notedown document graph.

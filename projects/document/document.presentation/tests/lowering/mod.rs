@@ -67,11 +67,15 @@ fn display_lowering_preserves_geometry_and_items() {
     for (display, layout_page) in presentation.pages.iter().zip(&plan.pages) {
         assert_eq!(display.width, layout_page.width);
         assert_eq!(display.height, layout_page.height);
-        assert_eq!(display.items.len(), layout_page.items.len());
+        // Anchors are page metadata, so they move out of the painted item list.
+        let anchor_count = layout_page.items.iter().filter(|item| matches!(item, LayoutItem::Anchor { .. })).count();
+        assert_eq!(display.items.len(), layout_page.items.len() - anchor_count);
+        assert_eq!(display.anchors.len(), anchor_count);
     }
 
     let first = &presentation.pages[0];
     assert!(matches!(first.items.first(), Some(DisplayItem::TextRun(run)) if run.text == "Flow heading"));
+    assert_eq!(first.anchors[0].name, "flow-heading", "{:?}", first.anchors);
 }
 
 #[test]

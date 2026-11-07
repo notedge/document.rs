@@ -24,7 +24,7 @@
 //! unresolvable, or unsupported source keeps the dashed placeholder.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Write as _,
     path::PathBuf,
     sync::Arc,
@@ -477,6 +477,20 @@ fn used_fonts(presentation: &DisplayPresentation, embed_available: bool, body: b
     BASE_FONTS.iter().copied().filter(|base| used.contains(base)).collect()
 }
 
+/// What a link annotation points at.
+#[derive(Debug, Clone, PartialEq)]
+enum LinkTarget {
+    /// External destination written into a `/URI` action.
+    Uri(String),
+    /// In-document destination: the page object and the top edge to jump to.
+    Destination {
+        /// Zero-based page index, resolved to its page object number.
+        page: usize,
+        /// Top edge in PDF user space.
+        y: f64,
+    },
+}
+
 /// A link annotation produced by one safe text-run destination.
 #[derive(Debug, Clone, PartialEq)]
 struct LinkAnnotation {
@@ -488,8 +502,8 @@ struct LinkAnnotation {
     x2: f64,
     /// Upper-right y, in PDF user space.
     y2: f64,
-    /// Destination written into the `/URI` action.
-    uri: String,
+    /// Destination the annotation jumps to.
+    target: LinkTarget,
     /// Hover text written into `/Contents`, when the run carried a title.
     title: Option<String>,
 }
@@ -611,7 +625,6 @@ fn build_objects(
     };
     let fonts = used_fonts(presentation, chain.is_some(), body);
     let page_count = presentation.pages.len();
-    let page_links: Vec<Vec<LinkAnnotation>> = presentation.pages.iter().map(page_links).collect();
 
     let mut document = Document::default();
     document.push(PdfObject::Text(catalog_object()));
@@ -624,6 +637,22 @@ fn build_objects(
         page_numbers.push(document.push(PdfObject::Text(String::new())));
         content_numbers.push(document.push(PdfObject::Text(String::new())));
     }
+
+    // Named destinations are page and top-edge pairs. Anchors arrive in page
+    // coordinates with the origin at the page top, so they are flipped here
+    // exactly like painted primitives.
+    let destinations: HashMap<String, (usize, f64)> = presentation
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(index, page)| {
+            page.anchors.iter().map(move |anchor| {
+                (anchor.name.clone(), (index, (page.height - anchor.y).clamp(0.0, page.height)))
+            })
+        })
+        .collect();
+    let page_links: Vec<Vec<LinkAnnotation>> =
+        presentation.pages.iter().map(|page| page_links(page, &destinations)).collect();
 
     let mut page_resources = PageResources::default();
     let mut font_objects: Vec<(&'static str, usize)> = Vec::with_capacity(fonts.len());
@@ -651,7 +680,7 @@ fn build_objects(
         opacities.entries.push((name, alpha));
     }
 
-    let annotation_numbers = push_link_annotations(&mut document, &page_links);
+    let annotation_numbers = push_link_annotations(&mut document, &page_links, &page_numbers);
     let images = register_images(presentation, &mut document, sources, &mut page_resources);
 
     for (index, page) in presentation.pages.iter().enumerate() {
@@ -741,10 +770,19 @@ fn register_image(
 }
 
 /// Append every link annotation and report their numbers in paint order.
-fn push_link_annotations(document: &mut Document, page_links: &[Vec<LinkAnnotation>]) -> Vec<Vec<usize>> {
+fn push_link_annotations(
+    document: &mut Document,
+    page_links: &[Vec<LinkAnnotation>],
+    page_numbers: &[usize],
+) -> Vec<Vec<usize>> {
     let mut numbers = Vec::with_capacity(page_links.len());
     for links in page_links {
-        numbers.push(links.iter().map(|link| document.push(PdfObject::Text(annotation_object(link)))).collect());
+        numbers.push(
+            links
+                .iter()
+                .map(|link| document.push(PdfObject::Text(annotation_object(link, page_numbers))))
+                .collect(),
+        );
     }
     numbers
 }
@@ -853,20 +891,39 @@ fn embedded_name(index: usize, subset: &Subset) -> String {
     format!("{}+{}", String::from_utf8(tag.to_vec()).expect("subset tags are ascii"), subset.name)
 }
 
-/// Link annotations for every safe destination on one page, in paint order.
+/// Link annotations for every resolvable destination on one page, in paint
+/// order.
 ///
 /// The rectangle is the run's glyph box: the baseline sits at `page_height -
 /// y`, the top at `0.8 * size` above it, and the bottom at `0.2 * size` below
 /// it. Boxes are clipped to the page MediaBox so a run that overflows the page
 /// never produces an annotation outside it.
-fn page_links(page: &DisplayPage) -> Vec<LinkAnnotation> {
+///
+/// A run carries either an internal anchor or an external URI. A fragment URI
+/// such as `#intro` names a display anchor, so it becomes a page jump instead of
+/// a URI action that points at a non-existent external resource. A destination
+/// no anchor satisfies is dropped while the text stays painted.
+fn page_links(page: &DisplayPage, destinations: &HashMap<String, (usize, f64)>) -> Vec<LinkAnnotation> {
     let mut links = Vec::new();
     for item in &page.items {
         let DisplayItem::TextRun(run) = item
         else {
             continue;
         };
-        let Some(uri) = run.href.as_deref().filter(|href| is_safe_href(href))
+        let target = if let Some(anchor) = &run.anchor {
+            destination_for(anchor, destinations)
+        }
+        else if let Some(href) = run.href.as_deref() {
+            match href.strip_prefix('#') {
+                Some(fragment) => destination_for(fragment, destinations),
+                None if is_safe_href(href) => Some(LinkTarget::Uri(href.to_string())),
+                None => None,
+            }
+        }
+        else {
+            None
+        };
+        let Some(target) = target
         else {
             continue;
         };
@@ -880,9 +937,14 @@ fn page_links(page: &DisplayPage) -> Vec<LinkAnnotation> {
         if x2 <= x1 || y2 <= y1 {
             continue;
         }
-        links.push(LinkAnnotation { x1, y1, x2, y2, uri: uri.to_string(), title: run.title.clone() });
+        links.push(LinkAnnotation { x1, y1, x2, y2, target, title: run.title.clone() });
     }
     links
+}
+
+/// Resolve one anchor name to a page-jump target.
+fn destination_for(anchor: &str, destinations: &HashMap<String, (usize, f64)>) -> Option<LinkTarget> {
+    destinations.get(anchor).map(|(page, y)| LinkTarget::Destination { page: *page, y: *y })
 }
 
 fn catalog_object() -> String {
@@ -908,19 +970,30 @@ fn page_object(page: &DisplayPage, resources: &str, content_number: usize, annot
     object
 }
 
-/// Link annotation: a URI action over the run's glyph rectangle, carrying the
-/// authored hover text as `/Contents` when the run had one.
-fn annotation_object(link: &LinkAnnotation) -> String {
+/// Link annotation: a URI action or an in-document destination over the run's
+/// glyph rectangle, carrying the authored hover text as `/Contents` when the run
+/// had one.
+fn annotation_object(link: &LinkAnnotation, page_numbers: &[usize]) -> String {
     let mut object = format!(
-        "<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] /A << /S /URI /URI ({}) >>",
+        "<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0]",
         num(link.x1),
         num(link.y1),
         num(link.x2),
         num(link.y2),
-        // Same literal-string escaping as text, so a destination containing
-        // parentheses or backslashes cannot break the dictionary syntax.
-        escape_text(&link.uri, None),
     );
+    match &link.target {
+        LinkTarget::Uri(uri) => {
+            // Same literal-string escaping as text, so a destination containing
+            // parentheses or backslashes cannot break the dictionary syntax.
+            let _ = write!(object, " /A << /S /URI /URI ({}) >>", escape_text(uri, None));
+        }
+        LinkTarget::Destination { page, y } => {
+            // `/XYZ left top zoom`: keep the horizontal offset and the reader's
+            // current zoom, and jump to the destination's top edge.
+            let number = page_numbers.get(*page).copied().unwrap_or(1);
+            let _ = write!(object, " /Dest [{number} 0 R /XYZ 0 {} 0]", num(*y));
+        }
+    };
     if let Some(title) = &link.title {
         let _ = write!(object, " /Contents ({})", escape_text(title, None));
     }

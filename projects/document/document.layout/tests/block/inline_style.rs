@@ -262,7 +262,7 @@ fn external_link_text_run_carries_href() {
 }
 
 #[test]
-fn internal_link_text_run_has_no_href() {
+fn internal_link_text_run_carries_an_anchor_not_a_href() {
     let graph = paragraph(vec![Inline::Link {
         target: RelationEndpoint::Node(NodeId(7)),
         display: vec![text("Section seven")],
@@ -273,7 +273,72 @@ fn internal_link_text_run_has_no_href() {
 
     assert_eq!(runs.len(), 1, "{runs:#?}");
     assert_eq!(runs[0].text, "Section seven");
-    assert_eq!(runs[0].href, None, "internal targets carry no destination");
+    assert_eq!(runs[0].href, None, "internal targets carry no external destination");
+    assert_eq!(runs[0].anchor.as_deref(), Some("@node-7"), "internal targets jump through an anchor");
+}
+
+#[test]
+fn headings_place_slug_anchors_and_targeted_sections_add_a_node_anchor() {
+    let mut graph = DocumentGraph::new(DocumentId(21));
+    let body = graph.push_block(Block::Paragraph { content: vec![text("Body.")] });
+    let section =
+        graph.push_block(Block::Section { level: 1, title: vec![text("Intro")], children: vec![body] });
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Link {
+            target: RelationEndpoint::Node(section),
+            display: vec![text("jump")],
+            title: None,
+        }],
+    });
+
+    let plan = layout(&graph);
+    let anchors: Vec<(&str, f64)> = plan
+        .pages
+        .iter()
+        .flat_map(|page| page.items.iter())
+        .filter_map(|item| match item {
+            LayoutItem::Anchor { name, y } => Some((name.as_str(), *y)),
+            _ => None,
+        })
+        .collect();
+
+    assert!(anchors.iter().any(|(name, _)| name == "intro"), "the heading slug is a destination: {anchors:?}");
+    let node = format!("@node-{}", section.0);
+    assert!(anchors.iter().any(|(name, _)| name == node), "the linked section is a destination: {anchors:?}");
+    assert!(anchors.iter().all(|(_, y)| *y > 0.0), "anchors sit below the page top: {anchors:?}");
+}
+
+#[test]
+fn repeated_headings_get_distinct_slug_anchors() {
+    let mut graph = DocumentGraph::new(DocumentId(21));
+    for _ in 0..2 {
+        let body = graph.push_block(Block::Paragraph { content: vec![text("Body.")] });
+        graph.push_block(Block::Section { level: 1, title: vec![text("Same Title")], children: vec![body] });
+    }
+
+    let plan = layout(&graph);
+    let anchors: Vec<&str> = plan
+        .pages
+        .iter()
+        .flat_map(|page| page.items.iter())
+        .filter_map(|item| match item {
+            LayoutItem::Anchor { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(anchors, vec!["same-title", "same-title-1"], "{anchors:?}");
+}
+
+#[test]
+fn plain_paragraphs_place_no_anchors() {
+    let graph = paragraph(vec![text("No headings and no links.")]);
+    let plan = layout(&graph);
+
+    assert!(
+        plan.pages.iter().all(|page| page.items.iter().all(|item| !matches!(item, LayoutItem::Anchor { .. }))),
+        "a document without headings or internal links needs no destinations"
+    );
 }
 
 #[test]

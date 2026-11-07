@@ -30,6 +30,12 @@ pub struct DisplayTextRun {
     /// Renderers must drop a destination they cannot safely emit while keeping
     /// the text.
     pub href: Option<String>,
+    /// Internal anchor this run links to, if any.
+    ///
+    /// The name matches one [`DisplayAnchor`] on some page of the same
+    /// presentation. Renderers with named destinations resolve it to a jump;
+    /// renderers without them keep the text and drop the destination.
+    pub anchor: Option<String>,
     /// Hover text authored on the link that contains the run, if any.
     ///
     /// Only link display content carries a title; all other runs keep `None`.
@@ -164,6 +170,19 @@ pub enum DisplayItem {
     Path(DisplayPath),
 }
 
+/// One named destination on a page.
+///
+/// A destination is metadata rather than a painted primitive, so it never
+/// reaches the content stream. Backends that can write named destinations
+/// resolve a run's [`DisplayTextRun::anchor`] to the page and top edge here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DisplayAnchor {
+    /// Destination name, unique within the presentation.
+    pub name: String,
+    /// Top edge in points, measured from the page top.
+    pub y: f64,
+}
+
 /// One page in a fixed-geometry display presentation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayPage {
@@ -173,6 +192,8 @@ pub struct DisplayPage {
     pub height: f64,
     /// Positioned primitives in paint order.
     pub items: Vec<DisplayItem>,
+    /// Named destinations on this page.
+    pub anchors: Vec<DisplayAnchor>,
 }
 
 /// Fixed-geometry presentation for PDF, SVG, and raster backends.

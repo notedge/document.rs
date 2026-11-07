@@ -72,11 +72,13 @@ fn titled_link_presentation(href: &str, title: Option<&str>) -> DisplayPresentat
                 style: FontStyle::Normal,
                 text: "example link".to_string(),
                 href: Some(href.to_string()),
+                anchor: None,
                 title: title.map(str::to_string),
                 color: None,
                 numeric: false,
                 artifact: false,
             })],
+            anchors: Vec::new(),
         }],
     }
 }
@@ -127,6 +129,7 @@ fn embeds_diagram_scenes_in_a_scaled_group() {
                 scene,
                 alt: "pipeline \"A\" & B".to_string(),
             })],
+            anchors: Vec::new(),
         }],
     };
 
@@ -156,6 +159,7 @@ fn fails_the_render_when_a_scene_cannot_serialize() {
                 scene: DisplayScene::new(Size { width: 0.0, height: 10.0 }),
                 alt: "empty".to_string(),
             })],
+            anchors: Vec::new(),
         }],
     };
 

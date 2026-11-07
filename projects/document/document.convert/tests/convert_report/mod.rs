@@ -1,6 +1,6 @@
 use document_convert::{convert_bytes, convert_bytes_with_body_faces, write_document_docx, write_document_pdf};
 use document_formats::import::{markdown::import_markdown_bytes, pdf::import_pdf_bytes};
-use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, SemanticStatus, TableCell, TableRow};
+use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, RelationEndpoint, SemanticStatus, TableCell, TableRow};
 
 use crate::common;
 use common::{
@@ -626,6 +626,92 @@ fn docx_export_keeps_raw_html_text_and_reports_flattening() {
     let reopened = convert_bytes("docx", "markdown", "raw.docx", docx, None).expect("reopen DOCX");
     assert!(reopened.markdown.contains("ZZ_DOCXRAWBLOCK_ZZ"), "{}", reopened.markdown);
     assert!(reopened.markdown.contains("ZZ_DOCXRAWINLINE_ZZ"), "{}", reopened.markdown);
+}
+
+#[test]
+fn pdf_export_turns_internal_node_links_into_destination_annotations() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(16));
+    let body = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Target body.".into() }] });
+    let section =
+        graph.push_block(Block::Section { level: 1, title: vec![Inline::Text { text: "Intro".into() }], children: vec![body] });
+    graph.push_block(Block::Paragraph {
+        content: vec![
+            Inline::Text { text: "Go ".into() },
+            Inline::Link {
+                target: RelationEndpoint::Node(section),
+                display: vec![Inline::Text { text: "back".into() }],
+                title: None,
+            },
+        ],
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let text = String::from_utf8_lossy(&pdf);
+    let links = text.matches("/Subtype /Link").count();
+    let destinations = text.matches("/Dest [").count();
+    assert!(links >= 1, "an internal link needs a /Subtype /Link annotation, saw {links}");
+    assert!(destinations >= 1, "the annotation needs a /Dest jump, saw {destinations}");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(!codes.contains(&"export.pdf.reference_target_dropped"), "{codes:?}");
+}
+
+#[test]
+fn pdf_export_resolves_authored_fragment_links_to_heading_destinations() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(16));
+    let body = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Target body.".into() }] });
+    graph.push_block(Block::Section { level: 1, title: vec![Inline::Text { text: "Intro".into() }], children: vec![body] });
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Link {
+            target: RelationEndpoint::ExternalUri("#intro".to_string()),
+            display: vec![Inline::Text { text: "jump".into() }],
+            title: None,
+        }],
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("/Subtype /Link"), "a fragment link needs an annotation");
+    assert!(text.contains("/Dest ["), "a fragment link needs a page jump");
+    assert!(!text.contains("/URI (#intro)"), "a fragment is not an external URI");
+}
+
+#[test]
+fn pdf_export_drops_a_fragment_destination_no_anchor_satisfies() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(16));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Link {
+            target: RelationEndpoint::ExternalUri("#missing".to_string()),
+            display: vec![Inline::Text { text: "jump".into() }],
+            title: None,
+        }],
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(!text.contains("/Subtype /Link"), "an unresolved fragment must not fabricate a destination");
+    assert!(!text.contains("/Dest ["), "an unresolved fragment has nothing to jump to");
+}
+
+#[test]
+fn pdf_export_keeps_external_links_as_uri_actions() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(16));
+    graph.push_block(Block::Paragraph {
+        content: vec![Inline::Link {
+            target: RelationEndpoint::ExternalUri("https://example.com/guide".to_string()),
+            display: vec![Inline::Text { text: "guide".into() }],
+            title: Some("Read the guide".to_string()),
+        }],
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.contains("/Subtype /Link"), "an external link needs an annotation");
+    assert!(text.contains("/S /URI /URI (https://example.com/guide)"), "the external destination survives");
+    assert!(!text.contains("/Dest ["), "an external link is not an in-document jump");
 }
 
 #[test]
