@@ -362,7 +362,12 @@ fn lay_formula(
     }
 }
 
-/// Block ids that no section or list item claims as a child, in graph order.
+/// Block ids that no section, quote, list item or table cell claims as a child,
+/// in graph order.
+///
+/// Table cells hold child block ids, and the table's own emission paints those
+/// children inside the grid. Visiting them again as root blocks would lay the
+/// same text out a second time outside the table, so they stay referenced.
 fn root_ids(graph: &DocumentGraph) -> Vec<NodeId> {
     let mut referenced = HashSet::new();
     for node in &graph.blocks {
@@ -372,6 +377,11 @@ fn root_ids(graph: &DocumentGraph) -> Vec<NodeId> {
             Block::List { items, .. } => {
                 for item in items {
                     referenced.extend(item.children.iter().copied());
+                }
+            }
+            Block::Table { head, body, foot, .. } => {
+                for cell in head.iter().chain(body).chain(foot).flat_map(|row| row.cells.iter()) {
+                    referenced.extend(cell.children.iter().copied());
                 }
             }
             _ => {}
