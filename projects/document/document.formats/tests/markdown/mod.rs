@@ -658,6 +658,14 @@ fn markdown_image_in_a_mixed_link_label_round_trips() {
     assert_eq!(display.len(), 2, "the label keeps its text run plus the image: {display:#?}");
     assert!(matches!(&display[0], Inline::Text { text } if text == "cover "), "{display:#?}");
 
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert_eq!(
+        codes,
+        ["import.markdown.asset_unresolved"],
+        "the only loss is the unresolved asset: {:#?}",
+        graph.coverage.loss
+    );
+
     let markdown = export_markdown(&graph).expect("export markdown");
     assert!(markdown.contains("![alt](a.png)"), "{markdown}");
     let reopened = import_markdown_bytes("mixed-label-roundtrip.md", &markdown).expect("reopen markdown");

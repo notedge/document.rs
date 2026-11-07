@@ -1,6 +1,6 @@
 use document_convert::{convert_bytes, convert_bytes_with_body_faces, write_document_pdf};
-use document_formats::import::markdown::import_markdown_bytes;
-use document_ir::{Block, DocumentGraph, DocumentId, Inline, SemanticStatus};
+use document_formats::import::{markdown::import_markdown_bytes, pdf::import_pdf_bytes};
+use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, SemanticStatus, TableCell, TableRow};
 
 use crate::common;
 use common::{
@@ -346,6 +346,73 @@ fn pdf_export_names_image_alt_when_the_page_cannot_carry_it() {
     let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
     assert!(codes.contains(&"export.pdf.image_alt_dropped"), "the report must name alt itself: {codes:?}");
     assert!(!String::from_utf8_lossy(&pdf).contains("ZZ"), "if the page ever carries alt, drop the loss code");
+}
+
+#[test]
+fn pdf_export_names_image_alt_only_in_the_body_paragraph_path() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(10));
+    graph.push_block(Block::Section { level: 1, title: vec![image_with_alt("ZZH", "media/h.png")], children: vec![] });
+    graph.push_block(Block::List {
+        ordered: false,
+        items: vec![ListItem {
+            content: vec![image_with_alt("ZZL", "media/l.png")],
+            children: vec![],
+            number: None,
+            is_task: false,
+            is_checked: Some(false),
+        }],
+    });
+    let cell_text = graph.push_block(Block::Paragraph { content: vec![image_with_alt("ZZT", "media/t.png")] });
+    graph.push_block(Block::Table {
+        caption: None,
+        head: vec![TableRow { cells: vec![TableCell { children: vec![cell_text], colspan: 1, rowspan: 1 }] }],
+        body: vec![],
+        foot: vec![],
+    });
+    graph.push_block(Block::Paragraph { content: vec![image_with_alt("ZZP", "media/p.png")] });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert_eq!(
+        codes.iter().filter(|code| **code == "export.pdf.image_alt_dropped").count(),
+        1,
+        "only the body paragraph cannot carry alt: {codes:?}"
+    );
+
+    let reopened = import_pdf_bytes("alt-contexts.pdf", &pdf).expect("reopen PDF");
+    let text = all_text(&reopened);
+    for expected in ["ZZH", "ZZL", "ZZT"] {
+        assert!(text.contains(expected), "{expected} must reach the text flow: {text:?}");
+    }
+    assert!(!text.contains("ZZP"), "body paragraph alt has no slot, so the code must stand in: {text:?}");
+}
+
+fn image_with_alt(alt: &str, source: &str) -> Inline {
+    Inline::Image { source: source.into(), alt: vec![Inline::Text { text: alt.into() }], title: None, asset: None }
+}
+
+fn all_text(graph: &DocumentGraph) -> String {
+    let mut text = String::new();
+    for node in &graph.blocks {
+        match &node.block {
+            Block::Section { title, .. } => text.push_str(&title.iter().map(Inline::plain_text).collect::<String>()),
+            Block::Paragraph { content } => text.push_str(&content.iter().map(Inline::plain_text).collect::<String>()),
+            Block::List { items, .. } => {
+                for item in items {
+                    text.push_str(&item.content.iter().map(Inline::plain_text).collect::<String>());
+                }
+            }
+            Block::Table { caption, .. } => {
+                if let Some(caption) = caption {
+                    text.push_str(caption);
+                }
+            }
+            _ => {}
+        }
+        text.push('\n');
+    }
+    text
 }
 
 #[test]

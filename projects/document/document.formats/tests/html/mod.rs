@@ -315,19 +315,36 @@ fn html_export_report_keeps_resolved_asset_out_of_loss_list() {
 #[test]
 fn html_export_keeps_table_caption_and_ordered_list_numbers() {
     let mut graph = DocumentGraph::new(DocumentId(70));
-    let heading = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "h".into() }] });
+    let first_cell = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "first".into() }] });
     graph.push_block(Block::Table {
-        caption: Some("表 1".into()),
-        head: vec![TableRow { cells: vec![TableCell { children: vec![heading], colspan: 1, rowspan: 1 }] }],
+        caption: Some("首表".into()),
+        head: vec![TableRow { cells: vec![TableCell { children: vec![first_cell], colspan: 1, rowspan: 1 }] }],
         body: Vec::new(),
         foot: Vec::new(),
+    });
+    let nested = graph.push_block(Block::List {
+        ordered: true,
+        items: vec![
+            ListItem {
+                content: vec![Inline::Text { text: "three".into() }],
+                children: Vec::new(),
+                number: Some(3),
+                ..Default::default()
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "five".into() }],
+                children: Vec::new(),
+                number: Some(5),
+                ..Default::default()
+            },
+        ],
     });
     graph.push_block(Block::List {
         ordered: true,
         items: vec![
             ListItem {
                 content: vec![Inline::Text { text: "five".into() }],
-                children: Vec::new(),
+                children: vec![nested],
                 number: Some(5),
                 ..Default::default()
             },
@@ -339,11 +356,26 @@ fn html_export_keeps_table_caption_and_ordered_list_numbers() {
             },
         ],
     });
+    let last_cell = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "last".into() }] });
+    graph.push_block(Block::Table {
+        caption: Some("尾表".into()),
+        head: vec![TableRow { cells: vec![TableCell { children: vec![last_cell], colspan: 1, rowspan: 1 }] }],
+        body: Vec::new(),
+        foot: Vec::new(),
+    });
+    graph.push_block(Block::List {
+        ordered: false,
+        items: vec![ListItem { content: vec![Inline::Text { text: "plain".into() }], ..Default::default() }],
+    });
 
     let html = export_html(&graph).expect("html export");
-    assert!(html.contains("<caption>表 1</caption>"), "{html}");
+    assert!(html.contains("<caption>首表</caption>"), "{html}");
+    assert!(html.contains("<caption>尾表</caption>"), "{html}");
     assert!(html.contains(r#"<ol start="5">"#), "{html}");
+    assert!(html.contains(r#"<ol start="3">"#), "{html}");
     assert!(html.contains(r#"<li value="7">"#), "{html}");
+    assert!(html.contains(r#"<li value="5">"#), "{html}");
+    assert!(!html.contains(r#"<ul start"#), "an unordered list carries no start: {html}");
 }
 
 mod asset_materialization;

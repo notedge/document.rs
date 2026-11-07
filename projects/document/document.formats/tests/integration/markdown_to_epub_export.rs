@@ -259,30 +259,54 @@ fn epub_export_keeps_table_caption_list_start_and_reference_anchor() {
     use document_ir::{Block, DocumentGraph, DocumentId, Inline, ListItem, TableCell, TableRow};
 
     let mut graph = DocumentGraph::new(DocumentId(71));
-    let target = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "target".into() }] });
-    let heading = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "h".into() }] });
+    let first_cell = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "first".into() }] });
     graph.push_block(Block::Table {
-        caption: Some("表 1".into()),
-        head: vec![TableRow { cells: vec![TableCell { children: vec![heading], colspan: 1, rowspan: 1 }] }],
+        caption: Some("首表".into()),
+        head: vec![TableRow { cells: vec![TableCell { children: vec![first_cell], colspan: 1, rowspan: 1 }] }],
         body: Vec::new(),
         foot: Vec::new(),
     });
-    graph.push_block(Block::List {
+    let target = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "target".into() }] });
+    let nested = graph.push_block(Block::List {
         ordered: true,
         items: vec![
+            ListItem {
+                content: vec![Inline::Text { text: "three".into() }],
+                children: Vec::new(),
+                number: Some(3),
+                ..Default::default()
+            },
             ListItem {
                 content: vec![Inline::Text { text: "five".into() }],
                 children: Vec::new(),
                 number: Some(5),
                 ..Default::default()
             },
+        ],
+    });
+    graph.push_block(Block::List {
+        ordered: true,
+        items: vec![
             ListItem {
-                content: vec![Inline::Text { text: "six".into() }],
+                content: vec![Inline::Text { text: "five".into() }],
+                children: vec![nested],
+                number: Some(5),
+                ..Default::default()
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "seven".into() }],
                 children: Vec::new(),
-                number: Some(6),
+                number: Some(7),
                 ..Default::default()
             },
         ],
+    });
+    let last_cell = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "last".into() }] });
+    graph.push_block(Block::Table {
+        caption: Some("尾表".into()),
+        head: vec![TableRow { cells: vec![TableCell { children: vec![last_cell], colspan: 1, rowspan: 1 }] }],
+        body: Vec::new(),
+        foot: Vec::new(),
     });
     graph.push_block(Block::Paragraph { content: vec![Inline::Reference { display: "go".into(), target }] });
 
@@ -292,8 +316,15 @@ fn epub_export_keeps_table_caption_list_start_and_reference_anchor() {
     let chapter = String::from_utf8(package.read_member("OEBPS/chapter-000.xhtml", &mut ledger).expect("read chapter"))
         .expect("chapter must be UTF-8");
 
-    assert!(chapter.contains("<caption>表 1</caption>"), "{chapter}");
+    assert!(chapter.contains("<caption>首表</caption>"), "{chapter}");
+    assert!(chapter.contains("<caption>尾表</caption>"), "{chapter}");
     assert!(chapter.contains(r#"<ol start="5">"#), "{chapter}");
-    assert!(chapter.contains(r##"href="#node-1""##), "the reference must point at its target: {chapter}");
-    assert!(chapter.contains(r#"id="node-1""#), "the reference target must exist in the same chapter: {chapter}");
+    assert!(chapter.contains(r#"<ol start="3">"#), "{chapter}");
+    assert!(chapter.contains(r#"<li value="7">"#), "{chapter}");
+    assert!(chapter.contains(r#"<li value="5">"#), "{chapter}");
+    assert!(chapter.contains(&format!(r##"href="#node-{}""##, target.0)), "the reference must point at its target: {chapter}");
+    assert!(
+        chapter.contains(&format!(r#"id="node-{}""#, target.0)),
+        "the reference target must exist in the same chapter: {chapter}"
+    );
 }

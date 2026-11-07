@@ -1157,6 +1157,70 @@ fn docx_rejects_lists_deeper_than_numbering_definitions() {
 }
 
 #[test]
+fn docx_export_keeps_caption_and_number_in_every_position() {
+    let mut graph = DocumentGraph::new(DocumentId(55));
+    let first_cell = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "first".into() }] });
+    graph.push_block(Block::Table {
+        caption: Some("首表".into()),
+        head: vec![TableRow { cells: vec![TableCell { children: vec![first_cell], colspan: 1, rowspan: 1 }] }],
+        body: Vec::new(),
+        foot: Vec::new(),
+    });
+    let nested = graph.push_block(Block::List {
+        ordered: true,
+        items: vec![
+            ListItem {
+                content: vec![Inline::Text { text: "three".into() }],
+                children: Vec::new(),
+                number: Some(3),
+                ..Default::default()
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "four".into() }],
+                children: Vec::new(),
+                number: Some(4),
+                ..Default::default()
+            },
+        ],
+    });
+    graph.push_block(Block::List {
+        ordered: true,
+        items: vec![
+            ListItem {
+                content: vec![Inline::Text { text: "five".into() }],
+                children: vec![nested],
+                number: Some(5),
+                ..Default::default()
+            },
+            ListItem {
+                content: vec![Inline::Text { text: "seven".into() }],
+                children: Vec::new(),
+                number: Some(7),
+                ..Default::default()
+            },
+        ],
+    });
+    let last_cell = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "last".into() }] });
+    graph.push_block(Block::Table {
+        caption: Some("尾表".into()),
+        head: vec![TableRow { cells: vec![TableCell { children: vec![last_cell], colspan: 1, rowspan: 1 }] }],
+        body: Vec::new(),
+        foot: Vec::new(),
+    });
+
+    let exported = export_docx_bytes(&graph).expect("export structural blocks");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains("<w:tblCaption w:val=\"首表\"/>"), "a caption on the first block must stay attached: {xml}");
+    assert!(xml.contains("<w:tblCaption w:val=\"尾表\"/>"), "a caption on the last block must stay attached: {xml}");
+    for start in ["3", "5", "7"] {
+        assert!(
+            xml.contains(&format!("<w:startOverride w:val=\"{start}\"/>")),
+            "the authored start {start} must reach a numbering override: {xml}"
+        );
+    }
+}
+
+#[test]
 fn docx_export_keeps_image_alt_as_alternate_text() {
     let mut graph = graph_with_image(png_header(1, 1), "media/alt.png");
     let Block::Paragraph { content } = &mut graph.blocks[0].block
