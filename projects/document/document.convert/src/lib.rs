@@ -553,7 +553,7 @@ fn write_target(
             };
             if graph.page_setup.is_some_and(|page| page.columns.is_some_and(|columns| columns > 1)) {
                 graph.push_loss(LossMarker {
-                    code: "export.docx.columns_unsupported".into(),
+                    code: "export.pdf.columns_unsupported".into(),
                     message: "the document declares multiple columns but the PDF writer lays text out in one column".into(),
                     status: SemanticStatus::Partial,
                 });
