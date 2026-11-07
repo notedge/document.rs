@@ -15,6 +15,7 @@ default-members = [
     "projects/document/document.ir",
     "projects/document/document.formats",
     "projects/document/document.convert",
+    "projects/document/document.layout",
     "projects/crawler/crawler",
     "projects/crawler/crawler.types",
 ]
