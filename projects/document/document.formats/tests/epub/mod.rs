@@ -1146,6 +1146,55 @@ fn epub_export_reports_dropped_document_metadata() {
 }
 
 #[test]
+fn epub_import_with_several_creators_reports_the_export_drop() {
+    let container = br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#;
+    let opf = br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Two Creators</dc:title>
+    <dc:language>en</dc:language>
+    <dc:creator>First</dc:creator>
+    <dc:creator>Second</dc:creator>
+    <dc:subject>rust</dc:subject>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="chapter.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>
+    <itemref idref="ch1"/>
+  </spine>
+</package>"#;
+    let zip = stored_zip(&[
+        ("mimetype", b"application/epub+zip"),
+        ("META-INF/container.xml", container),
+        ("OEBPS/content.opf", opf),
+        (
+            "OEBPS/chapter.xhtml",
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <body><p>Body.</p></body>
+</html>"#,
+        ),
+    ]);
+
+    let imported = import_epub_bytes("two-creators.epub", &zip).expect("import epub");
+    assert_eq!(imported.metadata.authors, ["First", "Second"], "the import keeps every creator");
+    assert!(
+        imported.coverage.loss.iter().any(|loss| loss.code == "import.epub.metadata_unmapped"),
+        "the import already declares the metadata it did not land"
+    );
+
+    let export = export_epub_report(&imported).expect("export epub");
+    let codes: Vec<&str> = export.losses.iter().map(|loss| loss.code.as_str()).collect();
+    assert_eq!(codes, ["export.epub.creator_dropped"], "the export names the creator it drops: {codes:?}");
+}
+
+#[test]
 fn epub_export_reports_flattened_table_foot_band() {
     let mut graph = DocumentGraph::new(DocumentId(8));
     let header = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "H".into() }] });
