@@ -4,7 +4,7 @@
 //! constructors the IR actually carries, and returns a loss report for every
 //! normalization it had to apply.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use document_ir::{
     AssetId, Block as IrBlock, BreakKind, DocumentGraph, Inline as IrInline, LossMarker, MathDisplay, NodeId, RelationEndpoint,
@@ -44,7 +44,7 @@ impl PandocExport {
 
 /// Export one document graph as Pandoc JSON.
 pub fn export_pandoc_json(graph: &DocumentGraph) -> Result<PandocExport, FormatError> {
-    let mut exporter = Exporter { graph, losses: Vec::new() };
+    let mut exporter = Exporter::new(graph);
     let document =
         PandocDocument { api_version: API_VERSION, meta: exporter.encode_metadata(), blocks: exporter.export_top_level()? };
     Ok(PandocExport { document, losses: exporter.losses })
@@ -53,6 +53,22 @@ pub fn export_pandoc_json(graph: &DocumentGraph) -> Result<PandocExport, FormatE
 struct Exporter<'a> {
     graph: &'a DocumentGraph,
     losses: Vec<LossMarker>,
+    note_bodies: HashMap<String, Vec<IrInline>>,
+    note_definition_failures: HashMap<String, NoteDefinitionFailure>,
+    consumed_definitions: HashSet<NodeId>,
+}
+
+impl<'a> Exporter<'a> {
+    fn new(graph: &'a DocumentGraph) -> Self {
+        let plan = plan_footnote_definitions(graph);
+        Self {
+            graph,
+            losses: Vec::new(),
+            note_bodies: plan.bodies,
+            note_definition_failures: plan.failures,
+            consumed_definitions: plan.consumed,
+        }
+    }
 }
 
 impl Exporter<'_> {
@@ -214,6 +230,12 @@ impl Exporter<'_> {
                 Attr { id: String::new(), classes: vec!["chart".into(), language.clone()], pairs: Vec::new() },
                 source.clone(),
             ),
+            IrBlock::Opaque { kind, payload_hint, .. }
+                if kind == "footnote_definition" && self.consumed_definitions.contains(&id) =>
+            {
+                // The body now lives inside the reconstructed native Note.
+                return Ok(Vec::new());
+            }
             IrBlock::Opaque { kind, payload_hint, .. } => self.export_opaque(kind, payload_hint)?,
             IrBlock::RawHtml { html } => Block::RawBlock("html".into(), html.clone()),
         };
@@ -378,16 +400,15 @@ impl Exporter<'_> {
                 })
             }
             IrInline::Note { label, display } => {
-                let Some(display) = display.as_ref().filter(|display| !display.is_empty())
-                else {
-                    self.loss(
-                        "export.pandoc-json.note_content_unavailable",
-                        format!("note `{label}` has no display content and was written with an empty body"),
-                        SemanticStatus::Partial,
-                    );
-                    return Ok(Inline::Note(Vec::new()));
-                };
-                Ok(Inline::Note(vec![Block::Para(self.export_inlines(display)?)]))
+                if let Some(display) = display.as_ref().filter(|display| !display.is_empty()) {
+                    return Ok(Inline::Note(vec![Block::Para(self.export_inlines(display)?)]));
+                }
+                if let Some(body) = self.note_bodies.get(label).cloned() {
+                    return Ok(Inline::Note(vec![Block::Para(self.export_inlines(&body)?)]));
+                }
+                let failure = self.note_definition_failures.get(label).copied().unwrap_or_default();
+                self.loss(failure.code(), format!("note `{label}` {}", failure.message()), SemanticStatus::Partial);
+                Ok(Inline::Note(Vec::new()))
             }
             IrInline::Citation { key, display } => {
                 let inlines = match display {
@@ -457,4 +478,221 @@ fn referenced_children(graph: &DocumentGraph) -> HashSet<NodeId> {
         }
     }
     referenced
+}
+
+/// Why a note reference could not be rebuilt as a Pandoc native `Note`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum NoteDefinitionFailure {
+    /// No `footnote_definition` block carries the referenced label.
+    #[default]
+    Missing,
+    /// The definition carries no body.
+    Empty,
+    /// The body survives as more than one block.
+    Multiblock,
+    /// The body nests another footnote reference.
+    #[cfg_attr(not(feature = "markdown"), allow(dead_code))]
+    Nested,
+    /// The body starts a block-level construct instead of a single paragraph.
+    #[cfg_attr(not(feature = "markdown"), allow(dead_code))]
+    BlockLevel,
+    /// The body uses inline content the reparse cannot carry without loss.
+    #[cfg_attr(not(feature = "markdown"), allow(dead_code))]
+    Unrepresentable,
+    /// The build has no Markdown parser to read the opaque body.
+    #[cfg_attr(feature = "markdown", allow(dead_code))]
+    ParserUnavailable,
+}
+
+impl NoteDefinitionFailure {
+    fn code(self) -> &'static str {
+        match self {
+            Self::Missing => "export.pandoc-json.note_definition_missing",
+            Self::Empty => "export.pandoc-json.note_definition_empty",
+            Self::Multiblock => "export.pandoc-json.note_definition_multiblock",
+            Self::Nested => "export.pandoc-json.note_definition_nested",
+            Self::BlockLevel => "export.pandoc-json.note_definition_block_level",
+            Self::Unrepresentable => "export.pandoc-json.note_definition_unrepresentable",
+            Self::ParserUnavailable => "export.pandoc-json.note_definition_parser_unavailable",
+        }
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Self::Missing => "has no `footnote_definition` block in the document",
+            Self::Empty => "has a `footnote_definition` block with an empty body",
+            Self::Multiblock => "has a `footnote_definition` body that spans more than one block",
+            Self::Nested => "has a `footnote_definition` body that nests another footnote reference",
+            Self::BlockLevel => "has a `footnote_definition` body that starts a block-level construct",
+            Self::Unrepresentable => "has a `footnote_definition` body the IR cannot carry without loss",
+            Self::ParserUnavailable => "needs the `markdown` feature to read its `footnote_definition` body",
+        }
+    }
+}
+
+#[derive(Default)]
+struct FootnotePlan {
+    bodies: HashMap<String, Vec<IrInline>>,
+    failures: HashMap<String, NoteDefinitionFailure>,
+    consumed: HashSet<NodeId>,
+}
+
+/// Pairs note references with the opaque `footnote_definition` blocks that
+/// their labels name. A definition is rebuilt only when its body is a single
+/// paragraph of inline content that survives a reparse without losses. All
+/// other bodies stay opaque and keep a loss reason specific to the observed
+/// shape.
+fn plan_footnote_definitions(graph: &DocumentGraph) -> FootnotePlan {
+    let mut references = HashSet::new();
+    for node in &graph.blocks {
+        match &node.block {
+            IrBlock::Paragraph { content } => collect_note_references(content, &mut references),
+            IrBlock::Section { title, .. } => collect_note_references(title, &mut references),
+            IrBlock::List { items, .. } => {
+                for item in items {
+                    collect_note_references(&item.content, &mut references);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // GFM keeps the first definition for a repeated label, so later blocks stay
+    // opaque instead of competing for the same reference.
+    let mut definitions: HashMap<String, (NodeId, &str)> = HashMap::new();
+    for node in &graph.blocks {
+        let IrBlock::Opaque { kind, payload_hint, .. } = &node.block
+        else {
+            continue;
+        };
+        if kind != "footnote_definition" {
+            continue;
+        }
+        let Some((label, body)) = footnote_definition_parts(payload_hint)
+        else {
+            continue;
+        };
+        definitions.entry(label.to_string()).or_insert((node.id, body));
+    }
+
+    let mut plan = FootnotePlan::default();
+    for label in references {
+        match definitions.get(&label) {
+            None => {
+                plan.failures.insert(label, NoteDefinitionFailure::Missing);
+            }
+            Some((node_id, body)) => match classify_footnote_body(body) {
+                Ok(content) => {
+                    plan.bodies.insert(label, content);
+                    plan.consumed.insert(*node_id);
+                }
+                Err(failure) => {
+                    plan.failures.insert(label, failure);
+                }
+            },
+        }
+    }
+    plan
+}
+
+fn footnote_definition_parts(payload: &str) -> Option<(&str, &str)> {
+    let rest = payload.trim_start().strip_prefix("[^")?;
+    let (label, body) = rest.split_once("]:")?;
+    Some((label.trim(), body.trim_start_matches([' ', '\t'])))
+}
+
+fn collect_note_references(inlines: &[IrInline], out: &mut HashSet<String>) {
+    for inline in inlines {
+        match inline {
+            IrInline::Note { label, display } => {
+                let missing = match display {
+                    None => true,
+                    Some(display) => display.is_empty(),
+                };
+                if missing {
+                    out.insert(label.clone());
+                }
+                if let Some(display) = display {
+                    collect_note_references(display, out);
+                }
+            }
+            IrInline::Styled { children, .. }
+            | IrInline::Attributed { children, .. }
+            | IrInline::Link { display: children, .. } => collect_note_references(children, out),
+            IrInline::Image { alt, .. } => collect_note_references(alt, out),
+            IrInline::Citation { display: Some(display), .. } => collect_note_references(display, out),
+            _ => {}
+        }
+    }
+}
+
+fn classify_footnote_body(body: &str) -> Result<Vec<IrInline>, NoteDefinitionFailure> {
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(NoteDefinitionFailure::Empty);
+    }
+    if body.contains('\n') || body.contains('\r') {
+        return Err(NoteDefinitionFailure::Multiblock);
+    }
+    #[cfg(feature = "markdown")]
+    {
+        // The opaque payload is a GFM definition written by our own importers,
+        // so the Markdown adapter is the only parser that can read it back
+        // exactly. A fragment parse keeps block structure visible.
+        let parsed = crate::import::markdown::import_markdown_bytes("footnote-body.md", body)
+            .map_err(|_| NoteDefinitionFailure::Unrepresentable)?;
+        let mut content = None;
+        for node in &parsed.blocks {
+            match &node.block {
+                IrBlock::Paragraph { content: inlines } => {
+                    if content.replace(inlines.clone()).is_some() {
+                        return Err(NoteDefinitionFailure::BlockLevel);
+                    }
+                }
+                _ => return Err(NoteDefinitionFailure::BlockLevel),
+            }
+        }
+        let content = content.ok_or(NoteDefinitionFailure::Empty)?;
+        if !parsed.coverage.loss.is_empty() {
+            return Err(NoteDefinitionFailure::Unrepresentable);
+        }
+        if has_nested_note(&content) {
+            return Err(NoteDefinitionFailure::Nested);
+        }
+        if has_image(&content) {
+            // Image assets belong to the fragment graph, so rebuilding here
+            // would leave a dangling asset reference.
+            return Err(NoteDefinitionFailure::Unrepresentable);
+        }
+        Ok(content)
+    }
+    #[cfg(not(feature = "markdown"))]
+    {
+        Err(NoteDefinitionFailure::ParserUnavailable)
+    }
+}
+
+#[cfg(feature = "markdown")]
+fn has_nested_note(inlines: &[IrInline]) -> bool {
+    inlines.iter().any(|inline| match inline {
+        IrInline::Note { .. } => true,
+        IrInline::Styled { children, .. }
+        | IrInline::Attributed { children, .. }
+        | IrInline::Link { display: children, .. } => has_nested_note(children),
+        IrInline::Image { alt, .. } => has_nested_note(alt),
+        IrInline::Citation { display: Some(display), .. } => has_nested_note(display),
+        _ => false,
+    })
+}
+
+#[cfg(feature = "markdown")]
+fn has_image(inlines: &[IrInline]) -> bool {
+    inlines.iter().any(|inline| match inline {
+        IrInline::Image { .. } => true,
+        IrInline::Styled { children, .. }
+        | IrInline::Attributed { children, .. }
+        | IrInline::Link { display: children, .. } => has_image(children),
+        IrInline::Note { display: Some(display), .. } | IrInline::Citation { display: Some(display), .. } => has_image(display),
+        _ => false,
+    })
 }

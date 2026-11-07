@@ -645,6 +645,190 @@ fn pandoc_citations_without_a_key_are_dropped_with_a_loss() {
     assert!(graph.validate().is_valid());
 }
 
+fn footnote_definition_payloads(blocks: &[Block]) -> Vec<&str> {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::RawBlock(format, payload) if format == "notedown.footnote_definition" => Some(payload.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn paragraph_notes(blocks: &[Block]) -> Vec<Vec<Block>> {
+    blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Para(inlines) => Some(inlines.as_slice()),
+            _ => None,
+        })
+        .flat_map(|inlines| {
+            inlines.iter().filter_map(|inline| match inline {
+                Inline::Note(blocks) => Some(blocks.clone()),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+fn pandoc_inline_text(inlines: &[Inline]) -> String {
+    inlines
+        .iter()
+        .map(|inline| match inline {
+            Inline::Str(text) => text.clone(),
+            Inline::Space | Inline::SoftBreak => " ".into(),
+            Inline::Emph(inner)
+            | Inline::Strong(inner)
+            | Inline::Strikeout(inner)
+            | Inline::Underline(inner)
+            | Inline::Superscript(inner)
+            | Inline::Subscript(inner)
+            | Inline::SmallCaps(inner) => pandoc_inline_text(inner),
+            Inline::Span { inlines, .. } => pandoc_inline_text(inlines),
+            Inline::Code { text, .. } => text.clone(),
+            Inline::Quoted { inlines, .. } | Inline::Link { inlines, .. } | Inline::Image { inlines, .. } => {
+                pandoc_inline_text(inlines)
+            }
+            Inline::Cite { inlines, .. } => pandoc_inline_text(inlines),
+            _ => String::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn markdown_footnote_definition_becomes_a_native_note() {
+    let markdown = "Text[^a].\n\n[^a]: body with *emphasis* and `code`\n";
+    let graph = import_markdown_bytes("note.md", markdown).expect("markdown import");
+    assert!(graph.validate().is_valid(), "{:?}", graph.validate().issues);
+
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(
+        !exported.losses.iter().any(|loss| loss.code.starts_with("export.pandoc-json.note_definition")),
+        "{:?}",
+        exported.losses
+    );
+    // The consumed definition must not linger as a raw opaque block.
+    assert!(footnote_definition_payloads(&exported.document.blocks).is_empty(), "{:?}", exported.document.blocks);
+
+    let notes = paragraph_notes(&exported.document.blocks);
+    assert_eq!(notes.len(), 1, "{:?}", exported.document.blocks);
+    let [Block::Para(body)] = notes[0].as_slice()
+    else {
+        panic!("a rebuilt note must hold exactly one paragraph: {:?}", notes[0]);
+    };
+    assert_eq!(pandoc_inline_text(body), "body with emphasis and code");
+    assert!(matches!(body.as_slice(), [Inline::Str(_), Inline::Emph(_), Inline::Str(_), Inline::Code { .. }]), "{body:?}");
+}
+
+#[test]
+fn multiline_footnote_definition_stays_opaque_with_a_precise_reason() {
+    let markdown = "Text[^a].\n\n[^a]: first line\n    second line\n";
+    let graph = import_markdown_bytes("note.md", markdown).expect("markdown import");
+    let payload = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            IrBlock::Opaque { kind, payload_hint, .. } if kind == "footnote_definition" => Some(payload_hint.clone()),
+            _ => None,
+        })
+        .expect("opaque definition");
+    assert!(payload.contains('\n'), "{payload:?}");
+
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(
+        exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.note_definition_multiblock"),
+        "{:?}",
+        exported.losses
+    );
+    assert_eq!(footnote_definition_payloads(&exported.document.blocks), vec![payload.as_str()]);
+    assert!(paragraph_notes(&exported.document.blocks).iter().all(|note| note.is_empty()));
+}
+
+#[test]
+fn nested_footnote_reference_stays_opaque_with_a_precise_reason() {
+    let markdown = "Text[^a].\n\n[^a]: body with [^b]\n";
+    let graph = import_markdown_bytes("note.md", markdown).expect("markdown import");
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(
+        exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.note_definition_nested"),
+        "{:?}",
+        exported.losses
+    );
+    assert_eq!(footnote_definition_payloads(&exported.document.blocks), vec!["[^a]: body with [^b]"]);
+    assert!(paragraph_notes(&exported.document.blocks).iter().all(|note| note.is_empty()));
+}
+
+#[test]
+fn missing_footnote_definition_reports_a_missing_reason() {
+    let graph = import_markdown_bytes("note.md", "Text[^a].\n").expect("markdown import");
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(
+        exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.note_definition_missing"),
+        "{:?}",
+        exported.losses
+    );
+    assert!(footnote_definition_payloads(&exported.document.blocks).is_empty());
+    assert!(paragraph_notes(&exported.document.blocks).iter().all(|note| note.is_empty()));
+}
+
+#[test]
+fn empty_footnote_definition_reports_an_empty_reason() {
+    let graph = import_markdown_bytes("note.md", "Text[^a].\n\n[^a]:\n").expect("markdown import");
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(
+        exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.note_definition_empty"),
+        "{:?}",
+        exported.losses
+    );
+}
+
+#[test]
+fn block_level_footnote_body_reports_a_block_level_reason() {
+    let markdown = "Text[^a].\n\n[^a]: - list item\n";
+    let graph = import_markdown_bytes("note.md", markdown).expect("markdown import");
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(
+        exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.note_definition_block_level"),
+        "{:?}",
+        exported.losses
+    );
+    assert_eq!(footnote_definition_payloads(&exported.document.blocks), vec!["[^a]: - list item"]);
+}
+
+#[test]
+fn footnote_body_with_an_image_is_kept_opaque_with_a_precise_reason() {
+    let markdown = "Text[^a].\n\n[^a]: see ![alt](pic.png)\n";
+    let graph = import_markdown_bytes("note.md", markdown).expect("markdown import");
+    let exported = export_pandoc_json(&graph).expect("export");
+    assert!(
+        exported.losses.iter().any(|loss| loss.code == "export.pandoc-json.note_definition_unrepresentable"),
+        "{:?}",
+        exported.losses
+    );
+    assert_eq!(footnote_definition_payloads(&exported.document.blocks), vec!["[^a]: see ![alt](pic.png)"]);
+}
+
+#[test]
+fn markdown_footnote_body_round_trips_through_pandoc_json_and_back() {
+    let markdown = "Text[^a].\n\n[^a]: body with *emphasis* and `code`\n";
+    let graph = import_markdown_bytes("note.md", markdown).expect("markdown import");
+    let exported = export_pandoc_json(&graph).expect("export");
+    let first = exported.document.clone();
+    let json = exported.to_json_text().expect("json");
+
+    let pandoc_graph = import(&json);
+    assert_eq!(note_labels(&pandoc_graph), ["pandoc-note-1"]);
+    let again = export_pandoc_json(&pandoc_graph).expect("export");
+    // Both content and Pandoc structure survive the second pass.
+    assert_eq!(again.document.blocks, first.blocks);
+
+    let back = export_markdown(&pandoc_graph).expect("markdown export");
+    assert!(back.contains("[^pandoc-note-1]"), "{back:?}");
+    assert!(back.contains("[^pandoc-note-1]: body with *emphasis* and `code`"), "{back:?}");
+    let reopened = import_markdown_bytes("round.md", &back).expect("reopen markdown");
+    assert_eq!(note_labels(&reopened), ["pandoc-note-1"]);
+}
+
 #[test]
 fn pandoc_note_body_survives_a_markdown_round_trip() {
     let document = PandocDocument {
