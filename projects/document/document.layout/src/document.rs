@@ -318,6 +318,19 @@ fn image_alt_dropped_diagnostic(source: &str, alt: &str) -> Diagnostic {
     }
 }
 
+/// The loss reported when an intra-document reference reaches a PDF page.
+fn reference_target_dropped_diagnostic(target: NodeId) -> Diagnostic {
+    Diagnostic {
+        code: "export.pdf.reference_target_dropped".to_string(),
+        severity: Severity::Warning,
+        message: format!(
+            "intra-document reference to node {} has no PDF destination map, so only the display text is painted",
+            target.0
+        ),
+        span: None,
+    }
+}
+
 /// The loss reported when an image title reaches a PDF page.
 ///
 /// A page image slot has no annotation or alternate-text channel, so the title
@@ -916,6 +929,13 @@ impl<'a> PageBuilder<'a> {
                         Some(display) => self.compose_inline(display, size, indent, flow, face, href, title, image_mode),
                         None => flow.atoms.extend(split_inline_atoms(&format!("[{key}]"), face, href, title)),
                     }
+                }
+                // Internal targets have no PDF destination map yet: the page
+                // keeps the display text, and the dropped target is named so
+                // the report does not read as clean coverage.
+                Inline::Reference { display, target } => {
+                    self.diagnostics.push(reference_target_dropped_diagnostic(*target));
+                    flow.pending.push(display, face, href, title, &mut flow.atoms);
                 }
                 // A footnote reference with no authored display is still a
                 // semantic marker, not the `[^label]` source literal. Paint the

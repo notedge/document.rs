@@ -349,6 +349,18 @@ fn pdf_export_names_image_alt_when_the_page_cannot_carry_it() {
 }
 
 #[test]
+fn pdf_export_names_reference_target_when_the_page_cannot_carry_it() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(9));
+    let target = graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "target".into() }] });
+    graph.push_block(Block::Paragraph { content: vec![Inline::Reference { display: "go".into(), target }] });
+
+    let _pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(codes.contains(&"export.pdf.reference_target_dropped"), "the report must name the dropped target: {codes:?}");
+}
+
+#[test]
 fn markdown_reference_link_convert_report_matches_loss_count() {
     let source = b"Read [guide][docs].\n\n[docs]: https://example.com/guide \"Docs\"\n".to_vec();
     let output = convert_bytes("markdown", "markdown", "reference.md", source, None).expect("convert");
