@@ -6,7 +6,7 @@ use document_formats::import::xlsx::{
     CellValue, DateKind, GraphOptions, RenderOptions, SheetVisibility, import_xlsx_bytes, render_workbook_html,
     workbook_to_graph,
 };
-use document_ir::{Block, Inline, SemanticStatus};
+use document_ir::{Block, DocumentGraph, Inline, SemanticStatus, TableCell};
 
 fn workbook() -> document_formats::import::xlsx::XlsxWorkbook {
     import_xlsx_bytes("in-memory-multi-sheet.xlsx", &sample_workbook()).expect("xlsx import")
@@ -171,7 +171,66 @@ fn column_clamped_pages_keep_page_numbers_contiguous() {
     assert!(!render.html.contains("1790.0px"), "the clamped column never exceeds the page budget");
 }
 
+#[test]
+fn rich_text_runs_name_the_cell_they_are_joined_in() {
+    let workbook = import_xlsx_bytes("rich-text.xlsx", &rich_text_workbook()).expect("rich text import");
+    let rich: Vec<_> = workbook.issues.iter().filter(|issue| issue.code == "import.xlsx.cell-rich-text").collect();
+    assert_eq!(rich.len(), 2, "one marker per rich cell: {:?}", workbook.issues);
+    let cells: Vec<&str> = rich.iter().filter_map(|issue| issue.cell.as_deref()).collect();
+    assert_eq!(cells, ["A2", "B2"], "the markers name the rich shared and inline cells: {rich:?}");
+
+    let graph = workbook_to_graph(&workbook, &GraphOptions::default());
+    let losses: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert_eq!(losses.iter().filter(|code| **code == "import.xlsx.cell-rich-text").count(), 2, "{losses:?}");
+}
+
+#[test]
+fn cell_line_breaks_are_inline_breaks_not_text_newlines() {
+    let workbook = import_xlsx_bytes("rich-text.xlsx", &rich_text_workbook()).expect("rich text import");
+    let graph = workbook_to_graph(&workbook, &GraphOptions::default());
+    let body = graph
+        .blocks
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Table { body, .. } => Some(body.as_slice()),
+            _ => None,
+        })
+        .expect("table block");
+    let content = first_paragraph_content(&graph, &body[2].cells[0]);
+    assert_eq!(content.len(), 3, "line one, a hard break, line two: {content:?}");
+    assert!(matches!(content[0], Inline::Text { ref text } if text == "LINE_ONE"), "{content:?}");
+    assert!(matches!(content[1], Inline::Break { .. }), "the authored line break is structural: {content:?}");
+    assert!(matches!(content[2], Inline::Text { ref text } if text == "LINE_TWO"), "{content:?}");
+    assert!(
+        !content.iter().any(|inline| matches!(inline, Inline::Text { text } if text.contains('\n'))),
+        "no newline stays hidden inside a text inline: {content:?}"
+    );
+}
+
+fn first_paragraph_content<'a>(graph: &'a DocumentGraph, cell: &TableCell) -> &'a [Inline] {
+    cell.children
+        .iter()
+        .filter_map(|id| graph.block(*id))
+        .find_map(|node| match &node.block {
+            Block::Paragraph { content } => Some(content.as_slice()),
+            _ => None,
+        })
+        .expect("cell paragraph")
+}
+
 // --- in-memory OOXML sample -------------------------------------------------
+
+fn rich_text_workbook() -> Vec<u8> {
+    let mut parts: Vec<(&str, Vec<u8>)> = Vec::new();
+    let mut text = |path: &'static str, body: &str| parts.push((path, body.as_bytes().to_vec()));
+    text("[Content_Types].xml", RICH_CONTENT_TYPES);
+    text("_rels/.rels", PACKAGE_RELS);
+    text("xl/workbook.xml", RICH_WORKBOOK);
+    text("xl/_rels/workbook.xml.rels", RICH_WORKBOOK_RELS);
+    text("xl/sharedStrings.xml", RICH_SHARED_STRINGS);
+    text("xl/worksheets/sheet1.xml", RICH_SHEET);
+    zip_stored(&parts)
+}
 
 fn sample_workbook() -> Vec<u8> {
     let mut parts: Vec<(&str, Vec<u8>)> = Vec::new();
@@ -278,6 +337,17 @@ const WIDE_WORKBOOK: &str = r##"<?xml version="1.0" encoding="UTF-8"?><workbook 
 const WIDE_WORKBOOK_RELS: &str = r##"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet1.xml" Id="rId1"/><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="/xl/styles.xml" Id="rId2"/></Relationships>"##;
 
 const WIDE_STYLES: &str = r##"<?xml version="1.0" encoding="UTF-8"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>"##;
+
+const RICH_CONTENT_TYPES: &str = r##"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/></Types>"##;
+
+const RICH_WORKBOOK: &str = r##"<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Rich" sheetId="1" state="visible" r:id="rId1"/></sheets></workbook>"##;
+
+const RICH_WORKBOOK_RELS: &str = r##"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="/xl/worksheets/sheet1.xml" Id="rId1"/><Relationship Id="rIdSharedStrings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="/xl/sharedStrings.xml"/></Relationships>"##;
+
+/// Shared strings: a plain string, a two-run rich string and a two-line string.
+const RICH_SHARED_STRINGS: &str = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="3" uniqueCount="3"><si><t>PLAIN_CELL</t></si><si><r><rPr><b/></rPr><t>RICH_BOLD_TEXT</t></r><r><t>RICH_PLAIN_TEXT</t></r></si><si><t xml:space="preserve">LINE_ONE&#10;LINE_TWO</t></si></sst>"##;
+
+const RICH_SHEET: &str = r##"<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:B3"/><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2" t="inlineStr"><is><r><rPr><b/></rPr><t>INLINE_RICH_TEXT</t></r></is></c></row><row r="3"><c r="A3" t="s"><v>2</v></c><c r="B3" t="inlineStr"><is><t>INLINE_PLAIN_TEXT</t></is></c></row></sheetData></worksheet>"##;
 
 const CONTENT_TYPES: &str = r##"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/comments/comment1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/></Types>"##;
 

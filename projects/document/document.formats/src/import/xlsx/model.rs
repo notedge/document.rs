@@ -574,6 +574,8 @@ pub mod codes {
     pub const SHARED_FORMULA: &str = "import.xlsx.shared-formula";
     /// A shared string index was outside the shared string table.
     pub const SHARED_STRING: &str = "import.xlsx.shared-string";
+    /// A cell carries rich text runs that are joined into one plain string.
+    pub const CELL_RICH_TEXT: &str = "import.xlsx.cell-rich-text";
     /// A cell style index was outside the style table.
     pub const STYLE_INDEX: &str = "import.xlsx.style-index";
     /// Array formulas are carried as their authored source only.

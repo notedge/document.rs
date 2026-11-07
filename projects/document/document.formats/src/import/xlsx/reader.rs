@@ -213,12 +213,18 @@ fn read_part_or_default(package: &OpcPackage, ledger: &mut BudgetTracker, part: 
     read_part_optional(package, ledger, part).unwrap_or_else(|| b"<styleSheet/>".to_vec())
 }
 
+/// One shared string table entry with its joined text and rich-run flag.
+struct SharedStringEntry {
+    text: String,
+    rich: bool,
+}
+
 fn read_shared_strings(
     package: &OpcPackage,
     ledger: &mut BudgetTracker,
     relationships: &HashMap<String, OpcRelationship>,
     owner: &str,
-) -> Vec<String> {
+) -> Vec<SharedStringEntry> {
     let part = find_part(relationships, "/sharedStrings", owner).unwrap_or_else(|| SHARED_STRINGS_PART.to_owned());
     let Some(xml) = read_part_optional(package, ledger, &part)
     else {
@@ -232,7 +238,15 @@ fn read_shared_strings(
     else {
         return Vec::new();
     };
-    children_named(root, "si").into_iter().map(|item| element_text_without(item, &["rPh"])).collect()
+    children_named(root, "si")
+        .into_iter()
+        .map(|item| SharedStringEntry { text: element_text_without(item, &["rPh"]), rich: has_rich_runs(item) })
+        .collect()
+}
+
+/// Whether a `si` or `is` element carries authored rich text runs.
+fn has_rich_runs(element: &XmlElement) -> bool {
+    !children_named(element, "r").is_empty()
 }
 
 fn book_workbook_prop<'a>(root: &'a XmlElement) -> Option<&'a XmlElement> {
@@ -263,7 +277,7 @@ fn parse_sheet(
     index: u32,
     visibility: SheetVisibility,
     styles: &WorkbookStyles,
-    shared_strings: &[String],
+    shared_strings: &[SharedStringEntry],
     date_system: DateSystem,
     issues: &mut Vec<XlsxIssue>,
 ) -> Result<XlsxSheet, FormatError> {
@@ -487,7 +501,7 @@ fn parse_sheet(
 
 fn parse_cell_value(
     cell: &XmlElement,
-    shared_strings: &[String],
+    shared_strings: &[SharedStringEntry],
     style: &CellStyle,
     date_system: DateSystem,
     sheet: &str,
@@ -496,9 +510,20 @@ fn parse_cell_value(
 ) -> CellValue {
     let kind = attribute_value(cell, "t").unwrap_or_else(|| "n".to_owned());
     if kind == "inlineStr" {
-        return child_named(cell, "is")
-            .map(|inline| textual_value(element_text(inline).trim(), style, date_system))
-            .unwrap_or(CellValue::Empty);
+        let Some(inline) = child_named(cell, "is")
+        else {
+            return CellValue::Empty;
+        };
+        if has_rich_runs(inline) {
+            issues.push(issue(
+                codes::CELL_RICH_TEXT,
+                format!("cell `{sheet}!{cell_reference}` carries rich text runs that are joined into plain text and keep only the cell style"),
+                IssueStatus::Partial,
+                Some(sheet.to_owned()),
+                Some(cell_reference.to_owned()),
+            ));
+        }
+        return textual_value(element_text(inline).trim(), style, date_system);
     }
     let Some(value) = child_named(cell, "v").map(element_text)
     else {
@@ -512,7 +537,18 @@ fn parse_cell_value(
                 return CellValue::Empty;
             };
             match shared_strings.get(index as usize) {
-                Some(text) => CellValue::SharedString { index, text: text.clone() },
+                Some(entry) => {
+                    if entry.rich {
+                        issues.push(issue(
+                            codes::CELL_RICH_TEXT,
+                            format!("cell `{sheet}!{cell_reference}` carries rich text runs that are joined into plain text and keep only the cell style"),
+                            IssueStatus::Partial,
+                            Some(sheet.to_owned()),
+                            Some(cell_reference.to_owned()),
+                        ));
+                    }
+                    CellValue::SharedString { index, text: entry.text.clone() }
+                }
                 None => {
                     issues.push(issue(
                         codes::SHARED_STRING,

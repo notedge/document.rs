@@ -8,13 +8,13 @@
 use std::{collections::BTreeSet, fs, path::Path};
 
 use document_ir::{
-    Asset, AssetKind, AttributePair, Attributes, Block, DocumentGraph, DocumentId, DocumentMetadata, IdAllocator, Inline,
-    LossMarker, SemanticStatus, TableCell, TableRow,
+    Asset, AssetKind, AttributePair, Attributes, Block, BreakKind, DocumentGraph, DocumentId, DocumentMetadata, IdAllocator,
+    Inline, LossMarker, SemanticStatus, TableCell, TableRow,
 };
 
 use super::{
     super::common::cell_children,
-    model::{CellRange, CellValue, IssueStatus, SheetVisibility, XlsxIssue, XlsxSheet, XlsxWorkbook, codes},
+    model::{CellRange, CellStyle, CellValue, IssueStatus, SheetVisibility, XlsxIssue, XlsxSheet, XlsxWorkbook, codes},
     reader::import_xlsx_bytes,
     value::display_cell,
 };
@@ -207,21 +207,17 @@ fn cell_inlines(sheet: &XlsxSheet, workbook: &XlsxWorkbook, row: u32, column: u3
     };
     let displayed = display_cell(&cell.value, &cell.style, &workbook.styles);
     let mut content: Vec<Inline> = Vec::new();
-    if !displayed.text.is_empty() {
-        let mut inline = Inline::Text { text: displayed.text };
-        if cell.style.bold {
-            inline = Inline::Styled { style: "strong".into(), children: vec![inline] };
+    let mut first_line = true;
+    for line in displayed.text.split('\n') {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.is_empty() {
+            continue;
         }
-        if cell.style.italic {
-            inline = Inline::Styled { style: "italic".into(), children: vec![inline] };
+        if !first_line {
+            content.push(Inline::Break { kind: BreakKind::Hard });
         }
-        if cell.style.underline {
-            inline = Inline::Styled { style: "underline".into(), children: vec![inline] };
-        }
-        if cell.style.strike {
-            inline = Inline::Styled { style: "strike".into(), children: vec![inline] };
-        }
-        content.push(inline);
+        content.push(styled_cell_text(line.to_owned(), &cell.style));
+        first_line = false;
     }
     let mut pairs = Vec::new();
     if let Some(formula) = &cell.formula {
@@ -243,6 +239,24 @@ fn cell_inlines(sheet: &XlsxSheet, workbook: &XlsxWorkbook, row: u32, column: u3
             vec![Inline::Attributed { attributes: Attributes { id: None, classes: Vec::new(), pairs }, children: content }];
     }
     content
+}
+
+/// Wraps one cell text line in the cell-level semantic styles.
+fn styled_cell_text(text: String, style: &CellStyle) -> Inline {
+    let mut inline = Inline::Text { text };
+    if style.bold {
+        inline = Inline::Styled { style: "strong".into(), children: vec![inline] };
+    }
+    if style.italic {
+        inline = Inline::Styled { style: "italic".into(), children: vec![inline] };
+    }
+    if style.underline {
+        inline = Inline::Styled { style: "underline".into(), children: vec![inline] };
+    }
+    if style.strike {
+        inline = Inline::Styled { style: "strike".into(), children: vec![inline] };
+    }
+    inline
 }
 
 fn anchor_label(column: u32, row: u32) -> String {
