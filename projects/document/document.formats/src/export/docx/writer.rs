@@ -225,11 +225,18 @@ fn write_block(
             write_math_expression(out, &formula.expression, None)?;
             out.push_str("</m:oMath></m:oMathPara></w:p>");
         }
-        Block::Opaque { payload_hint, .. } => {
+        Block::Opaque { kind, payload_hint, .. } => {
             // An opaque block owns no WordprocessingML structure, so its payload
             // travels as a plain paragraph. Dropping it would delete authored
             // content, while refusing the export would lose the whole document.
+            // The kind has no property slot, so it travels in the paragraph
+            // style and the importer reads it back.
             out.push_str("<w:p>");
+            if !kind.trim().is_empty() {
+                out.push_str("<w:pPr><w:pStyle w:val=\"Opaque:");
+                write_xml_text(out, kind)?;
+                out.push_str("\"/></w:pPr>");
+            }
             write_literal_text(out, payload_hint, "", rels.footnotes())?;
             out.push_str("</w:p>");
         }

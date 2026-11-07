@@ -970,6 +970,11 @@ fn paragraph_inlines(paragraph: &ParagraphState) -> Option<Vec<Inline>> {
 }
 
 fn push_paragraph(graph: &mut DocumentGraph, paragraph: &ParagraphState) {
+    if let Some(kind) = opaque_kind(&paragraph.style) {
+        let payload_hint = paragraph.inlines.iter().map(Inline::plain_text).collect::<String>();
+        graph.push_block(Block::Opaque { kind, payload_hint, status: SemanticStatus::Resolved });
+        return;
+    }
     if let Some(language) = code_language(&paragraph.style) {
         let content = paragraph.inlines.iter().map(Inline::plain_text).collect::<String>();
         graph.push_block(Block::Code { language: Some(language), content });
@@ -1008,6 +1013,13 @@ fn push_paragraph(graph: &mut DocumentGraph, paragraph: &ParagraphState) {
 fn diagram_language(style: &Option<String>) -> Option<String> {
     let language = style.as_deref()?.strip_prefix("Diagram:")?.trim();
     (!language.is_empty()).then(|| language.to_string())
+}
+
+/// Opaque paragraphs carry their kind in the paragraph style written by the
+/// DOCX exporter, so the block reopens with the same kind and payload.
+fn opaque_kind(style: &Option<String>) -> Option<String> {
+    let kind = style.as_deref()?.strip_prefix("Opaque:")?.trim();
+    (!kind.is_empty()).then(|| kind.to_string())
 }
 
 /// Code paragraphs carry their language in the paragraph style written by the

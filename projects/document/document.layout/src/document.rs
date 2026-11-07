@@ -320,6 +320,21 @@ fn citation_degraded_diagnostic(key: &str) -> Diagnostic {
     }
 }
 
+/// The loss reported when an opaque block kind reaches a PDF page.
+///
+/// The payload text stays visible but the page has no per-block metadata slot,
+/// so the report names the kind that could not travel.
+fn opaque_metadata_dropped_diagnostic(kind: &str) -> Diagnostic {
+    Diagnostic {
+        code: "export.pdf.opaque_metadata_dropped".to_string(),
+        severity: Severity::Warning,
+        message: format!(
+            "the PDF target has no slot for the opaque block kind `{kind}`, so the payload text is laid out without the kind"
+        ),
+        span: None,
+    }
+}
+
 /// The loss reported when a code block language reaches a PDF page.
 ///
 /// The page keeps the fence text but has no per-block metadata slot, so the
@@ -2120,16 +2135,15 @@ impl<'a> PageBuilder<'a> {
                         });
                     }
                 }
-                // Opaque payloads with no layout meaning are left out of the
-                // page, but never silently: the kind is reported as a
-                // diagnostic so the caller sees which construct was not laid
-                // out.
-                Block::Opaque { kind, .. } => self.diagnostics.push(Diagnostic {
-                    code: "vutex.layout.opaque_skipped".to_string(),
-                    severity: Severity::Warning,
-                    message: format!("opaque block `{kind}` has no layout meaning and was left out of the page"),
-                    span: None,
-                }),
+                // An opaque block's payload is authored text, so it stays
+                // visible. The page has no per-block metadata slot for the
+                // kind, which is reported instead of exported clean.
+                Block::Opaque { kind, payload_hint, .. } => {
+                    if !payload_hint.trim().is_empty() {
+                        self.emit_code(payload_hint, indent);
+                    }
+                    self.diagnostics.push(opaque_metadata_dropped_diagnostic(kind));
+                }
                 // The PDF page has no arbitrary HTML slot, but dropping the
                 // block would drop its authored text as well. The markup stays
                 // visible as literal source lines and the missing slot is

@@ -718,6 +718,40 @@ fn pdf_export_keeps_external_links_as_uri_actions() {
 }
 
 #[test]
+fn pdf_export_names_the_opaque_kind_and_keeps_the_payload_text() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(31));
+    graph.push_block(Block::Opaque {
+        kind: "zz-kind".into(),
+        payload_hint: "ZZ_OPAQUEHINT_ZZ".into(),
+        status: SemanticStatus::Resolved,
+    });
+
+    let pdf = write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let reopened = convert_bytes("pdf", "markdown", "opaque.pdf", pdf, None).expect("reopen PDF");
+    assert!(reopened.markdown.contains("ZZ_OPAQUEHINT_ZZ"), "the payload text stays on the page: {}", reopened.markdown);
+    let loss = graph
+        .coverage
+        .loss
+        .iter()
+        .find(|loss| loss.code == "export.pdf.opaque_metadata_dropped")
+        .unwrap_or_else(|| panic!("missing opaque kind loss: {:?}", graph.coverage.loss));
+    assert_eq!(loss.status, SemanticStatus::Partial);
+    assert!(loss.message.contains("zz-kind"), "the message must name the kind: {}", loss.message);
+}
+
+#[test]
+fn pdf_export_of_a_plain_paragraph_reports_no_opaque_loss() {
+    let faces = pdf_body_faces();
+    let mut graph = DocumentGraph::new(DocumentId(32));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "ZZ_PLAIN_ZZ".into() }] });
+
+    write_document_pdf(&mut graph, &faces).expect("write PDF");
+    let codes: Vec<&str> = graph.coverage.loss.iter().map(|loss| loss.code.as_str()).collect();
+    assert!(!codes.contains(&"export.pdf.opaque_metadata_dropped"), "{codes:?}");
+}
+
+#[test]
 fn pdf_export_names_the_code_language_it_cannot_carry() {
     let faces = pdf_body_faces();
     let mut graph = DocumentGraph::new(DocumentId(29));

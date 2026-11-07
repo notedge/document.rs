@@ -62,6 +62,7 @@ fn diagram_style_ids(graph: &DocumentGraph) -> Vec<String> {
             Block::Code { language: Some(language), .. } if !language.trim().is_empty() => {
                 Some(format!("Code:{}", language.trim()))
             }
+            Block::Opaque { kind, .. } if !kind.trim().is_empty() => Some(format!("Opaque:{}", kind.trim())),
             _ => None,
         };
         if let Some(id) = id {

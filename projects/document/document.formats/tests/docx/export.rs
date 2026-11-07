@@ -127,6 +127,38 @@ fn docx_export_round_trips_paragraphs_and_headings() {
 }
 
 #[test]
+fn docx_export_keeps_an_opaque_kind_and_payload_text_and_reads_them_back() {
+    let mut graph = DocumentGraph::new(DocumentId(74));
+    graph.push_block(Block::Opaque {
+        kind: "zz-kind".into(),
+        payload_hint: "ZZ_OPAQUEHINT_ZZ".into(),
+        status: SemanticStatus::Resolved,
+    });
+
+    let exported = export_docx_bytes(&graph).expect("export opaque block");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(xml.contains(r#"w:pStyle w:val="Opaque:zz-kind""#), "the kind travels in the paragraph style: {xml}");
+    assert!(xml.contains("ZZ_OPAQUEHINT_ZZ"), "the payload text stays visible: {xml}");
+
+    let reopened = import_docx_bytes("opaque.docx", &exported).expect("reopen DOCX opaque");
+    let opaque = reopened.blocks.iter().find_map(|node| match &node.block {
+        Block::Opaque { kind, payload_hint, .. } => Some((kind.clone(), payload_hint.clone())),
+        _ => None,
+    });
+    assert_eq!(opaque, Some(("zz-kind".into(), "ZZ_OPAQUEHINT_ZZ".into())), "{:?}", reopened.blocks);
+}
+
+#[test]
+fn docx_export_of_a_plain_paragraph_writes_no_opaque_style() {
+    let mut graph = DocumentGraph::new(DocumentId(75));
+    graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Plain body.".into() }] });
+
+    let exported = export_docx_bytes(&graph).expect("export paragraph");
+    let xml = String::from_utf8_lossy(&exported);
+    assert!(!xml.contains("Opaque:"), "a paragraph carries no opaque kind: {xml}");
+}
+
+#[test]
 fn docx_export_keeps_a_code_language_and_reads_it_back() {
     let mut graph = DocumentGraph::new(DocumentId(72));
     graph.push_block(Block::Code { language: Some("zzlang".into()), content: "let x = 1;".into() });
