@@ -63,6 +63,19 @@ pub fn write_document_pdf(graph: &mut DocumentGraph, body_set: &Arc<BodyFaceSet>
     let outcome =
         render_pdf_with_resources_and_diagnostics(&presentation, &PdfFontPolicy::Provided(Arc::clone(body_set)), &resources)
             .map_err(map_render_diagnostic)?;
+    // Render warnings that replace or skip a glyph have no error severity, so
+    // the request succeeds and only this report can say the glyph was lost.
+    // Every other render diagnostic is either fatal (returned above) or a
+    // paint note that changes no authored content.
+    for diagnostic in &outcome.diagnostics {
+        if matches!(diagnostic.code.as_str(), "vutex.render.pdf.font_unavailable" | "vutex.render.pdf.glyph_missing") {
+            graph.push_loss(LossMarker {
+                code: diagnostic.code.clone(),
+                message: diagnostic.message.clone(),
+                status: SemanticStatus::Partial,
+            });
+        }
+    }
     report_compose_diagnostics(&outcome.diagnostics);
     Ok(outcome.pdf)
 }
