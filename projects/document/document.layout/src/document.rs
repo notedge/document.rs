@@ -2174,6 +2174,13 @@ impl<'a> PageBuilder<'a> {
                         });
                     }
                 }
+                // Typst dynamic constructs are a deferral, not authored body
+                // text: their payload is the source of a construct this stage
+                // cannot lay out, so it must not be painted as code. The
+                // import stage already records each deferral as a loss marker.
+                // Skipping them here keeps the same predicate the HTML
+                // projection uses instead of leaking the body onto the page.
+                Block::Opaque { kind, .. } if kind.starts_with("typst.") => {}
                 // An opaque block's payload is authored text, so it stays
                 // visible. The page has no per-block metadata slot for the
                 // kind, which is reported instead of exported clean.
