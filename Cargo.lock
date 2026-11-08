@@ -35,7 +35,7 @@ dependencies = [
  "acorn-core",
  "acorn-source",
  "acorn-zip",
- "oak-xml",
+ "oak-xml 0.0.12 (git+https://github.com/yggdrasil-language/oaks.git?rev=541b204a3d6fe2806dea1f905736261bf1d0b4ae)",
 ]
 
 [[package]]
@@ -45,7 +45,7 @@ dependencies = [
  "acorn-core",
  "acorn-source",
  "acorn-zip",
- "oak-xml",
+ "oak-xml 0.0.12 (git+https://github.com/yggdrasil-language/oaks.git?rev=541b204a3d6fe2806dea1f905736261bf1d0b4ae)",
 ]
 
 [[package]]
@@ -365,7 +365,7 @@ dependencies = [
  "document-diagnostic",
  "document-formats",
  "document-ir",
- "oak-xml",
+ "oak-xml 0.0.12",
  "serde",
  "serde_json",
  "serial_test",
@@ -603,8 +603,12 @@ dependencies = [
  "document-renderer-raster",
  "document-renderer-svg",
  "document-style",
+ "document-template",
+ "document-template-hbs",
+ "document-template-jinja",
  "document-text",
  "document-types",
+ "serde_json",
 ]
 
 [[package]]
@@ -689,7 +693,7 @@ dependencies = [
  "oak-notedown",
  "oak-tex",
  "oak-typst",
- "oak-xml",
+ "oak-xml 0.0.12",
  "plotter-input-dot",
  "plotter-input-mermaid",
  "plotter-input-plantuml",
@@ -855,6 +859,30 @@ dependencies = [
 [[package]]
 name = "document-style"
 version = "0.1.0"
+
+[[package]]
+name = "document-template"
+version = "0.1.0"
+dependencies = [
+ "boost-diagnostic",
+ "serde_json",
+]
+
+[[package]]
+name = "document-template-hbs"
+version = "0.1.0"
+dependencies = [
+ "document-template",
+ "serde_json",
+]
+
+[[package]]
+name = "document-template-jinja"
+version = "0.1.0"
+dependencies = [
+ "document-template",
+ "serde_json",
+]
 
 [[package]]
 name = "document-text"
@@ -1569,6 +1597,17 @@ dependencies = [
 [[package]]
 name = "oak-core"
 version = "0.0.12"
+source = "git+https://github.com/yggdrasil-language/oaks.git?rev=541b204a3d6fe2806dea1f905736261bf1d0b4ae#541b204a3d6fe2806dea1f905736261bf1d0b4ae"
+dependencies = [
+ "serde",
+ "smallvec",
+ "triomphe",
+ "twox-hash",
+]
+
+[[package]]
+name = "oak-core"
+version = "0.0.12"
 source = "git+https://github.com/yggdrasil-language/oaks.git?rev=a579d35bae5016fc82a24c4fb5511121fee11a2b#a579d35bae5016fc82a24c4fb5511121fee11a2b"
 dependencies = [
  "smallvec",
@@ -1681,7 +1720,17 @@ name = "oak-xml"
 version = "0.0.12"
 dependencies = [
  "oak-core 0.0.12",
- "oak-xpath",
+ "oak-xpath 0.0.12",
+ "serde",
+]
+
+[[package]]
+name = "oak-xml"
+version = "0.0.12"
+source = "git+https://github.com/yggdrasil-language/oaks.git?rev=541b204a3d6fe2806dea1f905736261bf1d0b4ae#541b204a3d6fe2806dea1f905736261bf1d0b4ae"
+dependencies = [
+ "oak-core 0.0.12 (git+https://github.com/yggdrasil-language/oaks.git?rev=541b204a3d6fe2806dea1f905736261bf1d0b4ae)",
+ "oak-xpath 0.0.12 (git+https://github.com/yggdrasil-language/oaks.git?rev=541b204a3d6fe2806dea1f905736261bf1d0b4ae)",
  "serde",
 ]
 
@@ -1691,6 +1740,16 @@ version = "0.0.12"
 dependencies = [
  "boost-diagnostic",
  "oak-core 0.0.12",
+ "serde",
+]
+
+[[package]]
+name = "oak-xpath"
+version = "0.0.12"
+source = "git+https://github.com/yggdrasil-language/oaks.git?rev=541b204a3d6fe2806dea1f905736261bf1d0b4ae#541b204a3d6fe2806dea1f905736261bf1d0b4ae"
+dependencies = [
+ "boost-diagnostic",
+ "oak-core 0.0.12 (git+https://github.com/yggdrasil-language/oaks.git?rev=541b204a3d6fe2806dea1f905736261bf1d0b4ae)",
  "serde",
 ]
 

@@ -120,3 +120,21 @@ pub mod input {
         pub use document_input_formats::*;
     }
 }
+
+/// 模板引擎合同。
+#[cfg(feature = "template")]
+pub mod template {
+    pub use document_template::*;
+
+    /// Handlebars 语法子集。
+    #[cfg(feature = "template-hbs")]
+    pub mod hbs {
+        pub use document_template_hbs::*;
+    }
+
+    /// Jinja2 语法子集。
+    #[cfg(feature = "template-jinja")]
+    pub mod jinja {
+        pub use document_template_jinja::*;
+    }
+}

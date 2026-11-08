@@ -30,6 +30,9 @@ document-input-markdown = { workspace = true, optional = true }
 document-input-tex = { workspace = true, optional = true }
 document-input-typst = { workspace = true, optional = true }
 document-input-formats = { workspace = true, optional = true }
+document-template = { workspace = true, optional = true }
+document-template-hbs = { workspace = true, optional = true }
+document-template-jinja = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -53,6 +56,9 @@ input-markdown = ["dep:document-input-markdown"]
 input-tex = ["dep:document-input-tex"]
 input-typst = ["dep:document-input-typst"]
 input-formats = ["dep:document-input-formats"]
+template = ["dep:document-template"]
+template-hbs = ["template", "dep:document-template-hbs"]
+template-jinja = ["template", "dep:document-template-jinja"]
 # 格式语言 feature（转发到 document-formats）
 markdown = ["formats", "document-formats/markdown"]
 notedown = ["formats", "document-formats/notedown"]
@@ -63,6 +69,14 @@ epub = ["formats", "document-formats/epub"]
 html = ["formats", "document-formats/html"]
 tex = ["formats", "document-formats/tex"]
 typst = ["formats", "document-formats/typst"]
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[[test]]
+name = "template_boundary"
+path = "tests/template_boundary.rs"
+required-features = ["template-hbs", "html", "convert", "ir"]
 
 [package.metadata.docs.rs]
 all-features = true
