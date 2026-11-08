@@ -1,4 +1,4 @@
-use document_template::{MapTemplateLoader, TemplateError, TemplateId, TemplateLoader, TemplateRoot, codes};
+use document_template::{MapTemplateLoader, TemplateError, TemplateId, TemplateLoader, TemplateRoot, codes, normalize_path};
 
 fn loader() -> MapTemplateLoader {
     MapTemplateLoader::new()
@@ -81,4 +81,46 @@ fn source_lookup_uses_canonical_id() {
 
 fn error_code_direct(result: Result<&str, TemplateError>) -> String {
     result.map_or_else(|error| error.code().to_string(), |_| String::new())
+}
+
+fn parse_code(id: &str) -> String {
+    TemplateId::parse(id).map_or_else(|error| error.code().to_string(), |_| String::new())
+}
+
+#[test]
+fn scheme_alias_resolves_to_the_root_name() {
+    let loader =
+        MapTemplateLoader::new().with_root(TemplateRoot::new("view", 0).with_scheme("tpl").with_file("hello.hbs", "hello"));
+
+    let id = loader.resolve("tpl:hello", None, EXTENSIONS).expect("resolve");
+    assert_eq!(id.root(), "view");
+    assert_eq!(id.path(), "hello.hbs");
+    assert_eq!(id.to_string(), "view:hello.hbs");
+
+    assert_eq!(error_code(loader.resolve("view:hello", None, EXTENSIONS)), codes::UNKNOWN_SCHEME);
+}
+
+#[test]
+fn canonical_ids_parse_and_reject_non_canonical_forms() {
+    let id = TemplateId::parse("high:pages/home.hbs").expect("canonical id parses");
+    assert_eq!(id, TemplateId::new("high", "pages/home.hbs"));
+
+    for invalid in [
+        "high:/pages/home.hbs",
+        "high:pages/./home.hbs",
+        "high:pages/../home.hbs",
+        "high:",
+        "high",
+        " high:a.hbs",
+        "high:a\\b.hbs",
+    ] {
+        assert_eq!(parse_code(invalid), codes::INVALID_REFERENCE, "`{invalid}` must be rejected");
+    }
+}
+
+#[test]
+fn public_path_normalization_rejects_parent_segments() {
+    assert_eq!(normalize_path(" pages\\home.hbs ").as_deref(), Some("pages/home.hbs"));
+    assert_eq!(normalize_path("../a"), None);
+    assert_eq!(normalize_path(""), None);
 }

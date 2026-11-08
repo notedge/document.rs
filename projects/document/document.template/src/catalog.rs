@@ -18,6 +18,54 @@ impl TemplateId {
         Self { root: root.into(), path: path.into() }
     }
 
+    /// Parse a canonical `{root}:{posix relative path}` identifier.
+    ///
+    /// A form aliasing, padding or re-normalizing the stored shape is rejected
+    /// with `template.invalid-reference`, the same failure the loader uses for
+    /// malformed references. This only moves the existing judgment earlier and
+    /// does not add a new code.
+    pub fn parse(id: &str) -> Result<Self, TemplateError> {
+        let trimmed = id.trim();
+        if trimmed != id {
+            return Err(TemplateError::with_args(
+                codes::INVALID_REFERENCE,
+                format!("template id `{id}` has leading or trailing whitespace"),
+                vec![("ref", id.to_string())],
+            ));
+        }
+        let Some((root, path)) = split_scheme(trimmed)
+        else {
+            return Err(TemplateError::with_args(
+                codes::INVALID_REFERENCE,
+                format!("template id `{id}` has no `root:path` separator"),
+                vec![("ref", id.to_string())],
+            ));
+        };
+        if path.is_empty() {
+            return Err(TemplateError::with_args(
+                codes::INVALID_REFERENCE,
+                format!("template id `{id}` has an empty path"),
+                vec![("ref", id.to_string())],
+            ));
+        }
+        let Some(normalized) = normalize_path(path)
+        else {
+            return Err(TemplateError::with_args(
+                codes::INVALID_REFERENCE,
+                format!("template id `{id}` has a path that escapes its root"),
+                vec![("ref", id.to_string())],
+            ));
+        };
+        if normalized != path {
+            return Err(TemplateError::with_args(
+                codes::INVALID_REFERENCE,
+                format!("template id `{id}` is not in canonical `root:path` form"),
+                vec![("ref", id.to_string())],
+            ));
+        }
+        Ok(Self::new(root, normalized))
+    }
+
     /// Root name this id belongs to.
     #[must_use]
     pub fn root(&self) -> &str {
@@ -41,14 +89,26 @@ impl Display for TemplateId {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateRoot {
     name: String,
+    scheme: String,
     priority: u16,
     files: BTreeMap<String, String>,
 }
 
 impl TemplateRoot {
-    /// Create an empty root.
+    /// Create an empty root. Its scheme defaults to its name.
     pub fn new(name: impl Into<String>, priority: u16) -> Self {
-        Self { name: name.into(), priority, files: BTreeMap::new() }
+        let name = name.into();
+        Self { scheme: name.clone(), name, priority, files: BTreeMap::new() }
+    }
+
+    /// Set the scheme a `scheme:` reference matches.
+    ///
+    /// The canonical id keeps the root name, so aliasing a root never changes
+    /// the identity a loader returns.
+    #[must_use]
+    pub fn with_scheme(mut self, scheme: impl Into<String>) -> Self {
+        self.scheme = scheme.into();
+        self
     }
 
     /// Add one file. The path is normalized best-effort before insertion.
@@ -60,10 +120,16 @@ impl TemplateRoot {
         self
     }
 
-    /// Root name.
+    /// Root name, used as the canonical id prefix.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Scheme matched by `scheme:` references, defaulting to the name.
+    #[must_use]
+    pub fn scheme(&self) -> &str {
+        &self.scheme
     }
 
     /// Root priority; higher wins for bare references.
@@ -122,6 +188,10 @@ impl MapTemplateLoader {
         self.roots.iter().find(|root| root.name() == name)
     }
 
+    fn root_by_scheme(&self, scheme: &str) -> Option<&TemplateRoot> {
+        self.roots.iter().find(|root| root.scheme() == scheme)
+    }
+
     fn probe(&self, root: &TemplateRoot, path: &str, extensions: &[&str]) -> Option<TemplateId> {
         let key = normalize_path(path)?;
         let concrete = extensions.iter().any(|extension| !extension.is_empty() && key.ends_with(extension));
@@ -154,7 +224,7 @@ impl TemplateLoader for MapTemplateLoader {
                     vec![("ref", raw)],
                 ));
             }
-            let Some(root) = self.root(scheme)
+            let Some(root) = self.root_by_scheme(scheme)
             else {
                 return Err(TemplateError::with_args(
                     codes::UNKNOWN_SCHEME,
@@ -165,8 +235,8 @@ impl TemplateLoader for MapTemplateLoader {
             return self.probe(root, path, extensions).ok_or_else(|| {
                 TemplateError::with_args(
                     codes::NOT_FOUND,
-                    format!("no template in root `{scheme}` matched `{path}`"),
-                    vec![("ref", raw.clone()), ("searched", scheme.to_string())],
+                    format!("no template in root `{}` matched `{path}`", root.name()),
+                    vec![("ref", raw.clone()), ("scheme", scheme.to_string()), ("searched", root.name().to_string())],
                 )
             });
         }
@@ -259,7 +329,11 @@ fn split_scheme(reference: &str) -> Option<(&str, &str)> {
 }
 
 /// Normalize one path to `a/b/c` segments, rejecting `..`.
-fn normalize_path(path: &str) -> Option<String> {
+///
+/// The canonical id shape uses this same normalization, so hosts can split a
+/// `from` id into a root name and a normalized path without a second parser.
+#[must_use]
+pub fn normalize_path(path: &str) -> Option<String> {
     let normalized = path.trim().replace('\\', "/");
     let mut segments = Vec::new();
     for segment in normalized.split('/') {
