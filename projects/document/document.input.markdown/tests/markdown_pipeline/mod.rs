@@ -250,7 +250,11 @@ fn autolinks_and_raw_html_do_not_disappear_without_a_report() {
 
     let rendered = render_svg("virtual://raw-html.md", source, &Diagrams::new()).expect("render must succeed");
     assert!(rendered.svg.contains("https://example.com"), "the autolink must survive into svg: {}", rendered.svg);
-    assert!(!rendered.svg.contains("authored block"), "the semantic renderer does not lay out raw html");
+    // Raw HTML keeps its visible text and reports the loss, but its markup
+    // never reaches the page as literal tags.
+    assert!(rendered.svg.contains("authored block"), "raw html keeps its visible text: {}", rendered.svg);
+    assert!(!rendered.svg.contains("<div"), "raw html markup must not be painted: {}", rendered.svg);
+    assert!(!rendered.svg.contains("&lt;div"), "raw html markup must not be escaped onto the page: {}", rendered.svg);
 
     let has_link = imported.graph.blocks.iter().any(|node| match &node.block {
         Block::Paragraph { content } => content.iter().any(|inline| {
@@ -376,11 +380,15 @@ fn nested_quotes_reach_the_rendered_svg() {
 }
 
 #[test]
-fn html_blocks_are_reported_instead_of_reaching_the_rendered_svg() {
+fn html_blocks_are_reported_and_keep_only_their_visible_text() {
     let source = "<div>authored block</div>\n";
     let imported = import_source("virtual://constructs.md", source).expect("html blocks are a downgrade");
     let rendered = render_svg("virtual://constructs.md", source, &Diagrams::new()).expect("render must succeed");
-    assert!(!rendered.svg.contains("authored block"), "the semantic renderer must not invent html layout: {}", rendered.svg);
+    // The documented degradation keeps the visible text, drops tag structure
+    // and reports the loss, so the page carries inert text rather than markup.
+    assert!(rendered.svg.contains("authored block"), "html blocks keep their visible text: {}", rendered.svg);
+    assert!(!rendered.svg.contains("<div"), "html block markup must not be painted: {}", rendered.svg);
+    assert!(!rendered.svg.contains("&lt;div"), "html block markup must not be escaped onto the page: {}", rendered.svg);
 
     let loss = imported
         .diagnostics
