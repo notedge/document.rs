@@ -28,8 +28,15 @@ const FLOAT: &str = "= Title\n\n#float(caption: [Chart], rect())\n\nBody.\n";
 
 /// Rendered diagnostics merge the import stage with the layout stage, so
 /// assertions about construct coverage must ignore layout-stage warnings.
+///
+/// The layout stage reports its own degradations under `vutex.layout.*` and
+/// the page loss codes it derives under `export.pdf.*`, so both families are
+/// layout output rather than construct-level import findings.
 fn without_layout_stage(diagnostics: &[document_compose::Diagnostic]) -> Vec<&document_compose::Diagnostic> {
-    diagnostics.iter().filter(|diagnostic| !diagnostic.code.starts_with("vutex.layout.")).collect()
+    diagnostics
+        .iter()
+        .filter(|diagnostic| !diagnostic.code.starts_with("vutex.layout.") && !diagnostic.code.starts_with("export.pdf."))
+        .collect()
 }
 
 #[test]
@@ -132,6 +139,17 @@ fn documented_subset_lowers_without_loss() {
     assert_eq!(rendered.report.lowered.handled, 7);
     assert!(rendered.report.unsupported.is_empty());
     assert!(rendered.report.opaque.is_empty());
+    let layout_losses: Vec<&str> = rendered
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code.starts_with("export.pdf."))
+        .map(|diagnostic| diagnostic.code.as_str())
+        .collect();
+    assert_eq!(
+        layout_losses,
+        vec!["export.pdf.code_language_dropped"],
+        "the layout stage still reports the fence language loss it cannot paint"
+    );
     assert!(
         without_layout_stage(&rendered.diagnostics).is_empty(),
         "no construct-level diagnostics: {:?}",
