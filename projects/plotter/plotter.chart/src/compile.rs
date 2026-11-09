@@ -18,7 +18,7 @@ use crate::{
         Scale, Transfer, TransformedScale, inferred_domain, linear_ticks, log_ticks, nice_domain, train_band, train_linear,
         train_nominal, train_point,
     },
-    spec::{Channel, ChartSpec, Guide, Mark, ScaleSpec},
+    spec::{Channel, ChartSpec, Guide, Mark, PositionAdjust, ScaleSpec},
     statistic::{Observation, aggregate},
     transform::{ChannelTransform, ResolvedBin, ResolvedTransform},
 };
@@ -140,7 +140,7 @@ pub fn compile(spec: &ChartSpec, data: &DataSnapshot, options: &ChartOptions) ->
     let paints = PaintDefaults::new(spec);
     let mut marks = Vec::new();
     match spec.mark {
-        Mark::Bar => build_bars(&rows, &scales, paints, &mut marks)?,
+        Mark::Bar => build_bars(&rows, &scales, paints, spec.position, &mut marks)?,
         Mark::Point => build_points(&rows, &scales, options, paints, &mut marks),
         Mark::Line | Mark::Area => build_series(spec.mark, &rows, &scales, options, paints, &mut marks)?,
         Mark::Rule => build_rules(&rows, &scales, &plot, paints, &mut marks)?,
@@ -680,12 +680,60 @@ fn baseline_position(scale: &Scale) -> Option<f64> {
     }
 }
 
+/// Sub-slot layout for `PositionAdjust::Dodge`.
+///
+/// The sub-category order is the first-appearance order across the projected
+/// rows, so two runs over the same data place every bar in the same slot.
+/// A row whose dodge value is absent keeps the full band slot.
+struct DodgeLayout {
+    channel: Channel,
+    categories: Vec<String>,
+}
+
+impl DodgeLayout {
+    fn build(rows: &[Row], position: Option<PositionAdjust>) -> Option<Self> {
+        let Some(PositionAdjust::Dodge { channel }) = position
+        else {
+            return None;
+        };
+        let mut categories: Vec<String> = Vec::new();
+        for row in rows {
+            let Some(value) = row.get(channel)
+            else {
+                continue;
+            };
+            let label = value.label();
+            if !categories.iter().any(|seen| *seen == label) {
+                categories.push(label);
+            }
+        }
+        Some(Self { channel, categories })
+    }
+
+    /// The sub-slot `(offset, width)` inside a band slot of `band_width`.
+    /// `None` when the row carries no dodge value, which keeps the bar at the
+    /// full band width.
+    fn slot(&self, row: &Row, band_width: f64) -> Option<(f64, f64)> {
+        let label = self.channel_value(row)?;
+        let index = self.categories.iter().position(|seen| *seen == label)?;
+        let count = self.categories.len().max(1) as f64;
+        let width = band_width / count;
+        Some((width * index as f64, width))
+    }
+
+    fn channel_value(&self, row: &Row) -> Option<String> {
+        row.get(self.channel).map(Value::label)
+    }
+}
+
 fn build_bars(
     rows: &[Row],
     scales: &[ChartScale],
     paints: PaintDefaults,
+    position: Option<PositionAdjust>,
     marks: &mut Vec<MarkInstance>,
 ) -> Result<(), ChartError> {
+    let dodge = DodgeLayout::build(rows, position);
     let x = find_scale(scales, Channel::X);
     let y = find_scale(scales, Channel::Y);
     match (x, y) {
@@ -693,11 +741,13 @@ fn build_bars(
             let baseline = baseline_position(y_scale).expect("a numeric scale has a baseline");
             for (index, row) in rows.iter().enumerate() {
                 let category = row.get(Channel::X).map(Value::label).unwrap_or_default();
-                let start = band.position(&category).ok_or_else(|| {
+                let slot_start = band.position(&category).ok_or_else(|| {
                     ChartError::new(codes::INVALID_SPEC, format!("category `{category}` is missing from the band scale"))
                 })?;
+                let (offset, width) =
+                    dodge.as_ref().and_then(|dodge| dodge.slot(row, band.band_width)).unwrap_or((0.0, band.band_width));
                 let position = y_scale.map_number(numeric(row, Channel::Y)?).expect("the guard checked a numeric scale");
-                let rect = Rect::new(start, position.min(baseline), band.band_width, (position - baseline).abs());
+                let rect = Rect::new(slot_start + offset, position.min(baseline), width, (position - baseline).abs());
                 marks.push(MarkInstance {
                     id: format!("chart-bar-{index}"),
                     mark: Mark::Bar,
@@ -711,11 +761,13 @@ fn build_bars(
             let baseline = baseline_position(x_scale).expect("a numeric scale has a baseline");
             for (index, row) in rows.iter().enumerate() {
                 let category = row.get(Channel::Y).map(Value::label).unwrap_or_default();
-                let start = band.position(&category).ok_or_else(|| {
+                let slot_start = band.position(&category).ok_or_else(|| {
                     ChartError::new(codes::INVALID_SPEC, format!("category `{category}` is missing from the band scale"))
                 })?;
+                let (offset, width) =
+                    dodge.as_ref().and_then(|dodge| dodge.slot(row, band.band_width)).unwrap_or((0.0, band.band_width));
                 let position = x_scale.map_number(numeric(row, Channel::X)?).expect("the guard checked a numeric scale");
-                let rect = Rect::new(position.min(baseline), start, (position - baseline).abs(), band.band_width);
+                let rect = Rect::new(position.min(baseline), slot_start + offset, (position - baseline).abs(), width);
                 marks.push(MarkInstance {
                     id: format!("chart-bar-{index}"),
                     mark: Mark::Bar,

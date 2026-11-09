@@ -43,6 +43,10 @@ other's semantic model.
 - Statistics: `count`, `sum`, `mean`, `min`, and `max`. At most one aggregated channel is supported, and aggregation
   runs at compile time, never during rendering.
 - Guides: `x` and `y` axes. A guide list may be empty.
+- Position: `dodge` for the `bar` mark. `ChartSpec::with_position(PositionAdjust::Dodge { channel })` splits every band
+  slot into sub-slots ordered by the first appearance of the categories on that channel, so grouped bars for one band
+  category never overlap. Sub-slots are global: a group missing a category still reserves that slot, and axis ticks
+  stay at the band centers.
 
 ## Prohibited in a plan and a scene
 
@@ -85,7 +89,7 @@ Warnings travel with a built scene and never fail the compile: `davinci.chart.mi
 - Logarithmic, power, and time scales.
 - Polar, geographic, and map coordinates.
 - Legends, annotations, titles, and tooltips.
-- Stacking, dodging, and other positional adjustments.
+- Stacking and other positional adjustments beyond `dodge`.
 - Interaction state and animation.
 
 ## Acceptance

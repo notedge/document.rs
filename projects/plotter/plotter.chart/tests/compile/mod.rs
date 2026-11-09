@@ -1,6 +1,6 @@
 use plotter_chart::{
-    Aggregate, Channel, ChannelEncoding, ChartOptions, ChartSpec, FieldKind, FieldRef, Mark, MarkGeometry, Scale, ScaleSpec,
-    codes, compile,
+    Aggregate, Channel, ChannelEncoding, ChartOptions, ChartSpec, FieldKind, FieldRef, Mark, MarkGeometry, PositionAdjust,
+    Scale, ScaleSpec, codes, compile,
 };
 
 use crate::support::{approx, bar_data, bar_spec, column, has_code, numbers, snapshot, texts};
@@ -525,4 +525,144 @@ fn the_nice_option_rounds_the_domain_outward_to_the_tick_grid() {
     let y_axis = plan.axes.iter().find(|axis| axis.channel == Channel::Y).expect("y axis");
     assert_eq!(y_axis.ticks[0].label, "0", "the first tick lands on the nice lower bound");
     assert_eq!(y_axis.ticks[y_axis.ticks.len() - 1].label, "100", "the last tick lands on the nice upper bound");
+}
+
+fn grouped_data() -> plotter_chart::DataSnapshot {
+    snapshot(vec![
+        column("workload", FieldKind::Nominal, texts(&["scan", "scan", "point", "point"])),
+        column("engine", FieldKind::Nominal, texts(&["ours", "reference", "ours", "reference"])),
+        column("ms", FieldKind::Quantitative, numbers(&[10.0, 4.0, 2.0, 1.0])),
+    ])
+}
+
+fn grouped_spec(mark: Mark) -> ChartSpec {
+    ChartSpec::new(mark)
+        .with_field(FieldRef::new("workload", FieldKind::Nominal))
+        .with_field(FieldRef::new("engine", FieldKind::Nominal))
+        .with_field(FieldRef::new("ms", FieldKind::Quantitative))
+        .with_encoding(Channel::X, ChannelEncoding::field("workload", FieldKind::Nominal))
+        .with_encoding(Channel::Y, ChannelEncoding::field("ms", FieldKind::Quantitative))
+        .with_encoding(Channel::Color, ChannelEncoding::field("engine", FieldKind::Nominal))
+        .with_position(PositionAdjust::Dodge { channel: Channel::Color })
+}
+
+#[test]
+fn dodge_splits_band_slots_by_first_appearance_order() {
+    let plan = compile(&grouped_spec(Mark::Bar), &grouped_data(), &options()).expect("grouped bars compile");
+    let band = plan.scale(Channel::X).and_then(Scale::band).expect("x band scale");
+    let half = band.band_width / 2.0;
+
+    assert_eq!(plan.marks.len(), 4, "one bar per row");
+    let scan_start = band.position("scan").expect("scan slot");
+    let point_start = band.position("point").expect("point slot");
+    let rects = plan
+        .marks
+        .iter()
+        .map(|instance| match &instance.geometry {
+            MarkGeometry::Rect(rect) => *rect,
+            _ => panic!("a bar must compile to a rectangle"),
+        })
+        .collect::<Vec<_>>();
+
+    assert!(approx(rects[0].x, scan_start), "`ours` is the first-appearance sub-category and owns the slot head");
+    assert!(approx(rects[1].x, scan_start + half), "`reference` takes the second sub-slot");
+    assert!(approx(rects[2].x, point_start), "sub-slots restart at every band slot head");
+    assert!(approx(rects[3].x, point_start + half));
+    for rect in &rects {
+        assert!(approx(rect.width, half), "each sub-slot is one half of the band slot");
+    }
+    assert!(
+        rects[0].right() <= rects[1].x + 1e-9 && rects[2].right() <= rects[3].x + 1e-9,
+        "dodged bars in one slot never overlap"
+    );
+
+    let repeat = compile(&grouped_spec(Mark::Bar), &grouped_data(), &options()).expect("compile again");
+    assert_eq!(repeat.marks, plan.marks, "dodge placement is deterministic");
+}
+
+#[test]
+fn dodge_keeps_global_sub_slots_when_a_group_lacks_a_category() {
+    let data = snapshot(vec![
+        column("workload", FieldKind::Nominal, texts(&["scan", "scan", "mixed"])),
+        column("engine", FieldKind::Nominal, texts(&["ours", "reference", "reference"])),
+        column("ms", FieldKind::Quantitative, numbers(&[10.0, 4.0, 3.0])),
+    ]);
+    let plan = compile(&grouped_spec(Mark::Bar), &data, &options()).expect("grouped bars with a partial group compile");
+    let band = plan.scale(Channel::X).and_then(Scale::band).expect("x band scale");
+    let half = band.band_width / 2.0;
+
+    let mixed = match &plan.marks[2].geometry {
+        MarkGeometry::Rect(rect) => *rect,
+        _ => panic!("a bar must compile to a rectangle"),
+    };
+    assert!(
+        approx(mixed.x, band.position("mixed").expect("mixed slot") + half),
+        "the `reference` bar keeps the second global sub-slot"
+    );
+    assert!(approx(mixed.width, half), "a partial group still uses the global sub-slot width");
+}
+
+#[test]
+fn dodge_applies_to_horizontal_bands() {
+    let spec = ChartSpec::new(Mark::Bar)
+        .with_field(FieldRef::new("workload", FieldKind::Nominal))
+        .with_field(FieldRef::new("engine", FieldKind::Nominal))
+        .with_field(FieldRef::new("ms", FieldKind::Quantitative))
+        .with_encoding(Channel::X, ChannelEncoding::field("ms", FieldKind::Quantitative))
+        .with_encoding(Channel::Y, ChannelEncoding::field("workload", FieldKind::Nominal))
+        .with_encoding(Channel::Color, ChannelEncoding::field("engine", FieldKind::Nominal))
+        .with_position(PositionAdjust::Dodge { channel: Channel::Color });
+    let plan = compile(&spec, &grouped_data(), &options()).expect("horizontal grouped bars compile");
+    let band = plan.scale(Channel::Y).and_then(Scale::band).expect("y band scale");
+
+    let first = match &plan.marks[0].geometry {
+        MarkGeometry::Rect(rect) => *rect,
+        _ => panic!("a bar must compile to a rectangle"),
+    };
+    let second = match &plan.marks[1].geometry {
+        MarkGeometry::Rect(rect) => *rect,
+        _ => panic!("a bar must compile to a rectangle"),
+    };
+    assert!(approx(second.y - first.y, band.band_width / 2.0), "the second sub-slot is offset by half a band");
+    assert!(approx(second.height, first.height), "both sub-slots share the halved band width");
+}
+
+#[test]
+fn dodge_axis_ticks_stay_at_band_centers() {
+    let plan = compile(&grouped_spec(Mark::Bar), &grouped_data(), &options()).expect("grouped bars compile");
+    let band = plan.scale(Channel::X).and_then(Scale::band).expect("x band scale");
+    let x_axis = plan.axes.iter().find(|axis| axis.channel == Channel::X).expect("x axis");
+    for (tick, category) in x_axis.ticks.iter().zip(["scan", "point"]) {
+        assert!(approx(tick.position.x, band.center(category).expect("category")), "dodge never moves the band center");
+    }
+}
+
+#[test]
+fn dodge_is_refused_outside_the_bar_mark() {
+    let diagnostics = grouped_spec(Mark::Point).validate();
+    assert!(has_code(&diagnostics, codes::INVALID_SPEC), "a point mark cannot dodge");
+}
+
+#[test]
+fn dodge_needs_a_bound_non_positional_channel() {
+    let unbound = ChartSpec::new(Mark::Bar)
+        .with_field(FieldRef::new("category", FieldKind::Nominal))
+        .with_field(FieldRef::new("value", FieldKind::Quantitative))
+        .with_encoding(Channel::X, ChannelEncoding::field("category", FieldKind::Nominal))
+        .with_encoding(Channel::Y, ChannelEncoding::field("value", FieldKind::Quantitative))
+        .with_position(PositionAdjust::Dodge { channel: Channel::Color });
+    assert!(has_code(&unbound.validate(), codes::INVALID_SPEC), "dodge on an unbound channel is refused");
+
+    let positional = grouped_spec(Mark::Bar).to_owned().with_position(PositionAdjust::Dodge { channel: Channel::X });
+    assert!(has_code(&positional.validate(), codes::INVALID_SPEC), "dodge by a positional channel is refused");
+
+    let quantitative = ChartSpec::new(Mark::Bar)
+        .with_field(FieldRef::new("category", FieldKind::Nominal))
+        .with_field(FieldRef::new("engine", FieldKind::Quantitative))
+        .with_field(FieldRef::new("ms", FieldKind::Quantitative))
+        .with_encoding(Channel::X, ChannelEncoding::field("category", FieldKind::Nominal))
+        .with_encoding(Channel::Y, ChannelEncoding::field("ms", FieldKind::Quantitative))
+        .with_encoding(Channel::Color, ChannelEncoding::field("engine", FieldKind::Quantitative))
+        .with_position(PositionAdjust::Dodge { channel: Channel::Color });
+    assert!(has_code(&quantitative.validate(), codes::INVALID_SPEC), "dodge by a quantitative channel is refused");
 }

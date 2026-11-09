@@ -50,7 +50,8 @@ pub use plan::{AxisPlan, AxisTick, ChartCompilePlan, ChartScale, MarkGeometry, M
 pub use render::render;
 pub use scale::{BandScale, LinearScale, NominalScale, PointScale, Scale, ScaleKind, Transfer, TransformedScale};
 pub use spec::{
-    Aggregate, Channel, ChannelEncoding, ChartSpec, Coordinate, Encoding, FieldRef, Guide, Mark, ScaleSpec, Scales,
+    Aggregate, Channel, ChannelEncoding, ChartSpec, Coordinate, Encoding, FieldRef, Guide, Mark, PositionAdjust, ScaleSpec,
+    Scales,
 };
 pub use transform::{BinSpec, ChannelTransform, TimeUnit, Transforms};
 

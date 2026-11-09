@@ -371,6 +371,19 @@ impl Guide {
     }
 }
 
+/// A positional adjustment applied inside band slots.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PositionAdjust {
+    /// Split every band slot into sub-slots ordered by the first appearance
+    /// of the categories on the named channel, and draw each bar inside its
+    /// own sub-slot. Grouped (dodged) bars for one band category never
+    /// overlap.
+    Dodge {
+        /// The channel that supplies the sub-categories, normally `color`.
+        channel: Channel,
+    },
+}
+
 /// A complete, source-independent chart description.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChartSpec {
@@ -400,6 +413,11 @@ pub struct ChartSpec {
     /// Authored chart title. It is drawn as a themed text node above the plot
     /// and reserves vertical space, or stays absent when the author omits it.
     pub title: Option<String>,
+    /// Positional adjustment applied inside band slots. `None` keeps the
+    /// default single-slot geometry. Only the `bar` mark accepts an
+    /// adjustment; every other mark pairing is refused by
+    /// [`ChartSpec::validate`].
+    pub position: Option<PositionAdjust>,
 }
 
 impl ChartSpec {
@@ -417,12 +435,19 @@ impl ChartSpec {
             mark_color: None,
             mark_opacity: None,
             title: None,
+            position: None,
         }
     }
 
     /// Set the constant mark paint used when no `color` channel is bound.
     pub fn with_mark_color(mut self, color: Color) -> Self {
         self.mark_color = Some(color);
+        self
+    }
+
+    /// Declare the positional adjustment applied inside band slots.
+    pub fn with_position(mut self, position: PositionAdjust) -> Self {
+        self.position = Some(position);
         self
     }
 
@@ -614,6 +639,51 @@ impl ChartSpec {
             if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity) {
                 diagnostics
                     .push(chart_error(codes::INVALID_SPEC, "chart mark opacity must be a finite number within 0.0..=1.0"));
+            }
+        }
+
+        if let Some(PositionAdjust::Dodge { channel }) = self.position {
+            if self.mark != Mark::Bar {
+                diagnostics.push(chart_error(
+                    codes::INVALID_SPEC,
+                    format!("`dodge` is only supported by the `bar` mark, not `{}`", self.mark.as_str()),
+                ));
+            }
+            if channel == Channel::X || channel == Channel::Y {
+                diagnostics
+                    .push(chart_error(codes::INVALID_SPEC, "`dodge` needs a non-positional channel for its sub-categories"));
+            }
+            else {
+                match self.encoding.channel(channel) {
+                    None => diagnostics.push(chart_error(
+                        codes::INVALID_SPEC,
+                        format!("`dodge` needs the `{}` channel to be bound, but it is empty", channel.as_str()),
+                    )),
+                    Some(encoding) => {
+                        if let Some(field) = self.field(&encoding.field.name)
+                            && field.kind.is_quantitative()
+                        {
+                            diagnostics.push(chart_error(
+                                codes::INVALID_SPEC,
+                                format!(
+                                    "`dodge` sub-categories on the `{}` channel need a categorical field, but `{}` is {}",
+                                    channel.as_str(),
+                                    field.name,
+                                    field.kind.as_str()
+                                ),
+                            ));
+                        }
+                        if encoding.aggregate.is_some() {
+                            diagnostics.push(chart_error(
+                                codes::INVALID_SPEC,
+                                format!(
+                                    "`dodge` cannot share the `{}` channel with an aggregate: sub-categories are grouping keys",
+                                    channel.as_str()
+                                ),
+                            ));
+                        }
+                    }
+                }
             }
         }
 
