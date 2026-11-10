@@ -6,14 +6,14 @@
 
 use std::{
     cell::RefCell,
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
 };
 
 use document_compose::{
     Diagnostic, Severity, SourceSpan,
     math::{FontStyle, FormulaLayoutResult, GlyphKey, MathError, MathResult},
 };
-use document_fonts::{BodyMetrics, key_for_run};
+use document_fonts::{BodyFamily, BodyMetrics, key_for_run};
 use document_formats::html_text;
 use document_ir::{AssetId, Block, DocumentGraph, Inline, ListItem, MathFormula, NodeId, RelationEndpoint, TableRow};
 use document_text::math::{FontMetricsSystem, builtin_font_metrics};
@@ -88,23 +88,29 @@ const DISPLAY_SKIP_SHRINK_EM: f64 = 0.5;
 /// Family and face style shared by consecutive inline text atoms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TextFace {
-    /// Font family name carried into the text run.
-    family: &'static str,
+    /// Body family the run measures from and carries into the text run.
+    family: BodyFamily,
     /// Face style carried into the text run.
     style: FontStyle,
 }
 
-/// Body text face used by every unstyled run.
-const BODY_FACE: TextFace = TextFace { family: SERIF, style: FontStyle::Normal };
+/// Body text face used by every unstyled run when no hint declares a family.
+const BODY_FACE: TextFace = TextFace { family: BodyFamily::Serif, style: FontStyle::Normal };
 /// Face used by inline code spans.
-const CODE_FACE: TextFace = TextFace { family: MONOSPACE, style: FontStyle::Normal };
+const CODE_FACE: TextFace = TextFace { family: BodyFamily::Mono, style: FontStyle::Normal };
 
-/// Measuring face for a run emitted with an explicit family name.
+/// Family name a run carries so renderers resolve the same face layout measured.
 ///
-/// Only the two families layout emits reach this helper, so anything that is
-/// not monospace measures as body text.
-fn face_for_family(family: &str) -> TextFace {
-    if family == MONOSPACE { CODE_FACE } else { BODY_FACE }
+/// The two built-in families keep their CSS-style aliases, and a
+/// [`Named`](BodyFamily::Named) family carries its registered name itself, so
+/// the name in `DisplayTextRun.font_family` is the exact key the host used to
+/// hand the face bytes over.
+fn family_label(family: BodyFamily) -> &'static str {
+    match family {
+        BodyFamily::Serif => SERIF,
+        BodyFamily::Mono => MONOSPACE,
+        BodyFamily::Named(name) => name,
+    }
 }
 
 /// Width source for body text.
@@ -121,19 +127,35 @@ struct TextMeasure<'a> {
     faces: &'a BodyMetrics,
     /// Characters no face covered, so the gap is reported once per pass.
     missing: RefCell<BTreeSet<char>>,
+    /// Characters a named family did not cover and the prose fallback served,
+    /// keyed by registered name, so the gap is reported once per family.
+    named_fallback: RefCell<BTreeMap<&'static str, BTreeSet<char>>>,
 }
 
 impl<'a> TextMeasure<'a> {
     fn new(faces: &'a BodyMetrics) -> Self {
-        Self { heuristic: builtin_font_metrics(), faces, missing: RefCell::new(BTreeSet::new()) }
+        Self {
+            heuristic: builtin_font_metrics(),
+            faces,
+            missing: RefCell::new(BTreeSet::new()),
+            named_fallback: RefCell::new(BTreeMap::new()),
+        }
     }
 
     /// Advance width of one character in em units under `face`.
     ///
     /// The face that serves the run wins; the character class heuristic only
-    /// fills in for characters and faces the metrics do not cover.
+    /// fills in for characters and faces the metrics do not cover. A named
+    /// family that had to fall back to the prose faces records the gap, because
+    /// the run then measures from a face the template did not declare.
     fn advance_em(&self, ch: char, face: TextFace) -> f64 {
-        if let Some(advance) = self.faces.advance_em(key_for_run(face.family, face.style), ch) {
+        let key = key_for_run(face.family, face.style);
+        if let Some((advance, served)) = self.faces.advance_em_family(key, ch) {
+            if let BodyFamily::Named(name) = face.family
+                && served != face.family
+            {
+                self.named_fallback.borrow_mut().entry(name).or_default().insert(ch);
+            }
             return advance;
         }
         self.missing.borrow_mut().insert(ch);
@@ -207,22 +229,21 @@ impl<'a> TextMeasure<'a> {
                 span: None,
             });
         }
+        let fallbacks = self.named_fallback.borrow();
+        for (name, chars) in fallbacks.iter() {
+            let codepoints: Vec<String> = chars.iter().map(|ch| format!("U+{:04X}", *ch as u32)).collect();
+            diagnostics.push(Diagnostic {
+                code: "vutex.layout.metrics.glyph_missing".to_string(),
+                severity: Severity::Warning,
+                message: format!(
+                    "named body family `{name}` covers no glyph for {} character(s) ({}), so the prose fallback measured and painted them",
+                    chars.len(),
+                    codepoints.join(", ")
+                ),
+                span: None,
+            });
+        }
         diagnostics
-    }
-}
-
-/// Map an inline style name onto the shared text face.
-///
-/// Only the emphasis names the document model recognises carry a visible
-/// face; any other style string is laid out as body text instead of being
-/// guessed at.
-fn face_for_style(style: &str) -> TextFace {
-    match style.to_ascii_lowercase().as_str() {
-        "bold" | "strong" => TextFace { family: SERIF, style: FontStyle::Bold },
-        "italic" | "em" => TextFace { family: SERIF, style: FontStyle::Italic },
-        "mono" | "code" => TextFace { family: MONOSPACE, style: FontStyle::Monospace },
-        "strike" => TextFace { family: SERIF, style: FontStyle::Strike },
-        _ => BODY_FACE,
     }
 }
 
@@ -528,12 +549,33 @@ pub fn layout_with_diagnostics(
 ///
 /// Hosts that paint their own faces pass the metrics of exactly those faces, so
 /// the reserved width and the painted width come from the same `hmtx` tables.
+///
+/// A hint that declares a [`Named`](BodyFamily::Named) body family the supplied
+/// faces do not register is refused before any page is laid out: the pass
+/// returns no pages and one error diagnostic naming the family, because
+/// measuring from a different face than the renderers will paint is the drift
+/// this pass must never allow.
 pub fn layout_with_metrics(
     graph: &DocumentGraph,
     hint: &LayoutHint,
     diagrams: &Diagrams,
     metrics: &BodyMetrics,
 ) -> (LayoutPlan, Vec<Diagnostic>) {
+    if let Some(BodyFamily::Named(name)) = hint.text_family
+        && metrics.key_for_name(name, FontStyle::Normal).is_none()
+    {
+        return (
+            LayoutPlan { pages: Vec::new() },
+            vec![Diagnostic {
+                code: "vutex.layout.text_family_unregistered".to_string(),
+                severity: Severity::Error,
+                message: format!(
+                    "text font family `{name}` is not registered by the supplied body faces, so no page was laid out"
+                ),
+                span: None,
+            }],
+        );
+    }
     let mut builder = PageBuilder::new(*hint, diagrams, metrics, graph);
     builder.render_blocks(graph, &root_ids(graph), 0.0);
     builder.emit_page_chrome(graph);
@@ -682,8 +724,8 @@ struct PendingText {
 }
 
 impl PendingText {
-    fn body() -> Self {
-        Self { text: String::new(), face: BODY_FACE, href: None, anchor: None, title: None, numeric: false }
+    fn with_face(face: TextFace) -> Self {
+        Self { text: String::new(), face, href: None, anchor: None, title: None, numeric: false }
     }
 
     fn is_empty(&self) -> bool {
@@ -847,6 +889,9 @@ fn display_skips(size: f64, line: f64, height: f64, depth: f64) -> (DisplaySkip,
 /// Page-filling state for one layout pass.
 struct PageBuilder<'a> {
     hint: LayoutHint,
+    /// Unstyled body face derived from `hint.text_family`, so every
+    /// body-derived run measures from and carries the declared family.
+    body_face: TextFace,
     text: TextMeasure<'a>,
     pages: Vec<LayoutPage>,
     /// Scenes registered by the host for `diagram` and `chart` blocks.
@@ -881,6 +926,7 @@ impl<'a> PageBuilder<'a> {
             .collect();
         Self {
             hint,
+            body_face: TextFace { family: hint.text_family.unwrap_or(BODY_FACE.family), style: BODY_FACE.style },
             text: TextMeasure::new(faces),
             pages: vec![blank_page(&hint)],
             diagrams,
@@ -891,6 +937,28 @@ impl<'a> PageBuilder<'a> {
             anchor_counts: HashMap::new(),
             internal_targets: collect_node_targets(graph),
             diagnostics: Vec::new(),
+        }
+    }
+
+    /// The family body-derived text measures from and carries into its runs.
+    fn body_family(&self) -> BodyFamily {
+        self.body_face.family
+    }
+
+    /// Map an inline style name onto the shared text face.
+    ///
+    /// Only the emphasis names the document model recognises carry a visible
+    /// face; any other style string is laid out as body text instead of being
+    /// guessed at. Emphasis keeps the declared body family, so a bold or
+    /// italic span inside a named-family paragraph stays in that family.
+    fn face_for_style(&self, style: &str) -> TextFace {
+        let body = self.body_family();
+        match style.to_ascii_lowercase().as_str() {
+            "bold" | "strong" => TextFace { family: body, style: FontStyle::Bold },
+            "italic" | "em" => TextFace { family: body, style: FontStyle::Italic },
+            "mono" | "code" => TextFace { family: BodyFamily::Mono, style: FontStyle::Monospace },
+            "strike" => TextFace { family: body, style: FontStyle::Strike },
+            _ => self.body_face,
         }
     }
 
@@ -947,30 +1015,30 @@ impl<'a> PageBuilder<'a> {
     }
 
     fn wrap(&self, text: &str, size: f64, indent: f64) -> Vec<String> {
-        wrap_text(&self.text, text, size, self.content_width(indent))
+        wrap_text(&self.text, text, size, self.content_width(indent), self.body_face)
     }
 
     /// Paint one line at the cursor and advance past its line box.
-    fn emit_line(&mut self, text: String, size: f64, family: &str, indent: f64) {
+    fn emit_line(&mut self, text: String, size: f64, face: TextFace, indent: f64) {
         let line_box = self.line_box(size);
         self.ensure_space(line_box);
-        self.emit_baseline(text, size, family, indent);
+        self.emit_baseline(text, size, face, indent);
         self.cursor += line_box;
     }
 
     /// Paint one line at the cursor without advancing, so a list marker can
     /// share the baseline of the first content line.
-    fn emit_baseline(&mut self, text: String, size: f64, family: &str, indent: f64) {
+    fn emit_baseline(&mut self, text: String, size: f64, face: TextFace, indent: f64) {
         let x = self.left(indent);
         let y = self.cursor + ASCENT * size;
-        let width = self.text.measure(&text, size, face_for_family(family));
+        let width = self.text.measure(&text, size, face);
         self.push(LayoutItem::TextRun(TextRun {
             x,
             y,
             size,
             width,
-            font_family: family.to_string(),
-            style: FontStyle::Normal,
+            font_family: family_label(face.family).to_string(),
+            style: face.style,
             text,
             href: None,
             anchor: None,
@@ -981,12 +1049,12 @@ impl<'a> PageBuilder<'a> {
         }));
     }
 
-    fn emit_wrapped(&mut self, text: &str, size: f64, family: &str, indent: f64) {
+    fn emit_wrapped(&mut self, text: &str, size: f64, face: TextFace, indent: f64) {
         for line in self.wrap(text, size, indent) {
             if line.is_empty() {
                 continue;
             }
-            self.emit_line(line, size, family, indent);
+            self.emit_line(line, size, face, indent);
         }
     }
 
@@ -1020,7 +1088,8 @@ impl<'a> PageBuilder<'a> {
             self.push(LayoutItem::Anchor { name: node_anchor(node), y });
         }
         self.section_starts.push((self.pages.len().saturating_sub(1), index));
-        let face = if tokens.heading_bold { TextFace { family: SERIF, style: FontStyle::Bold } } else { BODY_FACE };
+        let face =
+            if tokens.heading_bold { TextFace { family: self.body_family(), style: FontStyle::Bold } } else { self.body_face };
         let atoms = self.compose_atoms(title, size, indent, face, ImageMode::AltText);
         self.emit_inline_lines_aligned(atoms, size, indent, tokens.heading_align);
         if level == 1 && tokens.heading_rule > 0.0 {
@@ -1054,7 +1123,7 @@ impl<'a> PageBuilder<'a> {
     fn emit_paragraph(&mut self, content: &[Inline], indent: f64) {
         let tokens = self.hint.style;
         let size = self.body_size();
-        let atoms = self.compose_atoms(content, size, indent, BODY_FACE, ImageMode::Placeholder);
+        let atoms = self.compose_atoms(content, size, indent, self.body_face, ImageMode::Placeholder);
         let first_indent = tokens.paragraph_indent.min(self.content_width(indent) * 0.5);
         let lines = break_inline_atoms(&self.text, atoms, size, self.content_width(indent), first_indent);
         for (index, line) in lines.iter().enumerate() {
@@ -1158,7 +1227,17 @@ impl<'a> PageBuilder<'a> {
                     if !is_known_inline_style(style) {
                         self.diagnostics.push(inline_style_dropped_diagnostic(style));
                     }
-                    self.compose_inline(children, size, indent, flow, face_for_style(style), href, anchor, title, image_mode);
+                    self.compose_inline(
+                        children,
+                        size,
+                        indent,
+                        flow,
+                        self.face_for_style(style),
+                        href,
+                        anchor,
+                        title,
+                        image_mode,
+                    );
                 }
                 Inline::InlineCode { text } => flow.pending.push(text, CODE_FACE, href, anchor, title, &mut flow.atoms),
                 // Attributes carry no printable face, but their wrapped content
@@ -1322,7 +1401,7 @@ impl<'a> PageBuilder<'a> {
         numeric: bool,
     ) -> f64 {
         let mut x = x;
-        let mut run = PendingText::body();
+        let mut run = PendingText::with_face(self.body_face);
         run.numeric = numeric;
         let mut run_x = x;
         for atom in line {
@@ -1390,7 +1469,7 @@ impl<'a> PageBuilder<'a> {
             y: baseline,
             size,
             width,
-            font_family: run.face.family.to_string(),
+            font_family: family_label(run.face.family).to_string(),
             style: run.face.style,
             text: std::mem::take(&mut run.text),
             href: run.href.clone(),
@@ -1442,7 +1521,7 @@ impl<'a> PageBuilder<'a> {
         }
         self.ensure_space(size * 1.4);
         let text = format!("{} {}", superscript_label(label), body);
-        self.emit_wrapped(&text, size, SERIF, indent);
+        self.emit_wrapped(&text, size, self.body_face, indent);
     }
 
     /// Reserve a box for one authored image that renderers resolve.
@@ -1536,9 +1615,10 @@ impl<'a> PageBuilder<'a> {
             // drawn as a stroked rectangle plus a tick, because painting the
             // checked state as text would hide it inside a character that
             // downstream extraction cannot tell from body text.
-            let marker_width = if item.is_task { TASK_BOX_SIZE_EM * size } else { self.text.measure(&marker, size, BODY_FACE) };
+            let marker_width =
+                if item.is_task { TASK_BOX_SIZE_EM * size } else { self.text.measure(&marker, size, self.body_face) };
             let content_indent = indent + tokens.list_indent.max(marker_width + tokens.list_marker_gap);
-            let atoms = self.compose_atoms(&item.content, size, content_indent, BODY_FACE, ImageMode::AltText);
+            let atoms = self.compose_atoms(&item.content, size, content_indent, self.body_face, ImageMode::AltText);
             self.pad(tokens.list_gap_before);
             self.ensure_space(line_box * 2.0);
             // The marker keeps the baseline of the first content line.
@@ -1546,7 +1626,7 @@ impl<'a> PageBuilder<'a> {
                 self.emit_task_box(indent, size, item.is_checked.unwrap_or(false));
             }
             else {
-                self.emit_baseline(marker, size, SERIF, indent);
+                self.emit_baseline(marker, size, self.body_face, indent);
             }
             self.emit_inline_lines(atoms, size, content_indent);
             self.render_blocks(graph, &item.children, content_indent);
@@ -1700,7 +1780,7 @@ impl<'a> PageBuilder<'a> {
         let column_width = width / columns as f64;
         if let Some(caption) = caption {
             self.pad(size * 0.3);
-            self.emit_wrapped(caption, size * 0.9, SERIF, indent);
+            self.emit_wrapped(caption, size * 0.9, self.body_face, indent);
         }
         self.pad(size * 0.4);
         let mut flattened_kinds = BTreeSet::new();
@@ -1736,8 +1816,12 @@ impl<'a> PageBuilder<'a> {
 
         let mut cell_rows: Vec<Vec<CellLines>> = Vec::with_capacity(rows.len());
         for &(row, is_header) in rows.iter() {
-            let header_face =
-                if is_header && tokens.heading_bold { TextFace { family: SERIF, style: FontStyle::Bold } } else { BODY_FACE };
+            let header_face = if is_header && tokens.heading_bold {
+                TextFace { family: self.body_family(), style: FontStyle::Bold }
+            }
+            else {
+                self.body_face
+            };
             let cells: Vec<CellLines> = row
                 .cells
                 .iter()
@@ -1961,7 +2045,7 @@ impl<'a> PageBuilder<'a> {
     fn emit_math_text_fallback(&mut self, content: &str, indent: f64) {
         let size = self.body_size();
         self.pad(size * 0.4);
-        self.emit_wrapped(content, size, SERIF, indent + 12.0);
+        self.emit_wrapped(content, size, self.body_face, indent + 12.0);
         self.pad(size * 0.5);
     }
 
@@ -2023,7 +2107,8 @@ impl<'a> PageBuilder<'a> {
             };
             let folio = override_.and_then(|entry| entry.folio).unwrap_or(base_folio);
             if let Some(title) = header.as_deref() {
-                let width = self.text.measure(title, tokens.header_size, BODY_FACE);
+                let width = self.text.measure(title, tokens.header_size, self.body_face);
+                let family = family_label(self.body_family()).to_string();
                 let x = match tokens.header_align {
                     Align::Left => left,
                     Align::Center => ((left + right - width) / 2.0).max(left),
@@ -2034,7 +2119,7 @@ impl<'a> PageBuilder<'a> {
                     y: tokens.chrome_top,
                     size: tokens.header_size,
                     width,
-                    font_family: SERIF.to_string(),
+                    font_family: family,
                     style: FontStyle::Normal,
                     text: title.to_string(),
                     href: None,
@@ -2047,14 +2132,15 @@ impl<'a> PageBuilder<'a> {
             }
             if folio {
                 let folio = format!("{}", index + 1);
-                let width = self.text.measure(&folio, tokens.folio_size, BODY_FACE);
+                let width = self.text.measure(&folio, tokens.folio_size, self.body_face);
+                let family = family_label(self.body_family()).to_string();
                 let x = ((left + right - width) / 2.0).max(left);
                 self.pages[index].items.push(LayoutItem::TextRun(TextRun {
                     x,
                     y: page_height - tokens.chrome_bottom,
                     size: tokens.folio_size,
                     width,
-                    font_family: SERIF.to_string(),
+                    font_family: family,
                     style: FontStyle::Normal,
                     text: folio,
                     href: None,
@@ -2594,7 +2680,7 @@ fn blank_page(hint: &LayoutHint) -> LayoutPage {
 /// Monospace text gets a fixed advance, so positioned runs line up with the
 /// monospace font the renderers actually select.
 fn heuristic_advance_em(metrics: &FontMetricsSystem, ch: char, face: TextFace) -> f64 {
-    if face.family == MONOSPACE {
+    if face.family == BodyFamily::Mono {
         return MONOSPACE_ADVANCE;
     }
     if ch.is_whitespace() {
@@ -2647,21 +2733,21 @@ fn split_atoms(text: &str) -> Vec<String> {
 }
 
 /// Greedy first-fit line breaking with word and CJK break opportunities.
-fn wrap_text(widths: &TextMeasure<'_>, text: &str, size: f64, max_width: f64) -> Vec<String> {
+///
+/// Plain wrapped lines measure from `body`, the pass's derived body face, so a
+/// named family reserves its own advances instead of the serif defaults.
+fn wrap_text(widths: &TextMeasure<'_>, text: &str, size: f64, max_width: f64, body: TextFace) -> Vec<String> {
     let mut lines = Vec::new();
     for raw in text.split('\n') {
         let mut line = String::new();
         let mut width = 0.0;
         for atom in split_atoms(raw) {
-            let atom_width = widths.measure(&atom, size, BODY_FACE);
+            let atom_width = widths.measure(&atom, size, body);
             // The pair between the previous line end and this atom is painted,
             // so it counts toward the column even though the atoms are separate
             // strings.
-            let cross = line
-                .chars()
-                .last()
-                .zip(atom.chars().next())
-                .map_or(0.0, |(left, right)| widths.kern(left, right, BODY_FACE, size));
+            let cross =
+                line.chars().last().zip(atom.chars().next()).map_or(0.0, |(left, right)| widths.kern(left, right, body, size));
             if atom.trim().is_empty() {
                 if line.is_empty() || width + atom_width + cross > max_width {
                     continue;
@@ -2683,14 +2769,14 @@ fn wrap_text(widths: &TextMeasure<'_>, text: &str, size: f64, max_width: f64) ->
                 let mut chunk_width = 0.0;
                 let mut previous = None;
                 for ch in atom.chars() {
-                    let advance = widths.advance_em(ch, BODY_FACE) * size
-                        + previous.map_or(0.0, |left| widths.kern(left, ch, BODY_FACE, size));
+                    let advance =
+                        widths.advance_em(ch, body) * size + previous.map_or(0.0, |left| widths.kern(left, ch, body, size));
                     if !chunk.is_empty() && chunk_width + advance > max_width {
                         lines.push(chunk.trim_end().to_string());
                         chunk = String::new();
                         // The pair across the break is not painted.
                         chunk.push(ch);
-                        chunk_width = widths.advance_em(ch, BODY_FACE) * size;
+                        chunk_width = widths.advance_em(ch, body) * size;
                         previous = Some(ch);
                         continue;
                     }
@@ -2772,7 +2858,7 @@ mod kerning_tests {
             widths.measure("A", size, BODY_FACE) + widths.measure(" ", size, BODY_FACE) + widths.measure("V", size, BODY_FACE);
         let with_cross = widths.measure("A V", size, BODY_FACE);
         assert!(with_cross < without_cross, "the pairs must narrow the line");
-        let lines = wrap_text(&widths, "A V", size, without_cross - 0.01);
+        let lines = wrap_text(&widths, "A V", size, without_cross - 0.01, BODY_FACE);
         assert_eq!(lines, vec!["A V".to_string()]);
     }
 
@@ -2940,5 +3026,128 @@ mod kerning_tests {
             .collect();
         assert!(sizes.iter().any(|(text, size)| text == "Body" && (size - 12.0).abs() < 1e-9), "{sizes:?}");
         assert!(sizes.iter().any(|(text, size)| text == "Heading" && (size - 19.2).abs() < 1e-9), "{sizes:?}");
+    }
+
+    /// The host face pack, freshly loaded so a test can extend it with faces
+    /// of its own. A missing pack fails the test, exactly as [`metrics()`] does.
+    fn host_pack() -> document_fonts::BodyFaceSet {
+        let dir = host_font_dir();
+        assert!(dir.is_dir(), "named-family regression needs the host font pack at {}; set VUTEX_FONT_DIR", dir.display());
+        document_fonts::BodyFaceSet::load_from(&dir).expect("body face pack")
+    }
+
+    /// The host pack plus the named family `Test Serif`, whose Latin face
+    /// reuses the monospaced bytes so its advances are far from the prose
+    /// defaults and the wiring stays observable.
+    fn named_serif_pack() -> document_fonts::BodyFaceSet {
+        let base = host_pack();
+        let mono = base
+            .faces()
+            .iter()
+            .find(|face| face.family == document_fonts::BodyFamily::Mono)
+            .expect("the pack carries a mono face");
+        let mut faces = base.faces().to_vec();
+        faces.push(document_fonts::BodyFace::new(
+            document_fonts::BodyFamily::Named("Test Serif"),
+            document_fonts::BodyScript::Latin,
+            document_fonts::BodyFaceStyle::Regular,
+            mono.bytes.clone(),
+        ));
+        document_fonts::BodyFaceSet::new(faces).expect("distinct face triples")
+    }
+
+    /// The first non-artifact run of one page.
+    fn first_run<'p>(plan: &'p LayoutPlan, text: &str) -> &'p TextRun {
+        plan.pages
+            .first()
+            .expect("one page")
+            .items
+            .iter()
+            .find_map(|item| match item {
+                LayoutItem::TextRun(run) if run.text == text => Some(run),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("a run painting `{text}`"))
+    }
+
+    #[test]
+    fn layout_hint_text_family_reaches_run() {
+        let set = named_serif_pack();
+        let metrics = BodyMetrics::from_set(&set);
+        let mut graph = DocumentGraph::new(document_ir::DocumentId(21));
+        graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Body".to_string() }] });
+
+        let mut hint = LayoutHint::a4();
+        hint.text_family = Some(document_fonts::BodyFamily::Named("Test Serif"));
+        let (plan, diagnostics) = layout_with_metrics(&graph, &hint, &Diagrams::new(), &metrics);
+        let run = first_run(&plan, "Body");
+        assert_eq!(run.font_family, "Test Serif", "the run carries the registered name itself");
+
+        // The width comes from the named face: advances plus adjacent pairs,
+        // exactly as `BodyMetrics` reports them for that key.
+        let key = metrics.key_for_name("Test Serif", FontStyle::Normal).expect("the family is registered");
+        let size = hint.base_font_size;
+        let mut expected = 0.0;
+        let mut previous = None;
+        for ch in "Body".chars() {
+            if let Some(left) = previous {
+                expected += metrics.kerning_em(key, left, ch).unwrap_or(0.0) * size;
+            }
+            expected += metrics.advance_em(key, ch).expect("the named face covers `Body`") * size;
+            previous = Some(ch);
+        }
+        assert!((run.width - expected).abs() < 1e-9, "measured {}, expected {expected}", run.width);
+        assert!(
+            diagnostics.iter().all(|diagnostic| diagnostic.code != "vutex.layout.metrics.glyph_missing"),
+            "covered characters must not report a gap"
+        );
+
+        // The same document without a declared family keeps the prose defaults,
+        // and the two widths stay distinguishable.
+        let (plain_plan, _) = layout_with_metrics(&graph, &LayoutHint::a4(), &Diagrams::new(), &metrics);
+        let plain = first_run(&plain_plan, "Body");
+        assert_eq!(plain.font_family, "serif");
+        assert!((plain.width - run.width).abs() > 0.01, "the named family must not fold onto the prose advances");
+    }
+
+    #[test]
+    fn layout_hint_unregistered_text_family_is_refused_before_pages() {
+        let metrics = metrics();
+        let mut graph = DocumentGraph::new(document_ir::DocumentId(22));
+        graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Body".to_string() }] });
+
+        let mut hint = LayoutHint::a4();
+        hint.text_family = Some(document_fonts::BodyFamily::Named("Missing Serif"));
+        let (plan, diagnostics) = layout_with_metrics(&graph, &hint, &Diagrams::new(), metrics);
+        assert!(plan.pages.is_empty(), "an unregistered family produces no page");
+        let error = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "vutex.layout.text_family_unregistered")
+            .expect("the refusal names the stable code");
+        assert_eq!(error.severity, Severity::Error);
+        assert!(error.message.contains("Missing Serif"), "the message names the family: {}", error.message);
+    }
+
+    #[test]
+    fn named_family_gap_falls_back_with_diagnostic() {
+        let set = named_serif_pack();
+        let metrics = BodyMetrics::from_set(&set);
+        let mut graph = DocumentGraph::new(document_ir::DocumentId(23));
+        graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "同".to_string() }] });
+
+        let mut hint = LayoutHint::a4();
+        hint.text_family = Some(document_fonts::BodyFamily::Named("Test Serif"));
+        let (plan, diagnostics) = layout_with_metrics(&graph, &hint, &Diagrams::new(), &metrics);
+        let run = first_run(&plan, "同");
+        assert_eq!(run.font_family, "Test Serif", "the run still carries the declared family");
+        let serif = metrics.key_for_name("serif", FontStyle::Normal).expect("the alias resolves");
+        assert_eq!(run.width, metrics.advance_em(serif, '同').expect("the prose CJK face covers `同`") * hint.base_font_size);
+
+        let missing = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "vutex.layout.metrics.glyph_missing")
+            .expect("the named-family gap is reported");
+        assert_eq!(missing.severity, Severity::Warning);
+        assert!(missing.message.contains("Test Serif"), "the warning names the registered family: {}", missing.message);
     }
 }

@@ -60,10 +60,12 @@ fn pdf_report_keeps_every_math_content_loss_and_drops_environment_warnings() {
 
     // A face the metric reader cannot parse is an environment fact. The layout
     // pass reports it, the renderer skips that face, and the text still paints,
-    // so the report must stay clean.
+    // so the report must stay clean. The damaged face takes the `Mono/Latin/Bold`
+    // triple, which the pack does not carry, because a repeated registration is
+    // rejected at construction.
     let mut broken_faces = faces.faces().to_vec();
-    broken_faces.push(BodyFace::new(BodyFamily::Serif, BodyScript::Latin, BodyFaceStyle::Italic, vec![0u8; 32]));
-    let damaged = Arc::new(BodyFaceSet::new(broken_faces));
+    broken_faces.push(BodyFace::new(BodyFamily::Mono, BodyScript::Latin, BodyFaceStyle::Bold, vec![0u8; 32]));
+    let damaged = Arc::new(BodyFaceSet::new(broken_faces).expect("distinct face triples"));
     let mut readable = DocumentGraph::new(DocumentId(99));
     readable.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Hello".into() }] });
     write_document_pdf(&mut readable, &damaged).expect("PDF write with a damaged face");

@@ -10,7 +10,8 @@ A host builds a [`BodyFaceSet`] either from bytes it embedded
 ```text
 let set = BodyFaceSet::new(vec![
     BodyFace::new(BodyFamily::Serif, BodyScript::Latin, BodyFaceStyle::Regular, TINOS_REGULAR),
-]);
+    BodyFace::new(BodyFamily::Named("Template Serif"), BodyScript::Latin, BodyFaceStyle::Regular, TEMPLATE_BYTES),
+]).expect("every face carries a distinct triple");
 ```
 
 or from a directory laid out per [`FACE_FILES`]:
@@ -18,6 +19,12 @@ or from a directory laid out per [`FACE_FILES`]:
 ```text
 let set = BodyFaceSet::load_from(Path::new("fonts"))?;
 ```
+
+`BodyFaceSet::new` rejects a repeated `(family, script, style)` triple, and
+[`BodyFamily::Named`] carries a host-declared family whose name is compared as
+a full case-sensitive string. `BodyFaceSet::family_named` and
+`BodyMetrics::key_for_name` resolve such a name exactly and return `None` for
+an unknown one; the name never folds onto `Serif`.
 
 `Tinos-Regular.ttf`, `Tinos-Bold.ttf`, `Tinos-Italic.ttf`, `NotoSerifSC-Regular.ttf`,
 `NotoSerifSC-Bold.ttf`, and `NotoSansMono-Regular.ttf` are the names a directory pack

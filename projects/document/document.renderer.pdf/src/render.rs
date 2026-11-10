@@ -31,7 +31,7 @@ use std::{
 };
 
 use document_compose::{Diagnostic, Severity, math::FontStyle};
-use document_fonts::{BodyFaceSet, BodyFaceStyle, BodyFamily, BodyMetrics, key_for_run};
+use document_fonts::{BodyFaceSet, BodyFaceStyle, BodyFamily, BodyMetrics};
 use document_presentation::display::{
     DisplayGraphic, DisplayImage, DisplayItem, DisplayPage, DisplayPath, DisplayPresentation, DisplayRect, DisplayRule,
     DisplayTextRun,
@@ -202,11 +202,17 @@ pub(crate) fn body_style(style: FontStyle) -> BodyFaceStyle {
 
 /// Family and style a text run asks the chain for.
 ///
-/// Only monospaced text is treated as code. Every other declared family paints
-/// with the prose face, because the bundled set carries one reading face per
-/// script rather than one per declared family name.
-pub(crate) fn chain_key(family: &str, style: FontStyle) -> ChainKey {
-    document_fonts::key_for_run(family, style)
+/// A declared name that matches a registered [`Named`](BodyFamily::Named) face
+/// of `metrics` keeps its own family key, so the embedded subset and the layout
+/// measurement come from the same face. Without that match the old fold stays:
+/// monospaced names select the code face and every other name the prose face,
+/// because the bundled set carries one reading face per script rather than one
+/// per declared family name.
+pub(crate) fn chain_key(family: &str, style: FontStyle, metrics: Option<&BodyMetrics>) -> ChainKey {
+    metrics.and_then(|metrics| metrics.key_for_name(family, style)).unwrap_or_else(|| ChainKey {
+        family: if family.to_ascii_lowercase().contains("mono") { BodyFamily::Mono } else { BodyFamily::Serif },
+        style: body_style(style),
+    })
 }
 
 /// Whether one text run paints through the embedded font chain.
@@ -219,13 +225,17 @@ fn embeds_run(body: bool, text: &str) -> bool {
 }
 
 /// Characters painted with the embedded font, per requested family and style.
-fn embedded_charsets(presentation: &DisplayPresentation, body: bool) -> BTreeMap<ChainKey, BTreeSet<char>> {
+fn embedded_charsets(
+    presentation: &DisplayPresentation,
+    body: bool,
+    metrics: Option<&BodyMetrics>,
+) -> BTreeMap<ChainKey, BTreeSet<char>> {
     let mut charsets: BTreeMap<ChainKey, BTreeSet<char>> = BTreeMap::new();
     let mut add = |family: &str, style: FontStyle, text: &str| {
         if !embeds_run(body, text) {
             return;
         }
-        charsets.entry(chain_key(family, style)).or_default().extend(text.chars());
+        charsets.entry(chain_key(family, style, metrics)).or_default().extend(text.chars());
     };
     for page in &presentation.pages {
         for item in &page.items {
@@ -256,14 +266,19 @@ fn flat_charset(charsets: &BTreeMap<ChainKey, BTreeSet<char>>) -> BTreeSet<char>
 /// cannot be read are reported, but a discovered candidate that is merely
 /// absent contributes nothing rather than failing the document.
 ///
+/// `metrics` are the parsed faces of a [`PdfFontPolicy::Provided`] pack, when
+/// the policy carries them, so a declared name that matches a registered face
+/// selects that face's chain key instead of folding onto the prose one.
+///
 /// Non-fatal diagnostics (warnings) are appended to `diagnostics`.
 fn load_chain(
     presentation: &DisplayPresentation,
     policy: &PdfFontPolicy,
+    metrics: Option<&BodyMetrics>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Option<FontChain>, Diagnostic> {
     let body = matches!(policy, PdfFontPolicy::Provided(_));
-    let charsets = embedded_charsets(presentation, body);
+    let charsets = embedded_charsets(presentation, body, metrics);
     let charset = flat_charset(&charsets);
     if charset.is_empty() {
         return Ok(None);
@@ -549,7 +564,7 @@ impl EmbeddedText<'_> {
     /// `/F` resource index and CID that paint one character.
     pub(crate) fn glyph(&self, ch: char, family: &str, style: FontStyle) -> Option<(usize, u16)> {
         let key = if self.body {
-            chain_key(family, style)
+            chain_key(family, style, self.metrics)
         }
         else {
             ChainKey { family: BodyFamily::Serif, style: BodyFaceStyle::Regular }
@@ -617,12 +632,12 @@ fn build_objects(
     sources: &PdfResources,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<Vec<PdfObject>, Diagnostic> {
-    let chain = load_chain(presentation, policy, diagnostics)?;
-    let body = matches!(policy, PdfFontPolicy::Provided(_));
     let metrics = match policy {
         PdfFontPolicy::Provided(set) => Some(BodyMetrics::from_set(set)),
         _ => None,
     };
+    let chain = load_chain(presentation, policy, metrics.as_ref(), diagnostics)?;
+    let body = matches!(policy, PdfFontPolicy::Provided(_));
     let fonts = used_fonts(presentation, chain.is_some(), body);
     let page_count = presentation.pages.len();
 
@@ -1219,7 +1234,7 @@ pub(crate) fn paint_text(
         // Body text carries kerning from the same `BodyMetrics` layout used, so
         // the writer never parses a font on its own.
         let metrics = embedded.metrics;
-        let key = key_for_run(family, style);
+        let key = chain_key(family, style, metrics);
         let _ = write!(out, "BT\n1 0 0 {down} {} {} Tm\n", num(x), num(y));
         let mut current: Option<usize> = None;
         let mut parts: Vec<String> = Vec::new();
