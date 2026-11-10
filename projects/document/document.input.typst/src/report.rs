@@ -13,7 +13,11 @@ use document_ir::{Block, DocumentGraph, Inline, MathDisplay, MathExpression, Mat
 /// Diagnostic code returned when the Typst frontend cannot produce a document graph.
 pub const IMPORT_FAILED: &str = "vutex.input.typst.import_failed";
 
-/// Report code for math kept as source because no semantic lowering exists.
+/// Report code for math still kept as source because its whole body sits
+/// outside the Typst math lowering.
+///
+/// A body the lowering expresses as shared MathIR is typeset, not preserved,
+/// so this code only names formulas that stayed fully `Unsupported`.
 pub const MATH_SOURCE_PRESERVED: &str = "import.typst.math.source_preserved";
 
 /// Diagnostic code for a dynamic construct whose group the source never closes.

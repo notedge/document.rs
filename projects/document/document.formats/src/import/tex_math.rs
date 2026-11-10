@@ -15,6 +15,11 @@ use oak_tex::ast::{
     TexRoot, TexRow,
 };
 
+use super::math_common::{
+    append_expression, attach_script, char_atom, char_expression, class_for_char, script_expression, sequence, slice,
+    span_from, symbol_for, unsupported,
+};
+
 /// Lower one Oak math node into the document math semantics.
 pub(crate) fn lower_tex_math(math: &TexMath, source: &str) -> MathFormula {
     let display = if math.is_display { MathDisplay::Display } else { MathDisplay::Inline };
@@ -108,14 +113,6 @@ fn trimmed_base(start: usize, end: usize, source: &str) -> usize {
     start + (raw.len() - raw.trim_start().len())
 }
 
-/// Byte span into the formula source for an absolute CST range.
-fn span_from(base: usize, start: usize, end: usize) -> Option<MathSpan> {
-    if end <= start {
-        return None;
-    }
-    Some(MathSpan { start: start.saturating_sub(base) as u32, end: end.saturating_sub(base) as u32 })
-}
-
 /// Lower a list of TeX items into one expression.
 ///
 /// `base` is the absolute source offset the formula source starts at after
@@ -192,62 +189,9 @@ pub(crate) fn lower_root(items: &[TexItem], source: &str, base: usize) -> MathEx
     sequence(expressions)
 }
 
-/// Append an expression, flattening nested sequences into the enclosing list.
-fn append_expression(expressions: &mut Vec<MathExpression>, expression: MathExpression) {
-    match expression {
-        MathExpression::Sequence(items) => {
-            for item in items {
-                append_expression(expressions, item);
-            }
-        }
-        other => expressions.push(other),
-    }
-}
-
-fn script_expression(
-    base: MathExpression,
-    superscript: Option<MathExpression>,
-    subscript: Option<MathExpression>,
-) -> MathExpression {
-    if superscript.is_none() && subscript.is_none() {
-        return base;
-    }
-    MathExpression::Script { base: Box::new(base), superscript: superscript.map(Box::new), subscript: subscript.map(Box::new) }
-}
-
 /// Commands that describe a row or a label, not an atom of the expression.
 fn is_row_metadata(command: &TexCommand) -> bool {
     matches!(command.name.as_str(), "label" | "tag" | "notag" | "nonumber")
-}
-
-fn sequence(mut expressions: Vec<MathExpression>) -> MathExpression {
-    if expressions.len() == 1 {
-        return expressions.pop().expect("one expression");
-    }
-    MathExpression::Sequence(expressions)
-}
-
-/// Fold a script onto the expression it modifies.
-fn attach_script(
-    expressions: &mut Vec<MathExpression>,
-    superscript: Option<MathExpression>,
-    subscript: Option<MathExpression>,
-) {
-    let Some(last) = expressions.pop()
-    else {
-        expressions.push(MathExpression::Unsupported { kind: "script-base".into(), source: String::new(), span: None });
-        return;
-    };
-    match last {
-        MathExpression::Script { base, superscript: existing_sup, subscript: existing_sub } => {
-            expressions.push(script_expression(
-                *base,
-                superscript.or(existing_sup.map(|value| *value)),
-                subscript.or(existing_sub.map(|value| *value)),
-            ));
-        }
-        base => expressions.push(script_expression(base, superscript, subscript)),
-    }
 }
 
 fn lower_item(item: &TexItem, source: &str, base: usize) -> Option<MathExpression> {
@@ -746,153 +690,6 @@ fn text_expression(text: &str, start: usize, base: usize) -> MathExpression {
     sequence(atoms)
 }
 
-fn char_expression(c: char, span: Option<MathSpan>) -> MathExpression {
-    if c.is_ascii_digit() {
-        return MathExpression::Number { text: c.to_string(), span };
-    }
-    let class = class_for_char(c);
-    char_atom(c, class, span)
-}
-
-fn char_atom(c: char, class: MathClass, span: Option<MathSpan>) -> MathExpression {
-    MathExpression::Atom(MathAtom { text: c.to_string(), class, span })
-}
-
-fn class_for_char(c: char) -> MathClass {
-    match c {
-        '0'..='9' => MathClass::Number,
-        'a'..='z' | 'A'..='Z' => MathClass::Identifier,
-        '+' | '-' | '*' | '/' | '×' | '·' | '±' | '∓' | '÷' => MathClass::Binary,
-        '=' | '<' | '>' => MathClass::Relation,
-        '(' | '[' => MathClass::Opening,
-        ')' | ']' => MathClass::Closing,
-        ',' | ';' => MathClass::Punctuation,
-        c if is_greek(c) => MathClass::Identifier,
-        _ => MathClass::Ordinary,
-    }
-}
-
-fn is_greek(c: char) -> bool {
-    matches!(c, '\u{0391}'..='\u{03A9}' | '\u{03B1}'..='\u{03C9}' | '\u{03D1}' | '\u{03D5}' | '\u{03D6}' | '\u{03F0}' | '\u{03F1}' | '\u{03F5}')
-}
-
-fn symbol_for(name: &str) -> Option<(&'static str, MathClass)> {
-    let symbol = match name {
-        "alpha" => ("α", MathClass::Ordinary),
-        "beta" => ("β", MathClass::Ordinary),
-        "gamma" => ("γ", MathClass::Ordinary),
-        "delta" => ("δ", MathClass::Ordinary),
-        // TeX's plain command names the variant glyph, and the `var` form
-        // names the ordinary letter.
-        "epsilon" => ("ϵ", MathClass::Ordinary),
-        "varepsilon" => ("ε", MathClass::Ordinary),
-        "zeta" => ("ζ", MathClass::Ordinary),
-        "eta" => ("η", MathClass::Ordinary),
-        "theta" => ("θ", MathClass::Ordinary),
-        "vartheta" => ("ϑ", MathClass::Ordinary),
-        "iota" => ("ι", MathClass::Ordinary),
-        "kappa" => ("κ", MathClass::Ordinary),
-        "varkappa" => ("ϰ", MathClass::Ordinary),
-        "lambda" => ("λ", MathClass::Ordinary),
-        "mu" => ("μ", MathClass::Ordinary),
-        "nu" => ("ν", MathClass::Ordinary),
-        "xi" => ("ξ", MathClass::Ordinary),
-        "omicron" => ("ο", MathClass::Ordinary),
-        "pi" => ("π", MathClass::Ordinary),
-        "varpi" => ("ϖ", MathClass::Ordinary),
-        "rho" => ("ρ", MathClass::Ordinary),
-        "varrho" => ("ϱ", MathClass::Ordinary),
-        "sigma" => ("σ", MathClass::Ordinary),
-        "varsigma" => ("ς", MathClass::Ordinary),
-        "tau" => ("τ", MathClass::Ordinary),
-        "upsilon" => ("υ", MathClass::Ordinary),
-        "phi" => ("ϕ", MathClass::Ordinary),
-        "varphi" => ("φ", MathClass::Ordinary),
-        "chi" => ("χ", MathClass::Ordinary),
-        "psi" => ("ψ", MathClass::Ordinary),
-        "omega" => ("ω", MathClass::Ordinary),
-        "Gamma" => ("Γ", MathClass::Ordinary),
-        "Delta" => ("Δ", MathClass::Ordinary),
-        "Theta" => ("Θ", MathClass::Ordinary),
-        "Lambda" => ("Λ", MathClass::Ordinary),
-        "Xi" => ("Ξ", MathClass::Ordinary),
-        "Pi" => ("Π", MathClass::Ordinary),
-        "Sigma" => ("Σ", MathClass::Ordinary),
-        "Upsilon" => ("Υ", MathClass::Ordinary),
-        "Phi" => ("Φ", MathClass::Ordinary),
-        "Psi" => ("Ψ", MathClass::Ordinary),
-        "Omega" => ("Ω", MathClass::Ordinary),
-        "sum" => ("∑", MathClass::LargeOperator),
-        "prod" => ("∏", MathClass::LargeOperator),
-        "coprod" => ("∐", MathClass::LargeOperator),
-        "int" => ("∫", MathClass::LargeOperator),
-        "iint" => ("∬", MathClass::LargeOperator),
-        "oint" => ("∮", MathClass::LargeOperator),
-        "pm" => ("±", MathClass::Binary),
-        "mp" => ("∓", MathClass::Binary),
-        "times" => ("×", MathClass::Binary),
-        "cdot" => ("⋅", MathClass::Binary),
-        "div" => ("÷", MathClass::Binary),
-        "ast" => ("∗", MathClass::Binary),
-        "star" => ("⋆", MathClass::Binary),
-        "bullet" => ("∙", MathClass::Binary),
-        "cup" => ("∪", MathClass::Binary),
-        "cap" => ("∩", MathClass::Binary),
-        "circ" => ("∘", MathClass::Binary),
-        "le" | "leq" => ("≤", MathClass::Relation),
-        "ge" | "geq" => ("≥", MathClass::Relation),
-        "ne" | "neq" => ("≠", MathClass::Relation),
-        "approx" => ("≈", MathClass::Relation),
-        "equiv" => ("≡", MathClass::Relation),
-        "sim" => ("∼", MathClass::Relation),
-        "propto" => ("∝", MathClass::Relation),
-        "to" | "rightarrow" => ("→", MathClass::Relation),
-        "leftarrow" => ("←", MathClass::Relation),
-        "leftrightarrow" => ("↔", MathClass::Relation),
-        "Rightarrow" => ("⇒", MathClass::Relation),
-        "in" => ("∈", MathClass::Relation),
-        "notin" => ("∉", MathClass::Relation),
-        "subset" => ("⊂", MathClass::Relation),
-        "subseteq" => ("⊆", MathClass::Relation),
-        "supset" => ("⊃", MathClass::Relation),
-        "perp" => ("⊥", MathClass::Relation),
-        "parallel" => ("∥", MathClass::Relation),
-        "infty" => ("∞", MathClass::Ordinary),
-        "partial" => ("∂", MathClass::Ordinary),
-        "nabla" => ("∇", MathClass::Ordinary),
-        "forall" => ("∀", MathClass::Ordinary),
-        "exists" => ("∃", MathClass::Ordinary),
-        "emptyset" => ("∅", MathClass::Ordinary),
-        "ldots" => ("…", MathClass::Ordinary),
-        "cdots" => ("⋯", MathClass::Ordinary),
-        "ddots" => ("⋱", MathClass::Ordinary),
-        "prime" => ("′", MathClass::Ordinary),
-        "angle" => ("∠", MathClass::Ordinary),
-        "degree" => ("°", MathClass::Ordinary),
-        // Delimiters usable without `\left` / `\right`. TeX gives each one its
-        // own class so spacing around it stays that of an opening or closing
-        // atom; only `\vert` and `\Vert` are ordinary.
-        "langle" => ("⟨", MathClass::Opening),
-        "rangle" => ("⟩", MathClass::Closing),
-        "lvert" => ("|", MathClass::Opening),
-        "rvert" => ("|", MathClass::Closing),
-        "lVert" => ("‖", MathClass::Opening),
-        "rVert" => ("‖", MathClass::Closing),
-        "vert" => ("|", MathClass::Ordinary),
-        "Vert" => ("‖", MathClass::Ordinary),
-        "lbrack" => ("[", MathClass::Opening),
-        "rbrack" => ("]", MathClass::Closing),
-        "lbrace" => ("{", MathClass::Opening),
-        "rbrace" => ("}", MathClass::Closing),
-        "lfloor" => ("⌊", MathClass::Opening),
-        "rfloor" => ("⌋", MathClass::Closing),
-        "lceil" => ("⌈", MathClass::Opening),
-        "rceil" => ("⌉", MathClass::Closing),
-        _ => return None,
-    };
-    Some(symbol)
-}
-
 /// Named operators that render as upright multi-character text.
 ///
 /// The name table is TeX's operator dictionary: a spelling is a named
@@ -904,14 +701,6 @@ fn named_function(name: &str) -> bool {
         "hom", "ker",
     ];
     NAMES.contains(&name)
-}
-
-fn unsupported(start: usize, end: usize, source: &str, kind: &str, base: usize) -> MathExpression {
-    MathExpression::Unsupported { kind: kind.to_string(), source: slice(source, start, end), span: span_from(base, start, end) }
-}
-
-fn slice(source: &str, start: usize, end: usize) -> String {
-    source.get(start..end).unwrap_or("").to_string()
 }
 
 #[cfg(test)]

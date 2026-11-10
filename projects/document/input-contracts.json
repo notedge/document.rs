@@ -130,7 +130,7 @@
         {"construct": "unordered and ordered lists", "sample": "- one\n- two\n"},
         {"construct": "strong and emphasis spans", "sample": "*bold* and _italic_\n"},
         {"construct": "inline and fenced raw code", "sample": "`x` and ```rust\nfn main() {}\n```\n"},
-        {"construct": "inline and display math source preserved", "sample": "$a^2$\n\n$ x + y $\n"},
+        {"construct": "inline and display math lowered to shared MathIR (identifiers, numbers, operators, scripts, named symbols)", "sample": "$a^2$\n\n$ x + y $\n"},
         {"construct": "#link(\"destination\")[text] and body-less #link(\"destination\") as Inline::Link, destination kept as RelationEndpoint::ExternalUri for both absolute and relative paths, body-less calls use the destination as anchor text", "sample": "See #link(\"https://example.org\")[docs] and #link(\"img/a.pdf\").\n"}
       ],
       "approximated": [
@@ -139,6 +139,10 @@
         {"construct": "inline fragment the parser refuses", "code": "import.typst.fragment_parse_failed", "span": "exact"},
         {"construct": "text item out of source order", "code": "import.typst.text_span_mismatch", "span": "none"},
         {"construct": "empty document", "code": "import.typst.empty_document", "span": "none"},
+        {"construct": "math `#` calculation fragment", "code": "import.typst.math.calc", "span": "exact"},
+        {"construct": "math `[...]` / `{...}` content block", "code": "import.typst.math.content", "span": "exact"},
+        {"construct": "math dotted symbol path such as `arrow.r`", "code": "import.typst.math.symbol", "span": "exact"},
+        {"construct": "math `\\` escape or `\\\\` line break", "code": "import.typst.math.escape", "span": "exact"},
         {"construct": "whole-import coverage summary", "code": "import.typst.partial_coverage", "span": "none"}
       ],
       "refused": [

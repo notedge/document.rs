@@ -13,7 +13,7 @@ use document_text::math::{MathFontFacts, MathFontFamily, builtin_font_metrics_fo
 
 use super::{
     FontConformance, LayoutEngine, LayoutNode,
-    lowering::{formula_tree, is_tex_formula},
+    lowering::{formula_tree, has_math_lowering},
 };
 
 /// Em size used for a formula laid out without an explicit base size.
@@ -33,7 +33,7 @@ pub fn lower_formula(source: &str, display: bool) -> MathResult<(FormulaTree, Ve
 
 /// Map one `notedown-ir` formula onto the layout engine formula tree.
 pub fn lower_formula_tree(formula: &MathFormula) -> MathResult<(FormulaTree, Vec<Diagnostic>)> {
-    if !is_tex_formula(formula) {
+    if !has_math_lowering(formula) {
         return Err(MathError::parse_error(
             format!("math language `{}` has no VuTeX lowering", formula.language.as_deref().unwrap_or_default()),
             None,

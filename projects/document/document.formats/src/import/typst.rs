@@ -1,7 +1,8 @@
 //! Typst import via `oak-typst`.
 //!
 //! The lowering keeps markup semantics the IR can express: headings,
-//! paragraphs, strong/emphasis spans, lists, math source, raw code, and links.
+//! paragraphs, strong/emphasis spans, lists, math (lowered through the
+//! Typst-side profile in `typst_math`), raw code, and links.
 //! Dynamic content (`#` expressions, function calls, set/show rules) and any
 //! structure the AST cannot express stay explicit opaque blocks or recorded
 //! loss markers.
@@ -120,6 +121,21 @@ impl<'a> TypstLowerer<'a> {
 
     fn loss_at(&mut self, code: &str, message: impl Into<String>, status: SemanticStatus, span: Option<SourceSpan>) {
         self.graph.push_loss_at(LossMarker { code: code.into(), message: message.into(), status }, span);
+    }
+
+    /// Lower one `$ ... $` body into the shared math semantics and record a
+    /// construct-level loss for every fragment the subset cannot express.
+    /// `authored_start` is the body's offset inside the authored document,
+    /// so each loss' span lands on the fragment in source order.
+    fn lower_math(&mut self, body: &str, display: document_ir::MathDisplay, authored_start: usize) -> document_ir::MathFormula {
+        let (formula, losses) = super::typst_math::lower_typst_math(body, display);
+        for loss in losses {
+            let code = format!("import.typst.math.{}", loss.construct);
+            let message = format!("Typst math construct kept as source text: {}", loss.snippet);
+            let span = self.span_at(authored_start + loss.span.0, authored_start + loss.span.1);
+            self.loss_at(&code, message, SemanticStatus::Partial, span);
+        }
+        formula
     }
 
     fn push_block(&mut self, sink: &mut Sink, block: Block) {
@@ -256,25 +272,26 @@ impl<'a> TypstLowerer<'a> {
                 self.line_breaks = 0;
             }
             TypstItem::Math(root) => {
-                let (content, display) = math_content(self.raw(root.span.start, root.span.end));
+                let raw = self.raw(root.span.start, root.span.end);
                 self.cursor = root.span.end;
                 self.line_breaks = 0;
-                if display {
-                    let formula = document_ir::MathFormula::unsupported(
-                        content,
-                        Some("typst".into()),
-                        document_ir::MathDisplay::Display,
-                        "typst-math",
-                    );
-                    self.push_block(sink, Block::Math { formula });
-                }
+                let Some((body_start, body_end, display)) = math_content(raw)
                 else {
                     let formula = document_ir::MathFormula::unsupported(
-                        content,
+                        raw.trim(),
                         Some("typst".into()),
                         document_ir::MathDisplay::Inline,
                         "typst-math",
                     );
+                    sink.inlines.push(Inline::InlineMath { formula });
+                    return;
+                };
+                let ir_display = if display { document_ir::MathDisplay::Display } else { document_ir::MathDisplay::Inline };
+                let formula = self.lower_math(&raw[body_start..body_end], ir_display, root.span.start + body_start);
+                if display {
+                    self.push_block(sink, Block::Math { formula });
+                }
+                else {
                     sink.inlines.push(Inline::InlineMath { formula });
                 }
             }
@@ -579,13 +596,20 @@ impl<'a> TypstLowerer<'a> {
                     }
                 }
                 TypstItem::Math(root) => {
-                    let (content, _) = math_content(self.raw(root.span.start, root.span.end));
-                    let formula = document_ir::MathFormula::unsupported(
-                        content,
-                        Some("typst".into()),
-                        document_ir::MathDisplay::Inline,
-                        "typst-math",
-                    );
+                    let raw = self.raw(root.span.start, root.span.end);
+                    let formula = match math_content(raw) {
+                        Some((body_start, body_end, _)) => self.lower_math(
+                            &raw[body_start..body_end],
+                            document_ir::MathDisplay::Inline,
+                            root.span.start + body_start,
+                        ),
+                        None => document_ir::MathFormula::unsupported(
+                            raw.trim(),
+                            Some("typst".into()),
+                            document_ir::MathDisplay::Inline,
+                            "typst-math",
+                        ),
+                    };
                     inlines.push(Inline::InlineMath { formula });
                 }
                 TypstItem::Raw(_) => {
@@ -1110,14 +1134,25 @@ fn is_comment(text: &str) -> bool {
     trimmed.starts_with("//") || trimmed.starts_with("/*")
 }
 
-fn math_content(raw: &str) -> (String, bool) {
+/// The authored body of one `$ ... $` region inside `raw`.
+///
+/// Returns the body's byte range within `raw` and the display decision:
+/// Typst sets a spaced `$ ... $` as a display and an unspaced `$ ... $`
+/// inline, the same adjacency rule the TeX `$ ... $` profile follows.
+/// `None` when the captured span is not a delimited region, which happens
+/// when the parser's emphasis hijack swallows the closing delimiter.
+fn math_content(raw: &str) -> Option<(usize, usize, bool)> {
+    let lead = raw.len() - raw.trim_start().len();
     let trimmed = raw.trim();
     if trimmed.len() >= 2 && trimmed.starts_with('$') && trimmed.ends_with('$') {
         let inner = &trimmed[1..trimmed.len() - 1];
         let display = inner.starts_with(char::is_whitespace) || inner.ends_with(char::is_whitespace);
-        return (inner.trim().to_string(), display);
+        let inner_lead = inner.len() - inner.trim_start().len();
+        let body = inner.trim();
+        let start = lead + 1 + inner_lead;
+        return Some((start, start + body.len(), display));
     }
-    (trimmed.to_string(), false)
+    None
 }
 
 fn raw_content(raw: &str) -> (String, Option<String>) {

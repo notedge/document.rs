@@ -10,6 +10,8 @@
 //! TeX 位置判成错误。水平带裁剪保留「限位不得压进笔画」的原意，同时不要求
 //! 参考引擎做不到的整框分离。
 
+mod dispatch;
+
 use std::path::{Path, PathBuf};
 
 use document_fonts::{MathFontPack, install_math_fonts};
@@ -342,5 +344,55 @@ fn display_limits_keep_a_vertical_gap() {
             }
         }
         assert!(above >= 1 && below >= 1, "{tex}: limits are not stacked above and below");
+    }
+}
+
+/// 合同 28 验收 2：同一 MathIR 输入，`typst` 标签路径与 TeX 路径的逐 glyph
+/// 几何与字形轮廓完全一致。两条路径只差标签与 `source` 文本，引擎消费的是
+/// 同一棵共享 MathIR，所以任何分歧都意味着派发路径偷偷做了语法嗅探。
+#[test]
+fn typst_and_tex_tags_lay_the_same_math_ir_identically() {
+    use document_ir::{MathAtom, MathClass, MathDisplay, MathExpression, MathFormula};
+    use document_layout::math::layout_formula_for;
+
+    install_host_math_fonts();
+    let expression = MathExpression::Sequence(vec![
+        MathExpression::Script {
+            base: Box::new(MathExpression::Atom(MathAtom { text: "x".into(), class: MathClass::Identifier, span: None })),
+            superscript: Some(Box::new(MathExpression::Number { text: "2".into(), span: None })),
+            subscript: None,
+        },
+        MathExpression::Atom(MathAtom { text: "+".into(), class: MathClass::Binary, span: None }),
+        MathExpression::Number { text: "1".into(), span: None },
+    ]);
+    let typst = MathFormula {
+        source: "x^2 + 1".into(),
+        language: Some("typst".into()),
+        display: MathDisplay::Inline,
+        expression: expression.clone(),
+    };
+    let tex = MathFormula { source: "x^2+1".into(), language: Some("latex".into()), display: MathDisplay::Inline, expression };
+
+    let (_, typst_root, _) = layout_formula_for(&typst, 10.0, MathFontFamily::LmMath).expect("typst path lays out");
+    let (_, tex_root, _) = layout_formula_for(&tex, 10.0, MathFontFamily::LmMath).expect("tex path lays out");
+    let mut typst_placed = Vec::new();
+    collect(&typst_root, 0.0, 0.0, &mut typst_placed);
+    let mut tex_placed = Vec::new();
+    collect(&tex_root, 0.0, 0.0, &mut tex_placed);
+
+    assert_eq!(typst_placed.len(), tex_placed.len(), "the two paths place the same number of glyphs");
+    for (index, (from_typst, from_tex)) in typst_placed.iter().zip(tex_placed.iter()).enumerate() {
+        assert_eq!(from_typst.char, from_tex.char, "glyph {index} must be the same character");
+        assert_eq!(from_typst.outline, from_tex.outline, "glyph {index} must carry the same path data");
+        assert!(
+            (from_typst.origin_x - from_tex.origin_x).abs() <= TOLERANCE
+                && (from_typst.baseline_y - from_tex.baseline_y).abs() <= TOLERANCE,
+            "glyph {index} {:?} sits at ({}, {}), the tex path ({}, {})",
+            from_typst.char,
+            from_typst.origin_x,
+            from_typst.baseline_y,
+            from_tex.origin_x,
+            from_tex.baseline_y
+        );
     }
 }

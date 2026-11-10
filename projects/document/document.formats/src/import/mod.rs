@@ -29,6 +29,9 @@ pub mod html;
 /// Markdown import via `oak-markdown`.
 #[cfg(feature = "markdown")]
 pub mod markdown;
+/// Shared atom-class, symbol and sequence-folding helpers for the math lowerings.
+#[cfg(any(feature = "tex", feature = "typst"))]
+pub(crate) mod math_common;
 /// Notedown text import via `oak-notedown`.
 #[cfg(feature = "notedown")]
 pub mod notedown;
@@ -50,6 +53,9 @@ pub mod pptx;
 /// Typst import via `oak-typst`.
 #[cfg(feature = "typst")]
 pub mod typst;
+/// Typst math body lowering into `notedown-ir::math`.
+#[cfg(feature = "typst")]
+pub(crate) mod typst_math;
 /// SpreadsheetML XLSX import, IR projection and sheet grid view.
 #[cfg(feature = "xlsx")]
 pub mod xlsx;

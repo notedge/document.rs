@@ -1,7 +1,7 @@
 //! End-to-end checks for the Typst input adapter.
 
 use document_compose::{Severity, SourceSpan};
-use document_input_typst::{IMPORT_FAILED, MATH_SOURCE_PRESERVED, UNTERMINATED_GROUP, import_path, import_source, render_svg};
+use document_input_typst::{IMPORT_FAILED, UNTERMINATED_GROUP, import_path, import_source, render_svg};
 
 const MINIMAL: &str =
     "= Introduction\n\nHello *world* and _emphasis_ with a [link](https://example.com).\n\n- First item\n- Second item\n";
@@ -89,29 +89,33 @@ fn dynamic_construct_is_opaque_with_an_exact_source_span() {
 }
 
 #[test]
-fn typst_math_keeps_its_source_and_reports_the_layout_gap() {
+fn typst_math_lowers_to_semantics_and_no_longer_reports_the_language_gap() {
     let document = import_source("math.typ", MATH).expect("Typst math imports");
 
-    assert_eq!(document.report.preserved.len(), 2, "inline and display math: {:?}", document.report.preserved);
-    assert!(document.report.preserved.iter().all(|item| item.code == MATH_SOURCE_PRESERVED));
-
-    let warnings: Vec<&str> = document
+    assert!(
+        document.report.preserved.is_empty(),
+        "lowered math is no longer source-preserved: {:?}",
+        document.report.preserved
+    );
+    let language_gaps: Vec<&str> = document
         .diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.code == "vutex.layout.math.unsupported_language")
         .map(|diagnostic| diagnostic.code.as_str())
         .collect();
-    assert!(warnings.is_empty(), "layout diagnostics belong to the render stage: {:?}", document.diagnostics);
+    assert!(language_gaps.is_empty(), "the typst tag feeds the shared engine: {:?}", document.diagnostics);
 
-    let rendered = render_svg("math.typ", MATH).expect("Typst math renders as text");
-    assert!(rendered.svg.contains("x + y"), "inline math source stays visible: {}", rendered.svg);
-    assert!(rendered.svg.contains("a = b"), "display math source stays visible: {}", rendered.svg);
-    assert_eq!(rendered.svg.matches("vutex.layout.math.unsupported_language").count(), 0);
-
-    let layout_warnings: Vec<_> =
+    let rendered = render_svg("math.typ", MATH).expect("Typst math renders through the layout chain");
+    assert!(rendered.svg.contains("x + y"), "inline math still reaches the page: {}", rendered.svg);
+    assert!(rendered.svg.contains("a = b"), "display math still reaches the page: {}", rendered.svg);
+    let layout_gaps: Vec<_> =
         rendered.diagnostics.iter().filter(|diagnostic| diagnostic.code == "vutex.layout.math.unsupported_language").collect();
-    assert_eq!(layout_warnings.len(), 2, "one warning per formula: {:?}", rendered.diagnostics);
-    assert!(layout_warnings.iter().all(|diagnostic| diagnostic.severity == Severity::Warning));
+    assert!(layout_gaps.is_empty(), "no language gap survives for typst: {:?}", rendered.diagnostics);
+    // The test host installs no math font, so the engine reports the font
+    // loss instead of the old language gap: the formula is still visible.
+    let not_typeset: Vec<_> =
+        rendered.diagnostics.iter().filter(|diagnostic| diagnostic.code == "vutex.layout.math.not_typeset").collect();
+    assert_eq!(not_typeset.len(), 2, "one font-loss report per formula: {:?}", rendered.diagnostics);
 }
 
 #[test]

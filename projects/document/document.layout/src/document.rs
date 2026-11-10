@@ -21,7 +21,7 @@ use document_text::math::{FontMetricsSystem, builtin_font_metrics};
 use crate::{
     diagram::Diagrams,
     hint::{Align, ChromeHeader, LayoutHint},
-    math::{LayoutNode, collect_paint, is_tex_formula, layout_formula, layout_formula_for},
+    math::{LayoutNode, collect_paint, has_math_lowering, layout_formula, layout_formula_for},
     plan::{Graphic, ImagePlaceholder, LayoutItem, LayoutPage, LayoutPlan, Rect, Rule, TextRun},
 };
 
@@ -1196,7 +1196,7 @@ impl<'a> PageBuilder<'a> {
                 }
                 Inline::InlineMath { formula } => {
                     flow.pending.flush(&mut flow.atoms);
-                    if is_tex_formula(formula) {
+                    if has_math_lowering(formula) {
                         match lay_formula(formula, size, &self.hint) {
                             Ok((result, _root, math_diagnostics)) => {
                                 self.diagnostics.extend(math_diagnostics);
@@ -1980,12 +1980,12 @@ impl<'a> PageBuilder<'a> {
     /// and follows the document body size. Its vertical space comes from TeX's
     /// display skips: `\abovedisplayskip` above and `\belowdisplayskip` below.
     /// When the math engine cannot parse or lay out
-    /// the source, the raw TeX is rendered as text with an `Error` diagnostic
-    /// (`vutex.layout.math.not_typeset`): the formula stays visible, but the
-    /// degradation is never reported as a clean layout.
+    /// the source, the raw formula source is rendered as text with an `Error`
+    /// diagnostic (`vutex.layout.math.not_typeset`): the formula stays visible,
+    /// but the degradation is never reported as a clean layout.
     fn emit_math(&mut self, formula: &document_ir::MathFormula, indent: f64) {
         let size = self.body_size();
-        if !is_tex_formula(formula) {
+        if !has_math_lowering(formula) {
             self.diagnostics.push(unsupported_math_language_diagnostic(formula));
             self.emit_math_text_fallback(&formula.source, indent);
             return;

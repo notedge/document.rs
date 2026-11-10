@@ -1,5 +1,5 @@
 use document_formats::{FormatDirection, FormatStatus, capabilities, import::typst::import_typst_bytes};
-use document_ir::{Block, DocumentGraph, Inline};
+use document_ir::{Block, DocumentGraph, Inline, MathDisplay, MathExpression};
 
 fn blocks(graph: &DocumentGraph) -> &[document_ir::BlockNode] {
     &graph.blocks
@@ -84,6 +84,220 @@ fn math_keeps_authored_source() {
         })
         .collect();
     assert_eq!(display_math, vec!["x^2 + y^2"]);
+}
+
+/// The shared MathIR, with the language-relative spans removed.
+///
+/// Spans index each profile's own formula source, so the contract's
+/// node-for-node equality compares the structure after one shared
+/// normalization that clears them.
+fn without_spans(expression: &MathExpression) -> MathExpression {
+    use document_ir::{MathDelimiter, MathEnvironment, MathRow};
+    match expression.clone() {
+        MathExpression::Sequence(items) => MathExpression::Sequence(items.iter().map(without_spans).collect()),
+        MathExpression::Atom(atom) => MathExpression::Atom(document_ir::MathAtom { span: None, ..atom }),
+        MathExpression::Group { body } => MathExpression::Group { body: Box::new(without_spans(&body)) },
+        MathExpression::Number { text, .. } => MathExpression::Number { text, span: None },
+        MathExpression::Script { base, superscript, subscript } => MathExpression::Script {
+            base: Box::new(without_spans(&base)),
+            superscript: superscript.map(|value| Box::new(without_spans(&value))),
+            subscript: subscript.map(|value| Box::new(without_spans(&value))),
+        },
+        MathExpression::Fraction { numerator, denominator, line } => MathExpression::Fraction {
+            numerator: Box::new(without_spans(&numerator)),
+            denominator: Box::new(without_spans(&denominator)),
+            line,
+        },
+        MathExpression::Radical { index, radicand, .. } => MathExpression::Radical {
+            index: index.map(|value| Box::new(without_spans(&value))),
+            radicand: Box::new(without_spans(&radicand)),
+            span: None,
+        },
+        MathExpression::Delimited { open, close, body, middles } => MathExpression::Delimited {
+            open: open.map(|value| MathDelimiter { span: None, ..value }),
+            close: close.map(|value| MathDelimiter { span: None, ..value }),
+            body: Box::new(without_spans(&body)),
+            middles: middles.iter().map(without_spans).collect(),
+        },
+        MathExpression::Styled { style, body } => MathExpression::Styled { style, body: Box::new(without_spans(&body)) },
+        MathExpression::Accent { mark, wide, base, .. } => {
+            MathExpression::Accent { mark, wide, base: Box::new(without_spans(&base)), span: None }
+        }
+        MathExpression::StackAbove { over, base } => {
+            MathExpression::StackAbove { over: Box::new(without_spans(&over)), base: Box::new(without_spans(&base)) }
+        }
+        MathExpression::StackBelow { under, base } => {
+            MathExpression::StackBelow { under: Box::new(without_spans(&under)), base: Box::new(without_spans(&base)) }
+        }
+        MathExpression::Relation(inner) => MathExpression::Relation(Box::new(without_spans(&inner))),
+        MathExpression::Space { kind } => MathExpression::Space { kind },
+        MathExpression::StyleSwitch { style } => MathExpression::StyleSwitch { style },
+        MathExpression::LimitsPolicy { limits } => MathExpression::LimitsPolicy { limits },
+        MathExpression::Environment(environment) => MathExpression::Environment(MathEnvironment {
+            rows: environment
+                .rows
+                .iter()
+                .map(|row| MathRow { cells: row.cells.iter().map(without_spans).collect(), ..row.clone() })
+                .collect(),
+            span: None,
+            ..environment
+        }),
+        MathExpression::Text { text, .. } => MathExpression::Text { text, span: None },
+        MathExpression::Unsupported { kind, source, .. } => MathExpression::Unsupported { kind, source, span: None },
+    }
+}
+
+/// Lower one Typst body through the real import and return its expression.
+fn typst_expression(body: &str) -> MathExpression {
+    let graph = import_typst_bytes("math.typ", &format!("${body}$")).expect("typst imports");
+    let formula = blocks(&graph)
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Paragraph { content } => content.iter().find_map(|inline| match inline {
+                Inline::InlineMath { formula } => Some(formula.clone()),
+                _ => None,
+            }),
+            Block::Math { formula } => Some(formula.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("`{body}` must reach the IR as math"));
+    assert_eq!(formula.language.as_deref(), Some("typst"), "the profile tag names the lowering");
+    formula.expression
+}
+
+/// Contract 28 acceptance 1: the same construct lands on the same MathIR
+/// node in both profiles after one span-clearing normalization.
+#[test]
+fn typst_math_lowers_to_the_shared_ir_nodes() {
+    for (typst, tex) in [
+        ("x^2 + 1", "x^2+1"),
+        ("x_1", "x_1"),
+        ("x^2_1", "x^2_1"),
+        ("x_1^2", "x_1^2"),
+        ("x^(2a)", "x^{2a}"),
+        ("x^(2)", "x^{2}"),
+        ("x^(a+b)", "x^{a+b}"),
+        ("a = b", "a=b"),
+        ("1/2", "1/2"),
+        ("pi", r"\pi"),
+        ("alpha + beta", r"\alpha + \beta"),
+        ("sum", r"\sum"),
+        ("int", r"\int"),
+        ("le", r"\le"),
+        ("f (x)", "f (x)"),
+        ("x + y", "x+y"),
+    ] {
+        let from_typst = without_spans(&typst_expression(typst));
+        let from_tex = without_spans(&document_formats::lower_tex_formula_source(tex, MathDisplay::Inline).expression);
+        assert_eq!(from_typst, from_tex, "Typst `{typst}` and TeX `{tex}` must agree node for node");
+    }
+}
+
+#[test]
+fn lowered_math_keeps_the_authored_source_and_records_no_loss() {
+    let graph = import_typst_bytes("math.typ", "$ x^2 + 1 $\n").unwrap();
+    let formula = blocks(&graph)
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Math { formula } => Some(formula),
+            _ => None,
+        })
+        .expect("display math block");
+    assert_eq!(formula.source, "x^2 + 1", "the authored body stays retrievable");
+    assert_eq!(formula.display, MathDisplay::Display);
+    assert!(graph.coverage.loss.is_empty(), "a successful lowering adds no diagnostics: {:?}", graph.coverage.loss);
+}
+
+/// Contract 28 acceptance 4: a construct outside the subset keeps its source
+/// as an `Unsupported` node with a construct-level loss, and the import and
+/// the surrounding content continue.
+#[test]
+fn out_of_subset_math_records_construct_losses_and_continues() {
+    let text = "$ a [x] b $\n\nTail text.\n";
+    let graph = import_typst_bytes("subset-gap.typ", text).unwrap();
+    let formula = blocks(&graph)
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Math { formula } => Some(formula),
+            _ => None,
+        })
+        .expect("the math region still reaches the IR");
+    let MathExpression::Sequence(items) = &formula.expression
+    else {
+        panic!("expected a sequence, got {:?}", formula.expression)
+    };
+    assert!(
+        items.iter().any(|item| matches!(item, MathExpression::Unsupported { kind, .. } if kind == "content")),
+        "the content block must stay visible as an unsupported node: {items:?}"
+    );
+    let index = loss_index(&graph, "import.typst.math.content");
+    assert_eq!(graph.coverage.loss[index].status, document_ir::SemanticStatus::Partial);
+    let span = graph.loss_span(index).expect("the construct loss carries its authored span");
+    assert_eq!(&text[span.start as usize..span.end as usize], "[x]");
+    assert!(paragraph_text(&graph).iter().any(|text| text == "Tail text."), "the page continues past the gap");
+}
+
+/// A `#` calculation fragment keeps its own construct loss while the rest of
+/// the region lowers normally.
+#[test]
+fn calc_fragment_lowers_as_unsupported_with_a_construct_loss() {
+    let text = "$a#b$\n";
+    let graph = import_typst_bytes("calc.typ", text).unwrap();
+    let formula = blocks(&graph)
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Paragraph { content } => content.iter().find_map(|inline| match inline {
+                Inline::InlineMath { formula } => Some(formula),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("the math region reaches the IR");
+    let MathExpression::Sequence(items) = &formula.expression
+    else {
+        panic!("expected a sequence, got {:?}", formula.expression)
+    };
+    assert!(matches!(&items[0], MathExpression::Atom(atom) if atom.text == "a"), "{items:?}");
+    assert!(matches!(&items[1], MathExpression::Unsupported { kind, .. } if kind == "calc"), "{items:?}");
+    let index = loss_index(&graph, "import.typst.math.calc");
+    let span = graph.loss_span(index).expect("the calc loss carries its authored span");
+    assert_eq!(&text[span.start as usize..span.end as usize], "#b");
+}
+
+#[test]
+fn dotted_symbol_and_content_block_losses_keep_the_import_going() {
+    let graph = import_typst_bytes("gaps.typ", "$ arrow.r $ and $ [x] $\n").unwrap();
+    assert!(graph.coverage.loss.iter().any(|loss| loss.code == "import.typst.math.symbol"));
+    assert!(graph.coverage.loss.iter().any(|loss| loss.code == "import.typst.math.content"));
+    assert!(paragraph_text(&graph).iter().any(|text| text.contains("and")), "surrounding text survives");
+}
+
+/// Contract 28 acceptance 5: the inline / display decision follows the same
+/// whitespace adjacency the TeX `$ ... $` profile uses.
+#[test]
+fn display_decision_follows_the_whitespace_adjacency() {
+    let graph = import_typst_bytes("display.typ", "Text $x + y$ tail.\n\n$ a = b $\n").unwrap();
+    let inline = blocks(&graph)
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Paragraph { content } => content.iter().find_map(|inline| match inline {
+                Inline::InlineMath { formula } => Some(formula),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("unspaced math is inline");
+    assert_eq!(inline.display, MathDisplay::Inline);
+    assert!(matches!(inline.expression, MathExpression::Sequence(_)), "the inline body lowers: {:?}", inline.expression);
+    let display = blocks(&graph)
+        .iter()
+        .find_map(|node| match &node.block {
+            Block::Math { formula } => Some(formula),
+            _ => None,
+        })
+        .expect("spaced math is a display block");
+    assert_eq!(display.display, MathDisplay::Display);
+    assert!(matches!(display.expression, MathExpression::Sequence(_)), "the display body lowers: {:?}", display.expression);
 }
 
 #[test]

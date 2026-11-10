@@ -448,6 +448,20 @@ pub fn is_tex_formula(formula: &MathFormula) -> bool {
     }
 }
 
+/// Whether a formula carries the Typst profile lowered by `document.formats`.
+pub fn is_typst_formula(formula: &MathFormula) -> bool {
+    formula.language.as_deref().map(str::trim).is_some_and(|language| language.eq_ignore_ascii_case("typst"))
+}
+
+/// Whether the formula engine consumes this formula's MathIR.
+///
+/// The dispatch reads only the language tag, never the source text: the TeX
+/// and Typst import profiles both lower into the same shared MathIR, so one
+/// engine consumes both. Any other tag has no lowering and stays preserved.
+pub fn has_math_lowering(formula: &MathFormula) -> bool {
+    is_tex_formula(formula) || is_typst_formula(formula)
+}
+
 /// Format one column alignment list into the layout alignment list.
 pub fn column_alignments(alignments: &[MathColumnAlignment]) -> Vec<Alignment> {
     alignments
