@@ -534,8 +534,11 @@ fn pdf_export_keeps_layout_environment_warnings_out_of_the_report() {
     use document_fonts::{BodyFace, BodyFaceSet, BodyFamily, BodyScript};
     let base = pdf_body_faces();
     let mut faces = base.faces().to_vec();
-    faces.push(BodyFace::new(BodyFamily::Serif, BodyScript::Latin, document_fonts::BodyFaceStyle::Italic, vec![0u8, 1, 2, 3]));
-    let set = std::sync::Arc::new(BodyFaceSet::new(faces));
+    // The damaged face takes the `Mono/Latin/Bold` triple, which the pack does
+    // not carry: `BodyFaceSet::new` rejects a repeated registration, so the
+    // damaged entry must be a face of its own.
+    faces.push(BodyFace::new(BodyFamily::Mono, BodyScript::Latin, document_fonts::BodyFaceStyle::Bold, vec![0u8, 1, 2, 3]));
+    let set = std::sync::Arc::new(BodyFaceSet::new(faces).expect("distinct face triples"));
     let mut graph = DocumentGraph::new(DocumentId(98));
     graph.push_block(Block::Paragraph { content: vec![Inline::Text { text: "Hello".into() }] });
     write_document_pdf(&mut graph, &set).expect("the readable faces still serve the page");

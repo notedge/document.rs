@@ -60,6 +60,7 @@ impl Default for ChromeHint {
     }
 }
 
+use document_fonts::BodyFamily;
 use document_text::math::MathFontFamily;
 
 /// Horizontal alignment a theme asks for.
@@ -508,6 +509,16 @@ pub struct LayoutHint {
     /// math face passes the family explicitly, so the choice travels with the
     /// layout instead of with process startup order.
     pub math_font: Option<MathFontFamily>,
+    /// Body text family a template declares, or `None` for the built-in prose
+    /// face.
+    ///
+    /// `Some(BodyFamily::Named(name))` makes every body-derived run — prose,
+    /// headings, tables, chrome — measure from and carry that registered
+    /// family name, while inline code stays on the monospaced face. A name no
+    /// supplied face registers aborts the pass with
+    /// `vutex.layout.text_family_unregistered` instead of silently folding
+    /// onto the serif default.
+    pub text_family: Option<BodyFamily>,
     /// Page chrome overrides a template asks for.
     pub chrome: ChromeHint,
     /// Heading levels (H1 to H4) that start a new page.
@@ -541,6 +552,7 @@ impl LayoutHint {
             line_height: 1.72,
             style: StyleTokens::modern(),
             math_font: None,
+            text_family: None,
             chrome: ChromeHint::themed(),
             section_breaks: [false; 4],
         }

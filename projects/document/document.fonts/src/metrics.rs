@@ -43,21 +43,22 @@ pub fn body_style(style: FontStyle) -> BodyFaceStyle {
 
 /// Family and style a text run asks the body faces for.
 ///
-/// Only monospaced text is treated as code. Every other declared family paints
-/// with the prose face, because the bundled set carries one reading face per
-/// script rather than one per declared family name.
-pub fn key_for_run(family: &str, style: FontStyle) -> BodyFaceKey {
-    BodyFaceKey {
-        family: if family.to_ascii_lowercase().contains("mono") { BodyFamily::Mono } else { BodyFamily::Serif },
-        style: body_style(style),
-    }
+/// The caller resolves a declared name onto a [`BodyFamily`] first: a host
+/// name that matches a registered [`Named`](BodyFamily::Named) face keeps its
+/// own identity, and only the built-in families fold onto prose or code.
+pub fn key_for_run(family: BodyFamily, style: FontStyle) -> BodyFaceKey {
+    BodyFaceKey { family, style: body_style(style) }
 }
 
 /// Faces tried for one requested family and style, in order.
 ///
 /// A run of the requested family and style comes first, then the regular faces
 /// of the same family, then the prose family, so a bold code run or a Han
-/// character inside a code block still finds a face.
+/// character inside a code block still finds a face. For a
+/// [`Named`](BodyFamily::Named) family this is the chain
+/// `Named + requested style`, `Named + Regular`, `Serif + requested style`,
+/// `Serif + Regular`, so a named family that lacks a style or a script is
+/// served by the prose faces instead of failing the page.
 pub fn fallback_order(key: BodyFaceKey) -> Vec<BodyFaceKey> {
     let candidates = [
         key,
@@ -193,6 +194,9 @@ impl FaceMetrics {
 pub struct BodyMetrics {
     /// Parsed faces in declaration order, so Latin precedes CJK within one style.
     faces: Vec<(BodyFaceKey, FaceMetrics)>,
+    /// Names of every registered `Named` family, even when its face was
+    /// unreadable, so a name lookup stays distinct from a glyph lookup.
+    named: Vec<&'static str>,
     /// Labels of faces whose file could not supply metrics.
     unreadable: Vec<String>,
     /// Labels of faces whose `kern` feature exists but could not be applied.
@@ -205,11 +209,17 @@ impl BodyMetrics {
     /// A face whose file cannot be parsed is recorded in [`Self::unreadable`],
     /// exactly as [`Self::from_faces`] does.
     pub fn from_set(set: &BodyFaceSet) -> Self {
-        Self::from_faces(
+        let mut metrics = Self::from_faces(
             set.faces()
                 .iter()
                 .map(|face| (BodyFaceKey { family: face.family, style: face.style }, face_label(face), face.bytes.as_ref())),
-        )
+        );
+        for face in set.faces() {
+            if let BodyFamily::Named(name) = face.family {
+                metrics.named.push(name);
+            }
+        }
+        metrics
     }
 
     /// Metrics of an arbitrary face set, for hosts that paint their own faces.
@@ -219,9 +229,13 @@ impl BodyMetrics {
     /// be parsed are recorded in [`Self::unreadable`] and skipped.
     pub fn from_faces<'a>(faces: impl IntoIterator<Item = (BodyFaceKey, String, &'a [u8])>) -> Self {
         let mut parsed = Vec::new();
+        let mut named = Vec::new();
         let mut unreadable = Vec::new();
         let mut kerning_unavailable = Vec::new();
         for (key, label, bytes) in faces {
+            if let BodyFamily::Named(name) = key.family {
+                named.push(name);
+            }
             match FaceMetrics::parse(bytes) {
                 Ok(metrics) => {
                     if metrics.kerning_unavailable() {
@@ -232,7 +246,26 @@ impl BodyMetrics {
                 Err(_) => unreadable.push(label),
             }
         }
-        Self { faces: parsed, unreadable, kerning_unavailable }
+        Self { faces: parsed, named, unreadable, kerning_unavailable }
+    }
+
+    /// Exact key for a declared family name, `None` when the name is not known.
+    ///
+    /// `"serif"` and `"monospace"` resolve to the built-in families, and any
+    /// other name must match a registered [`Named`](BodyFamily::Named) family
+    /// as a full case-sensitive string. An unknown name returns `None` instead
+    /// of folding onto [`Serif`](BodyFamily::Serif), because a missing family
+    /// is a different failure from a face that lacks one glyph.
+    pub fn key_for_name(&self, name: &str, style: FontStyle) -> Option<BodyFaceKey> {
+        let family = match name {
+            "serif" => BodyFamily::Serif,
+            "monospace" => BodyFamily::Mono,
+            other => {
+                let registered = self.named.iter().copied().find(|registered| *registered == other)?;
+                BodyFamily::Named(registered)
+            }
+        };
+        Some(key_for_run(family, style))
     }
 
     /// Advance width of one character in em units, through the fallback order.
@@ -240,11 +273,21 @@ impl BodyMetrics {
     /// `None` means no face in [`fallback_order`] covers the character, so the
     /// caller must fall back to its heuristic and report the gap.
     pub fn advance_em(&self, key: BodyFaceKey, ch: char) -> Option<f64> {
+        self.advance_em_family(key, ch).map(|(advance, _)| advance)
+    }
+
+    /// Like [`Self::advance_em`], and also names the family that served the
+    /// character.
+    ///
+    /// A served family different from the requested one means the character
+    /// came from the fallback chain, which is the gap a caller reports for a
+    /// named family instead of measuring it silently from the prose face.
+    pub fn advance_em_family(&self, key: BodyFaceKey, ch: char) -> Option<(f64, BodyFamily)> {
         for candidate in fallback_order(key) {
             for (face_key, metrics) in &self.faces {
                 if *face_key == candidate {
                     if let Some(advance) = metrics.advance_em(ch) {
-                        return Some(advance);
+                        return Some((advance, candidate.family));
                     }
                 }
             }
@@ -292,8 +335,15 @@ impl BodyMetrics {
 }
 
 /// Human readable label of a bundled face for diagnostics.
+///
+/// A `Named` family is labeled by its registered name itself, so a diagnostic
+/// about a host face names the family the host declared.
 fn face_label(face: &BodyFace) -> String {
-    format!("{:?}/{:?}/{:?}", face.family, face.script, face.style)
+    let family = match face.family {
+        BodyFamily::Named(name) => name.to_string(),
+        other => format!("{other:?}"),
+    };
+    format!("{family}/{:?}/{:?}", face.script, face.style)
 }
 
 #[cfg(test)]
@@ -436,12 +486,45 @@ mod tests {
                 synthetic_font(2048, &[('i', 1229)]),
             ),
         ])
+        .expect("every face carries a distinct triple")
+    }
+
+    /// The built-in pack plus the host family `Test Serif`, whose Latin face
+    /// covers `a` with an advance the prose faces do not carry.
+    fn named_pack() -> BodyFaceSet {
+        BodyFaceSet::new(vec![
+            BodyFace::new(
+                BodyFamily::Serif,
+                crate::BodyScript::Latin,
+                BodyFaceStyle::Regular,
+                synthetic_font(2048, &[('a', 1000), ('b', 1200)]),
+            ),
+            BodyFace::new(
+                BodyFamily::Serif,
+                crate::BodyScript::Cjk,
+                BodyFaceStyle::Regular,
+                synthetic_font(1000, &[('同', 1000)]),
+            ),
+            BodyFace::new(
+                BodyFamily::Mono,
+                crate::BodyScript::Latin,
+                BodyFaceStyle::Regular,
+                synthetic_font(2048, &[('i', 1229)]),
+            ),
+            BodyFace::new(
+                BodyFamily::Named("Test Serif"),
+                crate::BodyScript::Latin,
+                BodyFaceStyle::Regular,
+                synthetic_font(2048, &[('a', 1500)]),
+            ),
+        ])
+        .expect("every face carries a distinct triple")
     }
 
     #[test]
     fn advance_widths_come_from_the_face_hmtx() {
         let metrics = BodyMetrics::from_set(&pack());
-        let key = key_for_run("serif", FontStyle::Normal);
+        let key = key_for_run(BodyFamily::Serif, FontStyle::Normal);
         assert_eq!(metrics.advance_em(key, 'a'), Some(1000.0 / 2048.0));
         assert_eq!(metrics.advance_em(key, 'b'), Some(1200.0 / 2048.0));
     }
@@ -449,14 +532,14 @@ mod tests {
     #[test]
     fn han_advance_is_one_em() {
         let metrics = BodyMetrics::from_set(&pack());
-        let key = key_for_run("serif", FontStyle::Normal);
+        let key = key_for_run(BodyFamily::Serif, FontStyle::Normal);
         assert_eq!(metrics.advance_em(key, '同'), Some(1.0));
     }
 
     #[test]
     fn mono_advance_tracks_the_face_units() {
         let metrics = BodyMetrics::from_set(&pack());
-        let key = key_for_run("monospace", FontStyle::Normal);
+        let key = key_for_run(BodyFamily::Mono, FontStyle::Normal);
         let advance = metrics.advance_em(key, 'i').expect("the mono face covers `i`");
         assert!((advance - 0.6).abs() < 1e-3, "mono advance was {advance}");
     }
@@ -471,7 +554,7 @@ mod tests {
     #[test]
     fn face_without_a_kern_table_reports_no_pair() {
         let metrics = BodyMetrics::from_set(&pack());
-        let key = key_for_run("serif", FontStyle::Normal);
+        let key = key_for_run(BodyFamily::Serif, FontStyle::Normal);
         assert_eq!(metrics.kerning_em(key, 'a', 'b'), None);
     }
 
@@ -503,7 +586,7 @@ mod tests {
     #[test]
     fn coverage_is_reported_per_face() {
         let metrics = BodyMetrics::from_set(&pack());
-        let key = key_for_run("serif", FontStyle::Normal);
+        let key = key_for_run(BodyFamily::Serif, FontStyle::Normal);
         assert_eq!(metrics.advance_em(key, 'z'), None);
         assert_eq!(metrics.advance_em(key, 'A'), None);
         assert_eq!(metrics.advance_em(key, 'a'), Some(1000.0 / 2048.0));
@@ -529,6 +612,67 @@ mod tests {
         data.extend_from_slice(&[0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08]); // lookup 0
         data.extend_from_slice(&[0x00, 0x02]); // pair pos format 2
         assert_eq!(read_gpos_kern(&data), Err(KernReadError::Format2));
+    }
+
+    #[test]
+    fn named_family_metrics_hit_exact_key() {
+        let set = named_pack();
+        let metrics = BodyMetrics::from_set(&set);
+        let key = metrics.key_for_name("Test Serif", FontStyle::Normal).expect("a registered name resolves exactly");
+        assert_eq!(key, BodyFaceKey { family: BodyFamily::Named("Test Serif"), style: BodyFaceStyle::Regular });
+        assert_eq!(metrics.advance_em(key, 'a'), Some(1500.0 / 2048.0));
+        let serif = key_for_run(BodyFamily::Serif, FontStyle::Normal);
+        assert_eq!(metrics.advance_em(serif, 'a'), Some(1000.0 / 2048.0));
+        assert_ne!(
+            metrics.advance_em(key, 'a'),
+            metrics.advance_em(serif, 'a'),
+            "the named face must not fold onto the prose face"
+        );
+    }
+
+    #[test]
+    fn named_family_falls_back_to_serif() {
+        let set = named_pack();
+        let metrics = BodyMetrics::from_set(&set);
+        let key = metrics.key_for_name("Test Serif", FontStyle::Normal).expect("a registered name resolves exactly");
+        // `b` lives only in the prose Latin face, so the chain serves it from Serif.
+        let (advance, served) = metrics.advance_em_family(key, 'b').expect("the prose face covers `b`");
+        assert_eq!(served, BodyFamily::Serif, "the gap must be observable as a serif fallback");
+        assert_eq!(advance, 1200.0 / 2048.0);
+        // A Han character falls back to the prose CJK face the same way.
+        let (advance, served) = metrics.advance_em_family(key, '同').expect("the prose CJK face covers `同`");
+        assert_eq!(served, BodyFamily::Serif);
+        assert_eq!(advance, 1.0);
+    }
+
+    #[test]
+    fn unregistered_name_is_none() {
+        let set = named_pack();
+        let metrics = BodyMetrics::from_set(&set);
+        assert_eq!(metrics.key_for_name("Missing", FontStyle::Normal), None, "an unknown name never folds onto Serif");
+        assert_eq!(set.family_named("Missing"), None);
+        assert_eq!(set.family_named("test serif"), None, "the comparison is a full case-sensitive string");
+        assert_eq!(set.family_named("Test Serif"), Some(BodyFamily::Named("Test Serif")));
+    }
+
+    #[test]
+    fn duplicate_named_face_rejected() {
+        let error = BodyFaceSet::new(vec![
+            BodyFace::new(
+                BodyFamily::Named("Dup Serif"),
+                crate::BodyScript::Latin,
+                BodyFaceStyle::Regular,
+                synthetic_font(2048, &[('a', 1000)]),
+            ),
+            BodyFace::new(
+                BodyFamily::Named("Dup Serif"),
+                crate::BodyScript::Latin,
+                BodyFaceStyle::Regular,
+                synthetic_font(2048, &[('a', 1200)]),
+            ),
+        ])
+        .expect_err("one (family, script, style) triple registers exactly once");
+        assert!(error.to_string().contains("Dup Serif"), "the error names the registered face: {error}");
     }
 }
 

@@ -21,12 +21,20 @@ pub use metrics::{BodyFaceKey, BodyMetrics, FaceMetrics, MetricsError, body_styl
 /// advance so columns line up. The two never substitute for each other, except
 /// that a code block containing Han characters falls back to the body CJK face
 /// because no monospaced CJK face is required.
+///
+/// [`Named`](Self::Named) carries any further family a host registers, for
+/// example the family a template declares as its body text face. The name is
+/// `'static` because the host interns it at registration, comparison is exact
+/// and case-sensitive, and no code may fold a name onto [`Serif`](Self::Serif)
+/// by substring guessing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum BodyFamily {
     /// Upright reading face for prose.
     Serif,
     /// Fixed-advance face for code and verbatim text.
     Mono,
+    /// A family registered by the host under its own name.
+    Named(&'static str),
 }
 
 /// Script coverage of one body face.
@@ -154,6 +162,11 @@ impl std::error::Error for FaceSetError {}
 /// `document.fonts` never ships font bytes. A host either embeds its own asset
 /// pack and calls [`BodyFaceSet::new`], or keeps the files in a directory laid
 /// out as [`FACE_FILES`] describes and calls [`BodyFaceSet::load_from`].
+///
+/// A pack may carry [`Named`](BodyFamily::Named) families beside the built-in
+/// ones. One named family can hold several faces (Latin and CJK scripts,
+/// regular, bold, and italic styles), and the Latin face is declared before the
+/// CJK face so coverage keeps the same priority [`FACE_FILES`] describes.
 #[derive(Debug, Clone, Default)]
 pub struct BodyFaceSet {
     faces: Vec<BodyFace>,
@@ -161,8 +174,22 @@ pub struct BodyFaceSet {
 
 impl BodyFaceSet {
     /// Build a pack from faces the host already holds.
-    pub fn new(faces: Vec<BodyFace>) -> Self {
-        Self { faces }
+    ///
+    /// Repeated registration of one `(family, script, style)` triple is
+    /// rejected instead of letting face order decide which face serves a run.
+    pub fn new(faces: Vec<BodyFace>) -> Result<Self, FaceSetError> {
+        let mut seen = Vec::with_capacity(faces.len());
+        for face in &faces {
+            let triple = (face.family, face.script, face.style);
+            if seen.contains(&triple) {
+                return Err(FaceSetError {
+                    file: face_triple_label(triple),
+                    reason: "family, script, and style are already registered by an earlier face".to_string(),
+                });
+            }
+            seen.push(triple);
+        }
+        Ok(Self { faces })
     }
 
     /// Load a pack from a directory that carries one file per [`FACE_FILES`] entry.
@@ -185,6 +212,19 @@ impl BodyFaceSet {
         &self.faces
     }
 
+    /// The registered [`Named`](BodyFamily::Named) family whose name equals
+    /// `name`, compared as a full case-sensitive string.
+    ///
+    /// An unknown name returns `None`; the lookup never folds onto
+    /// [`Serif`](BodyFamily::Serif), because a missing family must stay a
+    /// distinct failure from a face that lacks one glyph.
+    pub fn family_named(&self, name: &str) -> Option<BodyFamily> {
+        self.faces
+            .iter()
+            .find(|face| matches!(face.family, BodyFamily::Named(registered) if registered == name))
+            .map(|face| face.family)
+    }
+
     /// Number of faces in the pack.
     pub fn len(&self) -> usize {
         self.faces.len()
@@ -194,6 +234,16 @@ impl BodyFaceSet {
     pub fn is_empty(&self) -> bool {
         self.faces.is_empty()
     }
+}
+
+/// Human readable label of one `(family, script, style)` registration triple.
+fn face_triple_label(triple: (BodyFamily, BodyScript, BodyFaceStyle)) -> String {
+    let (family, script, style) = triple;
+    let name = match family {
+        BodyFamily::Named(name) => name.to_string(),
+        other => format!("{other:?}"),
+    };
+    format!("{name}/{script:?}/{style:?}")
 }
 
 /// Human readable cause of an unreadable face directory entry.
