@@ -994,7 +994,9 @@ enum DynamicGroup {
 
 /// Scan the bracket group of a `#`-prefixed Typst expression.
 ///
-/// Only a group that starts on the same line as the expression head counts.
+/// Only a group that opens on the same line as the expression head counts. The
+/// head may be a spaced command like `#set page(...)`, so spaces and tabs
+/// between name segments are skipped before the opening bracket must appear.
 /// Parentheses, brackets and braces nest. String literals and both comment
 /// forms are skipped so their brackets cannot close the group early.
 fn scan_dynamic_group(source: &str, start: usize, limit: usize) -> DynamicGroup {
@@ -1003,11 +1005,27 @@ fn scan_dynamic_group(source: &str, start: usize, limit: usize) -> DynamicGroup 
         return DynamicGroup::Absent;
     }
     let bytes = source.as_bytes();
+    let is_name = |byte: u8| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-');
+    let is_open = |byte: u8| matches!(byte, b'(' | b'[' | b'{');
     let mut index = if bytes[start] == b'#' { start + 1 } else { start };
-    while index < limit && matches!(bytes[index], b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-') {
-        index += 1;
+    loop {
+        while index < limit && is_name(bytes[index]) {
+            index += 1;
+        }
+        let mut gap = index;
+        while gap < limit && matches!(bytes[gap], b' ' | b'\t') {
+            gap += 1;
+        }
+        if gap < limit && (is_name(bytes[gap]) || is_open(bytes[gap])) {
+            index = gap;
+            if is_open(bytes[gap]) {
+                break;
+            }
+            continue;
+        }
+        break;
     }
-    if index >= limit || !matches!(bytes[index], b'(' | b'[' | b'{') {
+    if index >= limit || !is_open(bytes[index]) {
         return DynamicGroup::Absent;
     }
     let mut expected: Vec<u8> = Vec::new();

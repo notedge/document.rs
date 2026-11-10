@@ -277,3 +277,26 @@ fn repeated_inline_blocks_keep_their_own_spans() {
     }
     assert_ne!(spans[0], spans[1], "the two occurrences must not merge onto the first one");
 }
+
+#[test]
+fn cross_line_group_after_a_spaced_head_is_one_opaque_block() {
+    let group = "#set page(\n  width: 10cm,\n)";
+    let text = format!("= Intro\n\n{group}\n\nBody.\n");
+    let graph = import_typst_bytes("spaced-head.typ", &text).unwrap();
+
+    let (kind, payload, span) = only_opaque(&graph);
+    assert_eq!(kind, "typst.expression.set");
+    assert_eq!(payload, group, "the payload covers the whole group including its line breaks");
+    assert_eq!(&text[span.start as usize..span.end as usize], group, "the span slices exactly the authored group");
+
+    let dynamic_losses = graph.coverage.loss.iter().filter(|marker| marker.code == "import.typst.dynamic_content").count();
+    assert_eq!(dynamic_losses, 1, "one group is one loss: {:?}", graph.coverage.loss);
+    let index = loss_index(&graph, "import.typst.dynamic_content");
+    assert_eq!(graph.loss_span(index), Some(span), "the loss span covers the complete group");
+
+    assert!(
+        blocks(&graph).iter().any(|node| matches!(&node.block, Block::Section { .. })),
+        "the heading before the group survives"
+    );
+    assert_eq!(paragraph_text(&graph), vec!["Body.".to_string()], "the group body never surfaces as body text");
+}
