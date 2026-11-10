@@ -10,7 +10,9 @@ use document_ir::DocumentGraph;
 use document_layout::{BodyMetrics, Diagrams, LayoutHint, document::layout_with_diagnostics};
 use document_presentation::build_display_presentation;
 
-use crate::report::{IMPORT_FAILED, MAX_SOURCE_BYTES, SOURCE_TOO_LARGE, build_diagnostics, build_report, unterminated_group};
+use crate::report::{
+    IMPORT_FAILED, INVALID_GRAPH, MAX_SOURCE_BYTES, SOURCE_TOO_LARGE, build_diagnostics, build_report, unterminated_group,
+};
 
 /// Outcome of a Typst import: the document graph, its conversion report, and
 /// the diagnostics the lowering produced.
@@ -88,17 +90,39 @@ impl std::error::Error for TypstError {}
 /// The report and diagnostics never abort the document for a construct that
 /// stays opaque. A dynamic construct whose bracket group the source never
 /// closes is refused, because the lowering cannot delimit where the construct
-/// ends.
+/// ends. A graph that breaks a document-model invariant is refused through
+/// [`validate_graph`] before any report is built.
 pub fn import_source(label: &str, source: &str) -> Result<TypstDocument, TypstError> {
     ensure_source_budget(source)?;
     let graph = document_formats::import::typst::import_typst_bytes(label, source)
         .map_err(|error| TypstError::import_failed(error.to_string()))?;
+    validate_graph(&graph)?;
     if let Some(diagnostic) = unterminated_group(&graph, source) {
         return Err(TypstError::from(diagnostic));
     }
     let report = build_report(&graph);
     let diagnostics = build_diagnostics(&graph, source);
     Ok(TypstDocument { graph, report, diagnostics })
+}
+
+/// Check that a lowered graph satisfies the document-model invariants layout
+/// relies on.
+///
+/// The profile rejects an invalid graph instead of handing it to layout, which
+/// has no independent way to detect a broken identity or containment relation.
+/// The check only calls [`DocumentGraph::validate`], so the invariant logic
+/// stays owned by the document model.
+pub fn validate_graph(graph: &DocumentGraph) -> Result<(), TypstError> {
+    let validation = graph.validate();
+    if validation.is_valid() {
+        return Ok(());
+    }
+    Err(TypstError::from(Diagnostic {
+        code: INVALID_GRAPH.to_string(),
+        severity: Severity::Error,
+        message: format!("lowered graph breaks document-model invariants: {:?}", validation.issues),
+        span: None,
+    }))
 }
 
 /// Read a Typst file and import it with the file path as the document label.

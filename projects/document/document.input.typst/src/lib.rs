@@ -5,5 +5,5 @@
 mod adapter;
 mod report;
 
-pub use adapter::{TypstDocument, TypstError, TypstRender, import_path, import_source, render_svg};
-pub use report::{IMPORT_FAILED, MATH_SOURCE_PRESERVED, MAX_SOURCE_BYTES, SOURCE_TOO_LARGE, UNTERMINATED_GROUP};
+pub use adapter::{TypstDocument, TypstError, TypstRender, import_path, import_source, render_svg, validate_graph};
+pub use report::{IMPORT_FAILED, INVALID_GRAPH, MATH_SOURCE_PRESERVED, MAX_SOURCE_BYTES, SOURCE_TOO_LARGE, UNTERMINATED_GROUP};

@@ -1,7 +1,7 @@
 //! End-to-end checks for the Typst input adapter.
 
 use document_compose::{Severity, SourceSpan};
-use document_input_typst::{IMPORT_FAILED, MATH_SOURCE_PRESERVED, import_path, import_source, render_svg};
+use document_input_typst::{IMPORT_FAILED, MATH_SOURCE_PRESERVED, UNTERMINATED_GROUP, import_path, import_source, render_svg};
 
 const MINIMAL: &str =
     "= Introduction\n\nHello *world* and _emphasis_ with a [link](https://example.com).\n\n- First item\n- Second item\n";
@@ -188,6 +188,52 @@ fn single_line_dynamic_group_with_balanced_strings_still_imports() {
 
     assert_eq!(document.report.unsupported.len(), 1);
     assert_eq!(document.report.unsupported[0].code, "import.typst.dynamic_content");
+}
+
+#[test]
+fn block_in_inline_context_diagnostic_points_at_the_authored_block() {
+    let source = "Lead *a\n- b*\n";
+    let document = import_source("inline-block.typ", source).expect("a block inside an inline fragment degrades to a loss");
+
+    let matched: Vec<_> =
+        document.diagnostics.iter().filter(|diagnostic| diagnostic.code == "import.typst.block_in_inline_context").collect();
+    assert_eq!(matched.len(), 1, "one diagnostic per rejected block: {:?}", document.diagnostics);
+    let diagnostic = matched[0];
+    assert_eq!(diagnostic.severity, Severity::Warning);
+    let span = diagnostic.span.expect("the diagnostic carries the authored span recovered by the lowering");
+    assert_eq!(&source[span.start as usize..span.end as usize], "- b", "the span must slice the rejected construct");
+}
+
+#[test]
+fn cross_line_set_group_after_a_spaced_head_imports_as_one_opaque_construct() {
+    let source = "= Intro\n\n#set page(\n  width: 10cm,\n)\n\nBody.\n";
+    let document = import_source("spaced-set.typ", source).expect("the balanced cross-line group imports");
+
+    let group = "#set page(\n  width: 10cm,\n)";
+    let start = source.find(group).expect("the group sits in the source");
+    assert_eq!(document.report.opaque.len(), 1, "{:?}", document.report.opaque);
+    assert_eq!(document.report.opaque[0].code, "typst.expression.set");
+    assert_eq!(document.report.opaque[0].detail, group, "the opaque detail keeps the full payload, not the first line");
+
+    let dynamic: Vec<_> =
+        document.diagnostics.iter().filter(|diagnostic| diagnostic.code == "import.typst.dynamic_content").collect();
+    assert_eq!(dynamic.len(), 1, "exactly one dynamic-content diagnostic for the group: {:?}", document.diagnostics);
+    assert_eq!(dynamic[0].span, Some(SourceSpan { start: start as u32, end: (start + group.len()) as u32 }));
+
+    let rendered = render_svg("spaced-set.typ", source).expect("the group stays opaque while the page renders");
+    assert!(rendered.svg.contains("Intro"), "the text before the group reaches the page");
+    assert!(rendered.svg.contains("Body."), "the text after the group reaches the page");
+    for leaked in ["10cm", "width:"] {
+        assert!(!rendered.svg.contains(leaked), "the group body leaked into the page: {leaked}");
+    }
+}
+
+#[test]
+fn cross_line_set_group_without_a_closing_bracket_is_refused() {
+    let source = "= Intro\n\n#set page(\n  width: 10cm,\n";
+    let error = import_source("unclosed-spaced-set.typ", source).expect_err("an unbalanced group cannot be delimited");
+    assert_eq!(error.code(), UNTERMINATED_GROUP);
+    assert_eq!(error.diagnostic.severity, Severity::Error);
 }
 
 #[test]

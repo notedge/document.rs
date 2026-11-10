@@ -251,3 +251,52 @@ fn unterminated_group_is_diagnosed_instead_of_swallowed() {
     assert_eq!(graph.loss_span(index), Some(span));
     assert!(paragraph_text(&graph).is_empty(), "no construct fragment may leak into the body");
 }
+
+#[test]
+fn block_in_inline_context_loss_carries_the_authored_span() {
+    let text = "Lead *a\n- b*\n";
+    let graph = import_typst_bytes("inline-block.typ", text).unwrap();
+
+    let index = loss_index(&graph, "import.typst.block_in_inline_context");
+    let span = graph.loss_span(index).expect("block-in-inline loss must carry its authored span");
+    assert_eq!(&text[span.start as usize..span.end as usize], "- b", "the span must name the rejected block construct");
+}
+
+#[test]
+fn repeated_inline_blocks_keep_their_own_spans() {
+    let text = "*a\n- b\nx\n- b*\n";
+    let graph = import_typst_bytes("twice.typ", text).unwrap();
+
+    let spans: Vec<document_ir::SourceSpan> = (0..graph.coverage.loss.len())
+        .filter(|index| graph.coverage.loss[*index].code == "import.typst.block_in_inline_context")
+        .map(|index| graph.loss_span(index).expect("each repeated payload keeps its own span"))
+        .collect();
+    assert_eq!(spans.len(), 2, "{:?}", graph.coverage.loss);
+    for span in &spans {
+        assert_eq!(&text[span.start as usize..span.end as usize], "- b");
+    }
+    assert_ne!(spans[0], spans[1], "the two occurrences must not merge onto the first one");
+}
+
+#[test]
+fn cross_line_group_after_a_spaced_head_is_one_opaque_block() {
+    let group = "#set page(\n  width: 10cm,\n)";
+    let text = format!("= Intro\n\n{group}\n\nBody.\n");
+    let graph = import_typst_bytes("spaced-head.typ", &text).unwrap();
+
+    let (kind, payload, span) = only_opaque(&graph);
+    assert_eq!(kind, "typst.expression.set");
+    assert_eq!(payload, group, "the payload covers the whole group including its line breaks");
+    assert_eq!(&text[span.start as usize..span.end as usize], group, "the span slices exactly the authored group");
+
+    let dynamic_losses = graph.coverage.loss.iter().filter(|marker| marker.code == "import.typst.dynamic_content").count();
+    assert_eq!(dynamic_losses, 1, "one group is one loss: {:?}", graph.coverage.loss);
+    let index = loss_index(&graph, "import.typst.dynamic_content");
+    assert_eq!(graph.loss_span(index), Some(span), "the loss span covers the complete group");
+
+    assert!(
+        blocks(&graph).iter().any(|node| matches!(&node.block, Block::Section { .. })),
+        "the heading before the group survives"
+    );
+    assert_eq!(paragraph_text(&graph), vec!["Body.".to_string()], "the group body never surfaces as body text");
+}
