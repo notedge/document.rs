@@ -124,7 +124,7 @@
     },
     {
       "language": "typst",
-      "entry": ["import_source", "import_path", "render_svg"],
+      "entry": ["import_source", "import_path", "validate_graph", "render_svg"],
       "supported": [
         {"construct": "headings and paragraphs", "sample": "= Title\n\nBody.\n"},
         {"construct": "unordered and ordered lists", "sample": "- one\n- two\n"},

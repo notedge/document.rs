@@ -19,6 +19,9 @@ pub const MATH_SOURCE_PRESERVED: &str = "import.typst.math.source_preserved";
 /// Diagnostic code for a dynamic construct whose group the source never closes.
 pub const UNTERMINATED_GROUP: &str = "vutex.input.typst.unterminated_dynamic_group";
 
+/// Diagnostic code for a lowered graph that violates a document-model invariant.
+pub const INVALID_GRAPH: &str = "vutex.input.typst.invalid_graph";
+
 /// Diagnostic code for a source larger than the profile's byte budget.
 pub const SOURCE_TOO_LARGE: &str = "vutex.input.typst.source_too_large";
 
