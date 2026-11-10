@@ -317,7 +317,13 @@ impl TemplateLoader for MapTemplateLoader {
 }
 
 /// Split `scheme:path` when the head is a valid scheme.
-fn split_scheme(reference: &str) -> Option<(&str, &str)> {
+///
+/// Hosts that keep their own multi-root policy need the same head judgment as
+/// the loader, so the classification is public and no host carries a second
+/// parser. A `None` result means the reference is bare or relative, never that
+/// its scheme is unknown; only the loader knows which schemes are registered.
+#[must_use]
+pub fn split_scheme(reference: &str) -> Option<(&str, &str)> {
     let (head, rest) = reference.split_once(':')?;
     let first = head.chars().next()?;
     if !first.is_ascii_alphabetic()

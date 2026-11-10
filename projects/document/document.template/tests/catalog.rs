@@ -1,4 +1,6 @@
-use document_template::{MapTemplateLoader, TemplateError, TemplateId, TemplateLoader, TemplateRoot, codes, normalize_path};
+use document_template::{
+    MapTemplateLoader, TemplateError, TemplateId, TemplateLoader, TemplateRoot, codes, normalize_path, split_scheme,
+};
 
 fn loader() -> MapTemplateLoader {
     MapTemplateLoader::new()
@@ -123,4 +125,19 @@ fn public_path_normalization_rejects_parent_segments() {
     assert_eq!(normalize_path(" pages\\home.hbs ").as_deref(), Some("pages/home.hbs"));
     assert_eq!(normalize_path("../a"), None);
     assert_eq!(normalize_path(""), None);
+}
+
+#[test]
+fn public_scheme_splitter_classifies_reference_heads() {
+    assert_eq!(split_scheme("high:pages/home.hbs"), Some(("high", "pages/home.hbs")));
+    assert_eq!(split_scheme("a-b+c_d:hello"), Some(("a-b+c_d", "hello")));
+    assert_eq!(split_scheme("pages/home.hbs"), None);
+    assert_eq!(split_scheme("./home.hbs"), None);
+    assert_eq!(split_scheme("1bad:hello"), None);
+    assert_eq!(split_scheme(":hello"), None);
+
+    // `None` never means an unknown scheme; the loader still reports that.
+    let loader = MapTemplateLoader::new().with_root(TemplateRoot::new("view", 0));
+    assert_eq!(split_scheme("nope:a"), Some(("nope", "a")));
+    assert_eq!(error_code(loader.resolve("nope:a", None, EXTENSIONS)), codes::UNKNOWN_SCHEME);
 }

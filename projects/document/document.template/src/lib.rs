@@ -13,7 +13,7 @@ mod render;
 
 pub use budget::RenderBudget;
 pub use capability::{TemplateCapability, TemplateContentKind, TemplateStatus};
-pub use catalog::{MapTemplateLoader, TemplateId, TemplateLoader, TemplateRoot, normalize_path};
+pub use catalog::{MapTemplateLoader, TemplateId, TemplateLoader, TemplateRoot, normalize_path, split_scheme};
 pub use error::{COMPONENT, NAMESPACE, TemplateError, origin};
 pub use limits::{RenderLimits, RenderOptions};
 pub use render::{RenderOutput, RenderRequest, TemplateEngine};
