@@ -251,3 +251,29 @@ fn unterminated_group_is_diagnosed_instead_of_swallowed() {
     assert_eq!(graph.loss_span(index), Some(span));
     assert!(paragraph_text(&graph).is_empty(), "no construct fragment may leak into the body");
 }
+
+#[test]
+fn block_in_inline_context_loss_carries_the_authored_span() {
+    let text = "Lead *a\n- b*\n";
+    let graph = import_typst_bytes("inline-block.typ", text).unwrap();
+
+    let index = loss_index(&graph, "import.typst.block_in_inline_context");
+    let span = graph.loss_span(index).expect("block-in-inline loss must carry its authored span");
+    assert_eq!(&text[span.start as usize..span.end as usize], "- b", "the span must name the rejected block construct");
+}
+
+#[test]
+fn repeated_inline_blocks_keep_their_own_spans() {
+    let text = "*a\n- b\nx\n- b*\n";
+    let graph = import_typst_bytes("twice.typ", text).unwrap();
+
+    let spans: Vec<document_ir::SourceSpan> = (0..graph.coverage.loss.len())
+        .filter(|index| graph.coverage.loss[*index].code == "import.typst.block_in_inline_context")
+        .map(|index| graph.loss_span(index).expect("each repeated payload keeps its own span"))
+        .collect();
+    assert_eq!(spans.len(), 2, "{:?}", graph.coverage.loss);
+    for span in &spans {
+        assert_eq!(&text[span.start as usize..span.end as usize], "- b");
+    }
+    assert_ne!(spans[0], spans[1], "the two occurrences must not merge onto the first one");
+}

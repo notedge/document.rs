@@ -191,6 +191,20 @@ fn single_line_dynamic_group_with_balanced_strings_still_imports() {
 }
 
 #[test]
+fn block_in_inline_context_diagnostic_points_at_the_authored_block() {
+    let source = "Lead *a\n- b*\n";
+    let document = import_source("inline-block.typ", source).expect("a block inside an inline fragment degrades to a loss");
+
+    let matched: Vec<_> =
+        document.diagnostics.iter().filter(|diagnostic| diagnostic.code == "import.typst.block_in_inline_context").collect();
+    assert_eq!(matched.len(), 1, "one diagnostic per rejected block: {:?}", document.diagnostics);
+    let diagnostic = matched[0];
+    assert_eq!(diagnostic.severity, Severity::Warning);
+    let span = diagnostic.span.expect("the diagnostic carries the authored span recovered by the lowering");
+    assert_eq!(&source[span.start as usize..span.end as usize], "- b", "the span must slice the rejected construct");
+}
+
+#[test]
 fn comments_produce_no_text_nodes() {
     let rendered = render_svg("comments.typ", COMMENTS).expect("comments import");
 

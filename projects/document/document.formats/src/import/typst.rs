@@ -40,7 +40,7 @@ pub fn import_typst_bytes(label: &str, text: &str) -> Result<DocumentGraph, Form
 }
 
 fn lower_typst_root(root: &TypstRoot, text: &str, id: DocumentId) -> DocumentGraph {
-    let mut lowerer = TypstLowerer { graph: DocumentGraph::new(id), source: text, cursor: 0, line_breaks: 0 };
+    let mut lowerer = TypstLowerer { graph: DocumentGraph::new(id), source: text, base: 0, cursor: 0, line_breaks: 0 };
     let mut sink = Sink::document();
     lowerer.lower_root(&root.items, text.len(), &mut sink);
     sink.flush(&mut lowerer.graph);
@@ -94,6 +94,12 @@ impl Sink {
 struct TypstLowerer<'a> {
     graph: DocumentGraph,
     source: &'a str,
+    /// Byte offset where `source` starts inside the authored document.
+    ///
+    /// A reparse buffer (`lower_tail`, `lower_inline_fragment`) owns its own
+    /// zero point, so every recorded span goes through `span_at` and stays an
+    /// authored-source coordinate instead of leaking a buffer offset.
+    base: usize,
     cursor: usize,
     line_breaks: usize,
 }
@@ -101,6 +107,11 @@ struct TypstLowerer<'a> {
 impl<'a> TypstLowerer<'a> {
     fn raw(&self, start: usize, end: usize) -> &'a str {
         self.source.get(start.min(self.source.len())..end.min(self.source.len())).unwrap_or("")
+    }
+
+    /// One authored-source span from two offsets in this lowerer's own buffer.
+    fn span_at(&self, start: usize, end: usize) -> Option<SourceSpan> {
+        SourceSpan::new(self.base + start, self.base + end)
     }
 
     fn loss(&mut self, code: &str, message: impl Into<String>, status: SemanticStatus) {
@@ -125,7 +136,8 @@ impl<'a> TypstLowerer<'a> {
         let mut index = 0;
         while index < items.len() {
             if let Some((lines, _, end)) = self.list_ahead() {
-                self.lower_list_items(lines, sink);
+                let region = SourceSpan::new(self.cursor, end);
+                self.lower_list_items(lines, region, sink);
                 self.cursor = end;
                 self.lower_tail(end, region_end, sink);
                 return;
@@ -141,14 +153,16 @@ impl<'a> TypstLowerer<'a> {
                     let ordered = matches!(items[index], TypstItem::EnumItem(_));
                     let mut collected = Vec::new();
                     let mut tail = None;
+                    let mut region_start: Option<usize> = None;
                     while index < items.len()
                         && matches!(items[index], TypstItem::EnumItem(_)) == ordered
                         && matches!(items[index], TypstItem::ListItem(_) | TypstItem::EnumItem(_))
                     {
                         let span = typst_span(&items[index]);
                         if let Some(span) = span {
+                            region_start.get_or_insert(span.start);
                             let raw = self.raw(span.start, span.end);
-                            let (mut lines, line_tail) = split_list_lines(raw, ordered);
+                            let (mut lines, line_tail) = split_list_lines(raw, ordered, span.start);
                             collected.append(&mut lines);
                             tail = line_tail.map(|offset| span.start + offset);
                             self.cursor = span.end;
@@ -158,7 +172,8 @@ impl<'a> TypstLowerer<'a> {
                             break;
                         }
                     }
-                    self.lower_list_items(collected, sink);
+                    let region = region_start.and_then(|start| SourceSpan::new(start, self.cursor));
+                    self.lower_list_items(collected, region, sink);
                     if let Some(tail_start) = tail {
                         self.lower_tail(tail_start, region_end, sink);
                         return;
@@ -296,10 +311,19 @@ impl<'a> TypstLowerer<'a> {
     fn styled_children(&mut self, root: &TypstRoot, delimiter: char) -> (Vec<Inline>, bool) {
         let raw = self.raw(root.span.start, root.span.end);
         let trailing_space = raw.ends_with(char::is_whitespace);
-        let inner = raw.trim();
-        let inner = inner.strip_prefix(delimiter).unwrap_or(inner);
-        let inner = inner.strip_suffix(delimiter).unwrap_or(inner);
-        (self.lower_inline_fragment(inner.trim()), trailing_space)
+        let mut inner = raw.trim();
+        let mut start = root.span.start + (raw.len() - raw.trim_start().len());
+        if let Some(after) = inner.strip_prefix(delimiter) {
+            inner = after;
+            start += delimiter.len_utf8();
+        }
+        if let Some(before) = inner.strip_suffix(delimiter) {
+            inner = before;
+        }
+        start += inner.len() - inner.trim_start().len();
+        let inner = inner.trim();
+        let span = SourceSpan { start: start as u32, end: (start + inner.len()) as u32 };
+        (self.lower_inline_fragment(inner, span), trailing_space)
     }
 
     fn recover_line_comment_url(&mut self, sink: &mut Sink) {
@@ -329,7 +353,10 @@ impl<'a> TypstLowerer<'a> {
         let marker = line.chars().take_while(|character| *character == '=').count();
         let level = marker.max(1) as u8;
         let title_source = if marker == 0 { line.trim() } else { line[marker..].trim() };
-        let title = self.lower_inline_fragment(title_source);
+        let rest = &line[marker..];
+        let title_start = span.start + marker + (rest.len() - rest.trim_start().len());
+        let title_span = SourceSpan { start: title_start as u32, end: (title_start + title_source.len()) as u32 };
+        let title = self.lower_inline_fragment(title_source, title_span);
         self.push_block(sink, Block::Section { level, title, children: Vec::new() });
         self.line_breaks = 0;
         self.cursor = span.start + line_end;
@@ -353,7 +380,7 @@ impl<'a> TypstLowerer<'a> {
         let line_end = raw.find('\n').unwrap_or(raw.len());
         let line = raw[..line_end].trim();
         let kind = expression_kind(line);
-        let line_span = SourceSpan::new(span.start, span.start + line_end);
+        let line_span = self.span_at(span.start, span.start + line_end);
         self.loss_at(
             "import.typst.dynamic_content",
             format!("Typst dynamic expression kept opaque: {line}"),
@@ -388,7 +415,7 @@ impl<'a> TypstLowerer<'a> {
         let head = payload.lines().next().unwrap_or_default().trim().to_string();
         let kind = expression_kind(&head);
         let lines = payload.lines().count();
-        let span = SourceSpan::new(start, end);
+        let span = self.span_at(start, end);
         self.loss_at(
             "import.typst.dynamic_content",
             format!("Typst dynamic group kept opaque across {lines} lines: {head}"),
@@ -410,7 +437,7 @@ impl<'a> TypstLowerer<'a> {
         let rest = self.raw(start, end).trim().to_string();
         let head = rest.lines().next().unwrap_or_default().trim().to_string();
         let kind = expression_kind(&head);
-        let span = SourceSpan::new(start, end);
+        let span = self.span_at(start, end);
         self.loss_at(
             "import.typst.unterminated_dynamic_group",
             format!("Typst dynamic group is not balanced before the region ends: {head}"),
@@ -423,9 +450,10 @@ impl<'a> TypstLowerer<'a> {
         true
     }
 
-    fn lower_list_items(&mut self, lines: Vec<ListLine>, sink: &mut Sink) {
+    fn lower_list_items(&mut self, lines: Vec<ListLine>, region: Option<SourceSpan>, sink: &mut Sink) {
         if lines.is_empty() {
-            self.loss("import.typst.empty_list", "list markup contains no item line", SemanticStatus::Partial);
+            let span = region.and_then(|span| self.span_at(span.start as usize, span.end as usize));
+            self.loss_at("import.typst.empty_list", "list markup contains no item line", SemanticStatus::Partial, span);
             return;
         }
         // A list always starts a new block, so pending paragraph inlines flush
@@ -433,7 +461,7 @@ impl<'a> TypstLowerer<'a> {
         sink.flush(&mut self.graph);
         let mut stack: Vec<OpenTypstList> = Vec::new();
         for line in lines {
-            let content = self.lower_inline_fragment(&line.content);
+            let content = self.lower_inline_fragment(&line.content, line.span);
             while stack.last().is_some_and(|open| open.indent > line.indent) {
                 stack.pop();
             }
@@ -477,17 +505,19 @@ impl<'a> TypstLowerer<'a> {
         }
         let Ok(root) = parse_typst("<tail>", tail)
         else {
+            let span = self.span_at(start, end);
             self.loss_at(
                 "import.typst.fragment_parse_failed",
                 "reparsed Typst tail could not be parsed",
                 SemanticStatus::Partial,
-                SourceSpan::new(start, end),
+                span,
             );
             return;
         };
         let mut inner = TypstLowerer {
             graph: std::mem::replace(&mut self.graph, DocumentGraph::new(DocumentId(0))),
             source: tail,
+            base: self.base + start,
             cursor: 0,
             line_breaks: 0,
         };
@@ -495,22 +525,25 @@ impl<'a> TypstLowerer<'a> {
         self.graph = inner.graph;
     }
 
-    fn lower_inline_fragment(&mut self, fragment: &str) -> Vec<Inline> {
+    fn lower_inline_fragment(&mut self, fragment: &str, span: SourceSpan) -> Vec<Inline> {
         if fragment.trim().is_empty() {
             return Vec::new();
         }
         let Ok(root) = parse_typst("<inline>", fragment)
         else {
-            self.loss(
+            let authored = self.span_at(span.start as usize, span.end as usize);
+            self.loss_at(
                 "import.typst.fragment_parse_failed",
                 "inline Typst fragment could not be parsed",
                 SemanticStatus::Partial,
+                authored,
             );
             return Vec::new();
         };
         let mut inner = TypstLowerer {
             graph: std::mem::replace(&mut self.graph, DocumentGraph::new(DocumentId(0))),
             source: fragment,
+            base: self.base + span.start as usize,
             cursor: 0,
             line_breaks: 0,
         };
@@ -580,11 +613,15 @@ impl<'a> TypstLowerer<'a> {
                         SemanticStatus::Unsupported,
                     ),
                 },
-                TypstItem::Heading(_) | TypstItem::ListItem(_) | TypstItem::EnumItem(_) | TypstItem::Block(_) => self.loss(
-                    "import.typst.block_in_inline_context",
-                    "block Typst structure cannot be represented as inline content",
-                    SemanticStatus::Partial,
-                ),
+                TypstItem::Heading(_) | TypstItem::ListItem(_) | TypstItem::EnumItem(_) | TypstItem::Block(_) => {
+                    let span = typst_span(&items[index]).and_then(|span| self.span_at(span.start, span.end));
+                    self.loss_at(
+                        "import.typst.block_in_inline_context",
+                        "block Typst structure cannot be represented as inline content",
+                        SemanticStatus::Partial,
+                        span,
+                    )
+                }
             }
             index += 1;
         }
@@ -622,7 +659,15 @@ impl<'a> TypstLowerer<'a> {
                 }
                 QuoteSegment::Link { destination, body } => {
                     let display = body
-                        .map(|body| self.lower_inline_fragment(body))
+                        .map(|body| {
+                            // The body is a subslice of `self.source`, recovered
+                            // through `link_quote`, so the pointer distance is
+                            // its authored offset.
+                            let start = body.as_ptr() as usize - self.source.as_ptr() as usize;
+                            debug_assert!(start + body.len() <= self.source.len(), "link body must sit in the lowerer source");
+                            let span = SourceSpan { start: start as u32, end: (start + body.len()) as u32 };
+                            self.lower_inline_fragment(body, span)
+                        })
                         .filter(|display| !display.is_empty())
                         .unwrap_or_else(|| vec![Inline::Text { text: destination.clone() }]);
                     inlines.push(Inline::Link { target: RelationEndpoint::ExternalUri(destination), display, title: None });
@@ -660,7 +705,13 @@ impl<'a> TypstLowerer<'a> {
                     }
                 }
             }
-            lines.push(ListLine { indent, ordered: line_ordered, number, content: content.to_string() });
+            lines.push(ListLine {
+                indent,
+                ordered: line_ordered,
+                number,
+                content: content.to_string(),
+                span: SourceSpan { start: (offset + line.len() - content.len()) as u32, end: (offset + line.len()) as u32 },
+            });
             offset = if end < self.source.len() { end + 1 } else { end };
         }
         let ordered = ordered?;
@@ -717,6 +768,8 @@ struct ListLine {
     ordered: bool,
     number: Option<u32>,
     content: String,
+    /// Authored range of `content` inside the lowerer's own buffer.
+    span: SourceSpan,
 }
 
 /// One list level that is still open while items are placed.
@@ -855,7 +908,7 @@ fn typst_span(item: &TypstItem) -> Option<oak_core::Range<usize>> {
     }
 }
 
-fn split_list_lines(raw: &str, ordered: bool) -> (Vec<ListLine>, Option<usize>) {
+fn split_list_lines(raw: &str, ordered: bool, base: usize) -> (Vec<ListLine>, Option<usize>) {
     let mut lines = Vec::new();
     let mut offset = 0usize;
     let mut saw_item = false;
@@ -869,7 +922,16 @@ fn split_list_lines(raw: &str, ordered: bool) -> (Vec<ListLine>, Option<usize>) 
             // A deeper line belongs to the same run even when its marker type
             // differs: that is a nested list, not a new paragraph.
             if line_ordered == ordered || (saw_item && indent > base_indent) {
-                lines.push(ListLine { indent, ordered: line_ordered, number, content: content.to_string() });
+                lines.push(ListLine {
+                    indent,
+                    ordered: line_ordered,
+                    number,
+                    content: content.to_string(),
+                    span: SourceSpan {
+                        start: (base + offset + line.len() - content.len()) as u32,
+                        end: (base + offset + line.len()) as u32,
+                    },
+                });
                 saw_item = true;
                 offset += segment.len();
                 continue;
@@ -1186,5 +1248,38 @@ mod tests {
         assert_eq!(target, &RelationEndpoint::ExternalUri("https://example.com".into()));
         assert_eq!(display.iter().map(Inline::plain_text).collect::<String>(), "example");
         assert!(title.is_none());
+    }
+
+    #[test]
+    fn empty_list_loss_records_the_authored_region() {
+        let text = "Lead\n- \nTrail\n";
+        let mut lowerer =
+            TypstLowerer { graph: DocumentGraph::new(DocumentId(1)), source: text, base: 0, cursor: 0, line_breaks: 0 };
+        let mut sink = Sink::document();
+        lowerer.lower_list_items(Vec::new(), SourceSpan::new(5, 7), &mut sink);
+
+        let index = lowerer
+            .graph
+            .coverage
+            .loss
+            .iter()
+            .position(|marker| marker.code == "import.typst.empty_list")
+            .expect("empty list loss");
+        assert_eq!(lowerer.graph.loss_span(index), SourceSpan::new(5, 7));
+        assert_eq!(&text[5..7], "- ", "the region names the list markup that carries no item line");
+    }
+
+    #[test]
+    fn reparse_buffers_translate_their_spans_to_authored_coordinates() {
+        let mut lowerer =
+            TypstLowerer { graph: DocumentGraph::new(DocumentId(1)), source: "frag", base: 5, cursor: 0, line_breaks: 0 };
+        assert_eq!(lowerer.span_at(1, 3), SourceSpan::new(6, 8), "buffer offsets shift by the authored base");
+        let inlines = lowerer.lower_inline_fragment("rag", SourceSpan { start: 1, end: 4 });
+        assert!(!inlines.is_empty(), "a parseable fragment still lowers to inlines");
+        assert!(
+            lowerer.graph.coverage.loss.is_empty(),
+            "a successful reparse records no failure loss: {:?}",
+            lowerer.graph.coverage.loss
+        );
     }
 }
