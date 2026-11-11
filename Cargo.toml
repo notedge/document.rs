@@ -21,6 +21,11 @@ default-members = [
     "projects/template/template.input.hbs",
     "projects/template/template.input.jinja",
     "projects/template/template.input.dejavu",
+    "projects/template/template.input.dejavu.types",
+    "projects/template/template.input.dejavu.runtime",
+    "projects/template/template.input.dejavu.codegen",
+    "projects/template/template.input.dejavu.config",
+    "projects/template/template.input.dejavu.macros",
     "projects/template/template.framework",
     "projects/template/template.framework.doki",
     "projects/crawler/crawler",
@@ -86,6 +91,11 @@ template = { path = "projects/template/template" }
 template-input-hbs = { path = "projects/template/template.input.hbs" }
 template-input-jinja = { path = "projects/template/template.input.jinja" }
 template-input-dejavu = { path = "projects/template/template.input.dejavu" }
+template-input-dejavu-types = { path = "projects/template/template.input.dejavu.types" }
+template-input-dejavu-runtime = { path = "projects/template/template.input.dejavu.runtime" }
+template-input-dejavu-codegen = { path = "projects/template/template.input.dejavu.codegen" }
+template-input-dejavu-config = { path = "projects/template/template.input.dejavu.config" }
+template-input-dejavu-macros = { path = "projects/template/template.input.dejavu.macros" }
 template-framework = { path = "projects/template/template.framework" }
 template-framework-doki = { path = "projects/template/template.framework.doki" }
 

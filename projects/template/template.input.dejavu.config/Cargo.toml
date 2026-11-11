@@ -1,0 +1,19 @@
+[package]
+name = "template-input-dejavu-config"
+version.workspace = true
+authors.workspace = true
+description = "Dejavu 模板配置加载"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+template-input-dejavu-types = { workspace = true }
+serde = { workspace = true }
+toml = "0.8"
+toml_edit = "0.25"
+figment = { version = "0.10", features = ["toml", "env"] }
+
+[dev-dependencies]
+boost-fs = { git = "https://github.com/oovm/rust-boost", rev = "7ba022a049cafef979dfe7a8adf81d9a0d3dd373" }

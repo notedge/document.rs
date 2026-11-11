@@ -1,0 +1,18 @@
+[package]
+name = "template-input-dejavu-types"
+version.workspace = true
+authors.workspace = true
+description = "Dejavu 核心值、错误与 i18n 类型"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+fluent = "0.16.0"
+fluent-syntax = "0.11.0"
+fluent-bundle = "0.15.0"
+unic-langid = "0.9.0"
+lru = "0.7.0"

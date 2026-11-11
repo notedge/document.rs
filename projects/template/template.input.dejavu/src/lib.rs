@@ -248,6 +248,50 @@ impl TemplateEngine for DejavuEngine {
     }
 }
 
+/// Canonical user-facing facade over parse + render.
+pub struct Dejavu;
+
+impl Dejavu {
+    /// Parse source → IR (default `<% %>` delimiters).
+    pub fn parse(source: &str) -> ParseResult<IrDocument> {
+        parse(source)
+    }
+
+    /// Parse source → IR with an explicit language profile.
+    pub fn parse_with(source: &str, language: &Language) -> ParseResult<IrDocument> {
+        parse_with(source, "template.dejavu", language)
+    }
+
+    /// Render IR + JSON context.
+    pub fn render(doc: &IrDocument, ctx: &Value) -> Result<String, IrError> {
+        render_ir(doc, ctx)
+    }
+
+    /// Parse then render (default `<% %>` delimiters).
+    pub fn render_source(source: &str, ctx: &Value) -> Result<String, IrError> {
+        check_source_budget(source, &RenderLimits::default()).map_err(IrError::from)?;
+        let doc = Self::parse(source).map_err(|error| IrError::from(parse_error_diagnostic(error)))?;
+        render_ir(&doc, ctx)
+    }
+
+    /// Parse then render with an explicit language profile.
+    pub fn render_source_with(source: &str, ctx: &Value, language: &Language) -> Result<String, IrError> {
+        check_source_budget(source, &RenderLimits::default()).map_err(IrError::from)?;
+        let doc = Self::parse_with(source, language).map_err(|error| IrError::from(parse_error_diagnostic(error)))?;
+        render_ir(&doc, ctx)
+    }
+
+    /// Syntax check (default `<% %>` delimiters).
+    pub fn check(source: &str) -> ParseResult<()> {
+        parse(source).map(|_| ())
+    }
+
+    /// Syntax check with an explicit language profile.
+    pub fn check_with(source: &str, language: &Language) -> ParseResult<()> {
+        Self::parse_with(source, language).map(|_| ())
+    }
+}
+
 /// Map one IR failure onto the shared template error, keeping the engine code.
 pub fn template_error_from_ir(error: IrError) -> TemplateError {
     match error {

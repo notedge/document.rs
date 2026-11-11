@@ -1,0 +1,12 @@
+[package]
+name = "template-input-dejavu-runtime"
+version.workspace = true
+authors.workspace = true
+description = "Dejavu AOT 输出的最小运行时 helper"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+
+[lib]
+name = "template_input_dejavu_runtime"
