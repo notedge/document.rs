@@ -6,9 +6,10 @@ use document::{
     convert::{READERS, WRITERS},
     formats::capabilities,
     ir::{Block, DocumentGraph, Inline},
-    template::{MapTemplateLoader, RenderOptions, RenderRequest, TemplateEngine, input::hbs::HbsEngine},
 };
 use serde_json::json;
+use template::{MapTemplateLoader, RenderOptions, RenderRequest, TemplateEngine};
+use template_input_hbs::HbsEngine;
 
 fn paragraph_text(graph: &DocumentGraph) -> String {
     let mut parts = Vec::new();

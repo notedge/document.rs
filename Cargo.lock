@@ -603,14 +603,11 @@ dependencies = [
  "document-renderer-raster",
  "document-renderer-svg",
  "document-style",
- "document-template",
- "document-template-framework",
- "document-template-input-dejavu",
- "document-template-input-hbs",
- "document-template-input-jinja",
  "document-text",
  "document-types",
  "serde_json",
+ "template",
+ "template-input-hbs",
 ]
 
 [[package]]
@@ -861,49 +858,6 @@ dependencies = [
 [[package]]
 name = "document-style"
 version = "0.1.0"
-
-[[package]]
-name = "document-template"
-version = "0.1.0"
-dependencies = [
- "boost-diagnostic",
- "serde_json",
-]
-
-[[package]]
-name = "document-template-framework"
-version = "0.1.0"
-dependencies = [
- "document-template",
- "document-template-input-hbs",
- "serde_json",
-]
-
-[[package]]
-name = "document-template-input-dejavu"
-version = "0.1.0"
-dependencies = [
- "document-template",
- "serde",
- "serde_json",
- "unicode-normalization",
-]
-
-[[package]]
-name = "document-template-input-hbs"
-version = "0.1.0"
-dependencies = [
- "document-template",
- "serde_json",
-]
-
-[[package]]
-name = "document-template-input-jinja"
-version = "0.1.0"
-dependencies = [
- "document-template",
- "serde_json",
-]
 
 [[package]]
 name = "document-text"
@@ -2553,6 +2507,49 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "template"
+version = "0.1.0"
+dependencies = [
+ "boost-diagnostic",
+ "serde_json",
+]
+
+[[package]]
+name = "template-framework"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "template",
+ "template-input-hbs",
+]
+
+[[package]]
+name = "template-input-dejavu"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "template",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "template-input-hbs"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "template",
+]
+
+[[package]]
+name = "template-input-jinja"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "template",
 ]
 
 [[package]]

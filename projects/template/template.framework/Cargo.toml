@@ -1,0 +1,16 @@
+[package]
+name = "template-framework"
+version.workspace = true
+authors.workspace = true
+description = "构建框架的模板合同：页面入口、输入引擎编排与错误通道"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+template = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+template-input-hbs = { workspace = true }

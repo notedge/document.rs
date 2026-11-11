@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "projects/plotter/*",
     "projects/document/*",
+    "projects/template/*",
     "projects/crawler/*",
 ]
 default-members = [
@@ -16,11 +17,11 @@ default-members = [
     "projects/document/document.formats",
     "projects/document/document.convert",
     "projects/document/document.layout",
-    "projects/document/document.template",
-    "projects/document/document.template.input.hbs",
-    "projects/document/document.template.input.jinja",
-    "projects/document/document.template.input.dejavu",
-    "projects/document/document.template.framework",
+    "projects/template/template",
+    "projects/template/template.input.hbs",
+    "projects/template/template.input.jinja",
+    "projects/template/template.input.dejavu",
+    "projects/template/template.framework",
     "projects/crawler/crawler",
     "projects/crawler/crawler.types",
 ]
@@ -78,11 +79,13 @@ document-input-markdown = { path = "projects/document/document.input.markdown" }
 document-input-tex = { path = "projects/document/document.input.tex" }
 document-input-typst = { path = "projects/document/document.input.typst" }
 document-input-formats = { path = "projects/document/document.input.formats" }
-document-template = { path = "projects/document/document.template" }
-document-template-input-hbs = { path = "projects/document/document.template.input.hbs" }
-document-template-input-jinja = { path = "projects/document/document.template.input.jinja" }
-document-template-input-dejavu = { path = "projects/document/document.template.input.dejavu" }
-document-template-framework = { path = "projects/document/document.template.framework" }
+
+# --- Template (template source → text; independent top-level namespace) ---
+template = { path = "projects/template/template" }
+template-input-hbs = { path = "projects/template/template.input.hbs" }
+template-input-jinja = { path = "projects/template/template.input.jinja" }
+template-input-dejavu = { path = "projects/template/template.input.dejavu" }
+template-framework = { path = "projects/template/template.framework" }
 
 # --- Crawler ---
 crawler-types = { path = "projects/crawler/crawler.types" }

@@ -30,11 +30,6 @@ document-input-markdown = { workspace = true, optional = true }
 document-input-tex = { workspace = true, optional = true }
 document-input-typst = { workspace = true, optional = true }
 document-input-formats = { workspace = true, optional = true }
-document-template = { workspace = true, optional = true }
-document-template-input-hbs = { workspace = true, optional = true }
-document-template-input-jinja = { workspace = true, optional = true }
-document-template-input-dejavu = { workspace = true, optional = true }
-document-template-framework = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -58,11 +53,6 @@ input-markdown = ["dep:document-input-markdown"]
 input-tex = ["dep:document-input-tex"]
 input-typst = ["dep:document-input-typst"]
 input-formats = ["dep:document-input-formats"]
-template = ["dep:document-template"]
-template-input-hbs = ["template", "dep:document-template-input-hbs"]
-template-input-jinja = ["template", "dep:document-template-input-jinja"]
-template-input-dejavu = ["template", "dep:document-template-input-dejavu"]
-template-framework = ["template", "dep:document-template-framework"]
 # 格式语言 feature（转发到 document-formats）
 markdown = ["formats", "document-formats/markdown"]
 notedown = ["formats", "document-formats/notedown"]
@@ -76,11 +66,14 @@ typst = ["formats", "document-formats/typst"]
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# boundary test only: the template family is a sibling top-level namespace.
+template = { workspace = true }
+template-input-hbs = { workspace = true }
 
 [[test]]
 name = "template_boundary"
 path = "tests/template_boundary.rs"
-required-features = ["template-input-hbs", "html", "convert", "ir"]
+required-features = ["html", "convert", "ir"]
 
 [package.metadata.docs.rs]
 all-features = true

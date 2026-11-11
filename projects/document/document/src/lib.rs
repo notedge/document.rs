@@ -120,36 +120,3 @@ pub mod input {
         pub use document_input_formats::*;
     }
 }
-
-/// 模板引擎合同。
-#[cfg(feature = "template")]
-pub mod template {
-    pub use document_template::*;
-
-    /// 模板语言前端。
-    pub mod input {
-        /// Handlebars 语法子集。
-        #[cfg(feature = "template-input-hbs")]
-        pub mod hbs {
-            pub use document_template_input_hbs::*;
-        }
-
-        /// Jinja2 语法子集。
-        #[cfg(feature = "template-input-jinja")]
-        pub mod jinja {
-            pub use document_template_input_jinja::*;
-        }
-
-        /// Dejavu 模板语言。
-        #[cfg(feature = "template-input-dejavu")]
-        pub mod dejavu {
-            pub use document_template_input_dejavu::*;
-        }
-    }
-
-    /// 构建框架合同。
-    #[cfg(feature = "template-framework")]
-    pub mod framework {
-        pub use document_template_framework::*;
-    }
-}

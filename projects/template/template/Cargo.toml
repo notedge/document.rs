@@ -1,0 +1,16 @@
+[package]
+name = "template"
+version.workspace = true
+authors.workspace = true
+description = "模板引擎合同：loader、预算、诊断与引擎 trait"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+boost-diagnostic = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
