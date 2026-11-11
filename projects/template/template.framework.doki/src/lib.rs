@@ -1,19 +1,58 @@
 #![doc = include_str!("../readme.md")]
 
-//! `template.framework.doki`：Doki 构建框架的模板入口。
+//! `template.framework.doki`：Doki 构建框架与模板入口。
 //!
-//! 框架只决定入口布局与宿主扩展；解析、转义与渲染全部交给
-//! `template.input.dejavu`。
+//! 框架负责构建侧的产品语义（内容图、站点模型、i18n、布局选择、构建会话），
+//! 但模板语法、转义与渲染全部委托给 `template.input.dejavu`。
+
+mod config;
+mod diagnostic;
+mod error;
+mod frontmatter;
+mod graph;
+mod i18n;
+mod protocol;
+mod render;
+mod session;
+mod site;
+mod staging;
 
 use serde_json::Value;
 
 use template::{
-    MapTemplateLoader, RenderOptions, TemplateContentKind, TemplateError, TemplateId, TemplateLoader, TemplateStatus,
+    MapTemplateLoader, RenderOptions, TemplateContentKind, TemplateError, TemplateId, TemplateStatus,
 };
 use template_framework::{FrameworkCapability, FrameworkOutput, FrameworkRequest, TemplateFramework};
 use template_input_dejavu::{
     CustomRegistry, ParseError, language_for_path, parse_with, render_ir_opts, template_error_from_diagnostic,
     template_error_from_ir,
+};
+
+pub use config::{
+    ExtensionRef, I18nConfig, LoadOptions, OverrideTarget, PluginEntry, ProjectConfig, ProjectPaths,
+    load_project_config, peek_theme_ref, theme_defaults_file,
+};
+pub use diagnostic::{Diagnostic, Severity};
+pub use error::{ConfigError, ConfigResult, CoreError, CoreResult};
+pub use frontmatter::{FrontMatter, ParsedDocument, parse_document};
+pub use graph::{
+    ContentGraph, ContentId, ContentKind, ContentNode, FrontMatterDto, discover_markdown_content, load_markdown_node,
+};
+pub use i18n::{
+    CATALOG_IO_CODE, CATALOG_SYNTAX_CODE, DUPLICATE_KEY_CODE, FALLBACK_CYCLE_CODE, I18n, MISSING_CATALOG_CODE,
+    MISSING_KEY_CODE,
+};
+pub use protocol::{
+    BuildMode, BuildPhase, BuildPlan, BuildResult, ExplainRebuild, ExtensionKind, ExtensionSourceKind, FileChange,
+    FileChangeKind, HookKind, HookWorkItem, InvalidationResult, PluginResult, ResolvedExtension,
+};
+pub use render::{
+    DEFAULT_LAYOUT, RenderedPage, language_for_ext, markdown_to_html, render_page, render_taxonomy_page,
+};
+pub use session::BuildSession;
+pub use site::{
+    INVALID_LOCALE_CODE, INVALID_TYPE_CODE, PageType, ROUTE_CONFLICT_CODE, SiteModel, SitePage, TAGS_INDEX_ID,
+    TAXONOMY_CONFLICT_CODE, TagEntry, TaxonomyView,
 };
 
 /// Framework id registered under `template.framework.<id>`.
@@ -94,6 +133,12 @@ pub fn layout_loader(layout_id: &str, source: &str) -> (MapTemplateLoader, Templ
 fn layout_entry_path(layout_id: &str) -> String {
     let basename = layout_id.rsplit(['/', '\\']).next().unwrap_or(layout_id).trim();
     if basename.is_empty() { "layout".to_string() } else { basename.to_string() }
+}
+
+/// Shared render options Doki uses for layout rendering.
+#[must_use]
+pub fn layout_options() -> RenderOptions {
+    RenderOptions::default()
 }
 
 /// Render one layout source without host extensions (no i18n registry).
