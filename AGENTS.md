@@ -1,6 +1,6 @@
 # AGENTS
 
-本仓库是 **中文优先** 的文档族 Rust 聚合实现仓（`document.rs`）。代理动手前先读本文件与三个产品树 readme；不要只靠聊天记忆或过时的根
+本仓库是 **中文优先** 的文档族 Rust 聚合实现仓（`document.rs`）。代理动手前先读本文件与四个产品树 readme；不要只靠聊天记忆或过时的根
 `readme.md` 模板。
 
 ## 仓库是什么
@@ -13,6 +13,7 @@ workspace，按产品域分目录：
 | `projects/plotter/`  | 绘图 | GoG 链 + Diagram/Chart 矢量链；品牌 `plotter-*`                          |
 | `projects/document/` | 文档 | IR / formats / convert / layout / renderer / 字体处理；品牌 `document-*` |
 | `projects/crawler/`  | 采集 | 抓取编排 / fetch / extract / store；品牌 `crawler-*`（原 Pandark）       |
+| `projects/template/` | 模板 | 模板源 → 文本合同与输入引擎；品牌 `template-*`，独立顶层命名空间          |
 
 目录名用点分层（`plotter.input.mermaid`），Cargo package 名用连字符（`plotter-input-mermaid`）。
 
@@ -22,9 +23,10 @@ workspace，按产品域分目录：
    两条主链与资产边界。
 2. [`projects/document/readme.md`](projects/document/readme.md) — Document 包图、转换链与排版/渲染链、字体资产边界。
 3. [`projects/crawler/readme.md`](projects/crawler/readme.md) — Crawler 包图、seed→fetch→extract→store、诊断 namespace。
-4. 工作区外设计真相仍在 `E:\vmz 全栈开发\规划设计\notedown\`（尤其 `01`、`05`、`06`）与 `规划设计/davinci/`；
+4. [`projects/template/readme.md`](projects/template/readme.md) — Template 包图、输入引擎与 framework 合同的边界。
+5. 工作区外设计真相仍在 `E:\vmz 全栈开发\规划设计\notedown\`（尤其 `01`、`05`、`06`）与 `规划设计/davinci/`；
    实现与文档冲突时先改文档或明示冲突。
-5. 下游产品仓（`E:\文档研究\` 下的 VuTeX / panduck / pandark / notedown 等）通过 **git `rev` pin** 消费本仓；本地用
+6. 下游产品仓（`E:\文档研究\` 下的 VuTeX / panduck / pandark / notedown 等）通过 **git `rev` pin** 消费本仓；本地用
    `.cargo/config.toml` 绝对路径 overlay，`.cargo/config.example.toml` 写占位路径。
 
 ## 硬规则
@@ -100,7 +102,7 @@ cargo test -p crawler-types
 
 ## 代理行为
 
-- 先读本文件与三个产品树 `readme.md`，再改代码。
+- 先读本文件与四个产品树 `readme.md`，再改代码。
 - 大改动（拆 crate、并类型、动门面）前用几句话说明意图；用户已拍板的（如 input 拆分、不要 core/ir、品牌迁 `document-*` /
   `crawler-*`）直接做。
 - 不要把下游产品仓的 napi / TS / 官网资产塞进本仓「图省事」。

@@ -9,7 +9,7 @@ workspace，供下游产品按 `git rev` pin 消费。
 
 | 你得到的                                                       | 你不会在这里找到的                                    |
 |----------------------------------------------------------------|-------------------------------------------------------|
-| 按产品域再导出的 `document-*` / `plotter-*` / `crawler-*` Rust API | 二进制字体、视觉 golden、大型站点 fixtures            |
+| 按产品域再导出的 `document-*` / `plotter-*` / `crawler-*` / `template-*` Rust API | 二进制字体、视觉 golden、大型站点 fixtures |
 | 语义 IR、格式转换、排版渲染、图语言与 GoG 绘图                 | npm CLI / NAPI 包装（在下游产品仓）                   |
 | 可 pin 的源码依赖与本地 path overlay                           | 旧品牌 `notedown-*` / `pandark-*` / `apollo` 合同兼容 |
 
@@ -24,6 +24,7 @@ workspace，供下游产品按 `git rev` pin 消费。
 - 绘图 → [`projects/plotter/readme.md`](projects/plotter/readme.md)
 - 文档 → [`projects/document/readme.md`](projects/document/readme.md)
 - 采集 → [`projects/crawler/readme.md`](projects/crawler/readme.md)
+- 模板 → [`projects/template/readme.md`](projects/template/readme.md)
 
 ### 2. 下游接入（手工）
 
@@ -35,6 +36,8 @@ workspace，供下游产品按 `git rev` pin 消费。
 document = { git = "https://github.com/notedge/document.rs", rev = "<commit-sha>", default-features = false, features = ["ir", "markdown"] }
 plotter = { git = "https://github.com/notedge/document.rs", rev = "<commit-sha>" }
 crawler = { git = "https://github.com/notedge/document.rs", rev = "<commit-sha>" }
+template = { git = "https://github.com/notedge/document.rs", rev = "<commit-sha>" }
+template-input-dejavu = { git = "https://github.com/notedge/document.rs", rev = "<commit-sha>" }
 ```
 
 工具链见 [`rust-toolchain.toml`](rust-toolchain.toml)（nightly + rustfmt / clippy）。
@@ -46,6 +49,7 @@ crawler = { git = "https://github.com/notedge/document.rs", rev = "<commit-sha>"
 - **Plotter**：Grammar of Graphics 与 Diagram/Chart **平行** Spec（不做万能 `plotter.ir`）；Mermaid / DOT / PlantUML / TikZ
   在 `plotter.input.*`。
 - **Crawler**：seed → fetch → extract → store；抽取结果落到 `document.ir`；实现仓测试只留冒烟。
+- **Template**：独立的顶层 `template.*` 命名空间，只做模板源 → 文本；输入引擎 `template.input.*`，构建框架合同 `template.framework`。
 
 ## 📊 和下游产品怎么分工
 
