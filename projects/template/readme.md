@@ -10,7 +10,13 @@
 | `template.input.hbs/` | `template-input-hbs` | Handlebars 语法子集 |
 | `template.input.jinja/` | `template-input-jinja` | Jinja2 语法子集 |
 | `template.input.dejavu/` | `template-input-dejavu` | Dejavu 语法、IR 与渲染（登记 `template.input.dejavu`） |
+| `template.input.dejavu.types/` | `template-input-dejavu-types` | Dejavu 值 / 错误 / i18n 类型 |
+| `template.input.dejavu.runtime/` | `template-input-dejavu-runtime` | Dejavu AOT runtime helper（`no_std`） |
+| `template.input.dejavu.codegen/` | `template-input-dejavu-codegen` | Dejavu AOT codegen（IR → ESM） |
+| `template.input.dejavu.config/` | `template-input-dejavu-config` | Dejavu 模板配置加载 |
+| `template.input.dejavu.macros/` | `template-input-dejavu-macros` | Dejavu 过程宏占位 |
 | `template.framework/` | `template-framework` | 构建框架合同（页面入口 / 输入引擎编排 / 错误通道） |
+| `template.framework.doki/` | `template-framework-doki` | Doki 构建框架实现与配置 schema |
 
 目录名点分层，package 名连字符。输入引擎依赖 `template` 合同；`template` 不反向依赖任何引擎，测试因此不会形成 crate 环。
 
