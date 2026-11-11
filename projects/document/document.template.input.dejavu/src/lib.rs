@@ -224,7 +224,7 @@ impl TemplateEngine for DejavuEngine {
         let entry_path = request.entry.map_or("", TemplateId::path);
         let language = language_for_path(entry_path);
         let doc = parse_with(request.source, entry_name.as_deref().unwrap_or("<main>"), &language)
-            .map_err(|e| to_template_error(parse_error_diagnostic(e)))?;
+            .map_err(|e| template_error_from_diagnostic(parse_error_diagnostic(e)))?;
 
         let mut loader = EngineLoader::new(request.loader, request.options.limits);
         let options = render::RenderOptions {
@@ -233,7 +233,7 @@ impl TemplateEngine for DejavuEngine {
             limits: request.options.limits,
             ..render::RenderOptions::default()
         };
-        let text = render_ir_opts(&doc, request.data, options, Some(&mut loader)).map_err(ir_to_template_error)?;
+        let text = render_ir_opts(&doc, request.data, options, Some(&mut loader)).map_err(template_error_from_ir)?;
 
         let mut dependencies = Vec::new();
         if let Some(entry) = request.entry {
@@ -249,15 +249,15 @@ impl TemplateEngine for DejavuEngine {
 }
 
 /// Map one IR failure onto the shared template error, keeping the engine code.
-fn ir_to_template_error(error: IrError) -> TemplateError {
+pub fn template_error_from_ir(error: IrError) -> TemplateError {
     match error {
-        IrError::Diagnostic(diagnostic) => to_template_error(diagnostic),
+        IrError::Diagnostic(diagnostic) => template_error_from_diagnostic(diagnostic),
         IrError::Json(error) => TemplateError::new("template.parse-failed", error.to_string()),
     }
 }
 
 /// Map one dejavu diagnostic onto the shared template error, keeping the code.
-fn to_template_error(diagnostic: Diagnostic) -> TemplateError {
+pub fn template_error_from_diagnostic(diagnostic: Diagnostic) -> TemplateError {
     let args = diagnostic.args.iter().map(|(name, value)| (name.clone(), arg_text(value))).collect::<Vec<_>>();
     TemplateError::with_owned_args(
         diagnostic.code.clone(),
