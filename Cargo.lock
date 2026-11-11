@@ -604,8 +604,9 @@ dependencies = [
  "document-renderer-svg",
  "document-style",
  "document-template",
- "document-template-hbs",
- "document-template-jinja",
+ "document-template-framework",
+ "document-template-input-hbs",
+ "document-template-input-jinja",
  "document-text",
  "document-types",
  "serde_json",
@@ -869,7 +870,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "document-template-hbs"
+name = "document-template-framework"
+version = "0.1.0"
+dependencies = [
+ "document-template",
+ "document-template-input-hbs",
+ "serde_json",
+]
+
+[[package]]
+name = "document-template-input-hbs"
 version = "0.1.0"
 dependencies = [
  "document-template",
@@ -877,7 +887,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "document-template-jinja"
+name = "document-template-input-jinja"
 version = "0.1.0"
 dependencies = [
  "document-template",

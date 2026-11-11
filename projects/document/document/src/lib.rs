@@ -126,15 +126,24 @@ pub mod input {
 pub mod template {
     pub use document_template::*;
 
-    /// Handlebars 语法子集。
-    #[cfg(feature = "template-hbs")]
-    pub mod hbs {
-        pub use document_template_hbs::*;
+    /// 模板语言前端。
+    pub mod input {
+        /// Handlebars 语法子集。
+        #[cfg(feature = "template-input-hbs")]
+        pub mod hbs {
+            pub use document_template_input_hbs::*;
+        }
+
+        /// Jinja2 语法子集。
+        #[cfg(feature = "template-input-jinja")]
+        pub mod jinja {
+            pub use document_template_input_jinja::*;
+        }
     }
 
-    /// Jinja2 语法子集。
-    #[cfg(feature = "template-jinja")]
-    pub mod jinja {
-        pub use document_template_jinja::*;
+    /// 构建框架合同。
+    #[cfg(feature = "template-framework")]
+    pub mod framework {
+        pub use document_template_framework::*;
     }
 }

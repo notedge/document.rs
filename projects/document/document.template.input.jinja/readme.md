@@ -1,6 +1,6 @@
-# document-template-jinja
+# document-template-input-jinja
 
-`document.template.jinja`：Jinja2 语法子集，输出 HTML。只做模板源 → 文本，不拥有文档语义。
+`document.template.input.jinja`：Jinja2 语法子集，输出 HTML。只做模板源 → 文本，不拥有文档语义。
 
 支持 `{{ expr }}`（默认 HTML 转义）、`{% if %}` / `{% elif %}` / `{% else %}` / `{% endif %}`、
 `{% for x in expr %}`（`loop.index` / `index0` / `first` / `last` / `length`，支持 `{% else %}`）、
@@ -13,7 +13,7 @@
 
 ```rust,ignore
 use document_template::{MapTemplateLoader, RenderOptions, RenderRequest, TemplateId, TemplateRoot};
-use document_template_jinja::JinjaEngine;
+use document_template_input_jinja::JinjaEngine;
 use serde_json::json;
 
 let loader = MapTemplateLoader::new().with_root(
@@ -31,11 +31,11 @@ let output = JinjaEngine.render(&RenderRequest {
 ## 拒绝与偏差
 
 不支持的标签（`extends` / `block` / `macro` / `call` / `filter` / `raw` / `with` / `import` /
-`from`）给 `template.jinja.unsupported-tag`；`is` 测试、`for` / `set` 解构、`include` 的非常量
-引用与 `for ... if ...` 循环过滤给 `template.jinja.unsupported-construct`。未知过滤器给
-`template.jinja.unknown-filter`，参数个数不符给 `template.jinja.filter-arity`，类型不符给
-`template.jinja.filter-value`，运算子类型不符给 `template.jinja.operator-type`，除零 / 取模零 /
-整数溢出给 `template.jinja.arithmetic`，`for` 源不可迭代给 `template.jinja.iteration-type`。
+`from`）给 `template.input.jinja.unsupported-tag`；`is` 测试、`for` / `set` 解构、`include` 的非常量
+引用与 `for ... if ...` 循环过滤给 `template.input.jinja.unsupported-construct`。未知过滤器给
+`template.input.jinja.unknown-filter`，参数个数不符给 `template.input.jinja.filter-arity`，类型不符给
+`template.input.jinja.filter-value`，运算子类型不符给 `template.input.jinja.operator-type`，除零 / 取模零 /
+整数溢出给 `template.input.jinja.arithmetic`，`for` 源不可迭代给 `template.input.jinja.iteration-type`。
 一律拒绝整次渲染，不静默丢内容。
 
 v0 已知偏差：容器字符串化按 Python 风格（`None`、`True` / `False`、列表 `[a, b]`、字典

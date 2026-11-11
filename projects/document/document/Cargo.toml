@@ -31,8 +31,9 @@ document-input-tex = { workspace = true, optional = true }
 document-input-typst = { workspace = true, optional = true }
 document-input-formats = { workspace = true, optional = true }
 document-template = { workspace = true, optional = true }
-document-template-hbs = { workspace = true, optional = true }
-document-template-jinja = { workspace = true, optional = true }
+document-template-input-hbs = { workspace = true, optional = true }
+document-template-input-jinja = { workspace = true, optional = true }
+document-template-framework = { workspace = true, optional = true }
 
 [features]
 default = []
@@ -57,8 +58,9 @@ input-tex = ["dep:document-input-tex"]
 input-typst = ["dep:document-input-typst"]
 input-formats = ["dep:document-input-formats"]
 template = ["dep:document-template"]
-template-hbs = ["template", "dep:document-template-hbs"]
-template-jinja = ["template", "dep:document-template-jinja"]
+template-input-hbs = ["template", "dep:document-template-input-hbs"]
+template-input-jinja = ["template", "dep:document-template-input-jinja"]
+template-framework = ["template", "dep:document-template-framework"]
 # 格式语言 feature（转发到 document-formats）
 markdown = ["formats", "document-formats/markdown"]
 notedown = ["formats", "document-formats/notedown"]
@@ -76,7 +78,7 @@ serde_json = { workspace = true }
 [[test]]
 name = "template_boundary"
 path = "tests/template_boundary.rs"
-required-features = ["template-hbs", "html", "convert", "ir"]
+required-features = ["template-input-hbs", "html", "convert", "ir"]
 
 [package.metadata.docs.rs]
 all-features = true

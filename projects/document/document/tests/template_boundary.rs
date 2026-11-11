@@ -6,7 +6,7 @@ use document::{
     convert::{READERS, WRITERS},
     formats::capabilities,
     ir::{Block, DocumentGraph, Inline},
-    template::{MapTemplateLoader, RenderOptions, RenderRequest, TemplateEngine, hbs::HbsEngine},
+    template::{MapTemplateLoader, RenderOptions, RenderRequest, TemplateEngine, input::hbs::HbsEngine},
 };
 use serde_json::json;
 

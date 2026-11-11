@@ -5,11 +5,11 @@
 
 具体语法在子命名空间：
 
-| 目录                    | Package                 | 语法                      |
-|-------------------------|-------------------------|---------------------------|
-| `document.template`     | `document-template`     | 合同（本 crate）          |
-| `document.template.hbs` | `document-template-hbs` | Handlebars 语法子集       |
-| `document.template.jinja` | `document-template-jinja` | Jinja2 语法子集        |
+| 目录                            | Package                         | 语法                    |
+|---------------------------------|---------------------------------|-------------------------|
+| `document.template`             | `document-template`             | 合同（本 crate）        |
+| `document.template.input.hbs`   | `document-template-input-hbs`   | Handlebars 语法子集     |
+| `document.template.input.jinja` | `document-template-input-jinja` | Jinja2 语法子集         |
 
 ```rust,ignore
 use document_template::{MapTemplateLoader, RenderOptions, TemplateId, TemplateRoot};
@@ -19,7 +19,7 @@ let loader = MapTemplateLoader::new().with_root(
     TemplateRoot::new("map", 0).with_file("hello.hbs", "Hello {{name}}"),
 );
 let data = json!({ "name": "world" });
-let output = document_template_hbs::HbsEngine.render(&document_template::RenderRequest {
+let output = document_template_input_hbs::HbsEngine.render(&document_template::RenderRequest {
     source: "{{> hello}}",
     entry: Some(&TemplateId::new("map", "main.hbs")),
     loader: &loader,
@@ -34,4 +34,4 @@ assert_eq!(output.text, "Hello world");
 不产出 `DocumentGraph`，不定义第二套文档语义。
 
 失败是 fail-closed：不支持的构造、越限、引用解析失败都拒绝整次渲染并给稳定诊断码
-（`template.*` / `template.<engine>.*`），不静默丢弃内容。
+（`template.*` / `template.input.<engine>.*`），不静默丢弃内容。

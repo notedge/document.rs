@@ -17,8 +17,9 @@ default-members = [
     "projects/document/document.convert",
     "projects/document/document.layout",
     "projects/document/document.template",
-    "projects/document/document.template.hbs",
-    "projects/document/document.template.jinja",
+    "projects/document/document.template.input.hbs",
+    "projects/document/document.template.input.jinja",
+    "projects/document/document.template.framework",
     "projects/crawler/crawler",
     "projects/crawler/crawler.types",
 ]
@@ -77,8 +78,9 @@ document-input-tex = { path = "projects/document/document.input.tex" }
 document-input-typst = { path = "projects/document/document.input.typst" }
 document-input-formats = { path = "projects/document/document.input.formats" }
 document-template = { path = "projects/document/document.template" }
-document-template-hbs = { path = "projects/document/document.template.hbs" }
-document-template-jinja = { path = "projects/document/document.template.jinja" }
+document-template-input-hbs = { path = "projects/document/document.template.input.hbs" }
+document-template-input-jinja = { path = "projects/document/document.template.input.jinja" }
+document-template-framework = { path = "projects/document/document.template.framework" }
 
 # --- Crawler ---
 crawler-types = { path = "projects/crawler/crawler.types" }

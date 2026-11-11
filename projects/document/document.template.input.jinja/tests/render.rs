@@ -2,7 +2,7 @@ use document_template::{
     MapTemplateLoader, RenderLimits, RenderOptions, RenderOutput, RenderRequest, TemplateEngine, TemplateError, TemplateId,
     TemplateRoot, codes,
 };
-use document_template_jinja::{JinjaEngine, codes as jinja_codes};
+use document_template_input_jinja::{JinjaEngine, codes as jinja_codes};
 use serde_json::json;
 
 fn loader() -> MapTemplateLoader {

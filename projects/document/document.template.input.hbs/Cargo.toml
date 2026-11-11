@@ -1,8 +1,8 @@
 [package]
-name = "document-template-jinja"
+name = "document-template-input-hbs"
 version.workspace = true
 authors.workspace = true
-description = "Jinja2 语法子集模板引擎"
+description = "Handlebars 语法子集模板引擎"
 repository = "https://github.com/notedge/document.rs"
 readme = "readme.md"
 license.workspace = true

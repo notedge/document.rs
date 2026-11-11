@@ -2,7 +2,7 @@ use document_template::{
     MapTemplateLoader, RenderLimits, RenderOptions, RenderOutput, RenderRequest, TemplateEngine, TemplateError, TemplateId,
     TemplateRoot, codes,
 };
-use document_template_hbs::{HbsEngine, codes as hbs_codes};
+use document_template_input_hbs::{HbsEngine, codes as hbs_codes};
 use serde_json::json;
 
 fn loader() -> MapTemplateLoader {

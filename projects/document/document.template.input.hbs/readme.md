@@ -1,18 +1,18 @@
-# document-template-hbs
+# document-template-input-hbs
 
-`document.template.hbs`：Handlebars 语法子集，输出 HTML。
+`document.template.input.hbs`：Handlebars 语法子集，输出 HTML。
 
 支持插值（`{{expr}}` 转义、`{{{expr}}}` 原样）、`#if` / `#unless` / `#each` / `#with`、
 `else` / `else if`、partial（`{{> ref}}`）、注释、`~` 空白控制与 `@root` / `@index` /
 `@key` / `@first` / `@last` / `../` 路径。helper 调用、未知块与 partial 参数一律
-fail-closed，分别给 `template.hbs.unsupported-helper`、`template.hbs.unsupported-block`、
-`template.hbs.unsupported-construct`。
+fail-closed，分别给 `template.input.hbs.unsupported-helper`、`template.input.hbs.unsupported-block`、
+`template.input.hbs.unsupported-construct`。
 
 v0 已知偏差：不做 handlebars.js 的 standalone-line 空白剥离；对象遍历按 key 升序。
 
 ```rust,ignore
 use document_template::{MapTemplateLoader, RenderOptions, TemplateId, TemplateRoot};
-use document_template_hbs::HbsEngine;
+use document_template_input_hbs::HbsEngine;
 use serde_json::json;
 
 let loader = MapTemplateLoader::new().with_root(
