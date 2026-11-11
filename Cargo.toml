@@ -19,6 +19,7 @@ default-members = [
     "projects/document/document.template",
     "projects/document/document.template.input.hbs",
     "projects/document/document.template.input.jinja",
+    "projects/document/document.template.input.dejavu",
     "projects/document/document.template.framework",
     "projects/crawler/crawler",
     "projects/crawler/crawler.types",
@@ -80,6 +81,7 @@ document-input-formats = { path = "projects/document/document.input.formats" }
 document-template = { path = "projects/document/document.template" }
 document-template-input-hbs = { path = "projects/document/document.template.input.hbs" }
 document-template-input-jinja = { path = "projects/document/document.template.input.jinja" }
+document-template-input-dejavu = { path = "projects/document/document.template.input.dejavu" }
 document-template-framework = { path = "projects/document/document.template.framework" }
 
 # --- Crawler ---

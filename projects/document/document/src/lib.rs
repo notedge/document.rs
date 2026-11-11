@@ -139,6 +139,12 @@ pub mod template {
         pub mod jinja {
             pub use document_template_input_jinja::*;
         }
+
+        /// Dejavu 模板语言。
+        #[cfg(feature = "template-input-dejavu")]
+        pub mod dejavu {
+            pub use document_template_input_dejavu::*;
+        }
     }
 
     /// 构建框架合同。

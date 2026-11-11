@@ -33,6 +33,7 @@ document-input-formats = { workspace = true, optional = true }
 document-template = { workspace = true, optional = true }
 document-template-input-hbs = { workspace = true, optional = true }
 document-template-input-jinja = { workspace = true, optional = true }
+document-template-input-dejavu = { workspace = true, optional = true }
 document-template-framework = { workspace = true, optional = true }
 
 [features]
@@ -60,6 +61,7 @@ input-formats = ["dep:document-input-formats"]
 template = ["dep:document-template"]
 template-input-hbs = ["template", "dep:document-template-input-hbs"]
 template-input-jinja = ["template", "dep:document-template-input-jinja"]
+template-input-dejavu = ["template", "dep:document-template-input-dejavu"]
 template-framework = ["template", "dep:document-template-framework"]
 # 格式语言 feature（转发到 document-formats）
 markdown = ["formats", "document-formats/markdown"]

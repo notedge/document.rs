@@ -25,17 +25,29 @@ pub struct TemplateError {
 
 impl TemplateError {
     /// Build a single-diagnostic failure with no structured arguments.
-    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self::with_args(code, message, Vec::new())
     }
 
     /// Build a single-diagnostic failure with text arguments.
     ///
     /// Arguments keep stable names (`ref`, `from`, `engine`, `construct`, …) and
-    /// become `args` on the wire diagnostic.
-    pub fn with_args(code: &'static str, message: impl Into<String>, args: Vec<(&'static str, String)>) -> Self {
+    /// become `args` on the wire diagnostic. Engine crates whose code set is
+    /// declared elsewhere map their own stable codes in here unchanged.
+    pub fn with_args(code: impl Into<String>, message: impl Into<String>, args: Vec<(&'static str, String)>) -> Self {
+        let owned = args.into_iter().map(|(name, value)| (name.to_string(), value)).collect();
+        Self::with_owned_args(code, message, owned)
+    }
+
+    /// Build a single-diagnostic failure with owned argument names.
+    ///
+    /// Engine crates that translate their own diagnostic maps need dynamic names;
+    /// this is the same shape as [`TemplateError::with_args`] without the
+    /// `'static` restriction.
+    pub fn with_owned_args(code: impl Into<String>, message: impl Into<String>, args: Vec<(String, String)>) -> Self {
+        let code: String = code.into();
         let fallback = message.into();
-        let mut payload = Message::new(code);
+        let mut payload = Message::new(code.clone());
         for (name, value) in args {
             payload = payload.with_arg(name, MessageArg::Text(value));
         }
