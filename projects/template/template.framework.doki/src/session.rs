@@ -3,26 +3,29 @@
 //! Node drives `prepare_build` / `continue_build` / `commit_build`; this module
 //! owns content graph and phase authority. No Dejavu / OXC yet.
 
-use std::collections::BTreeSet;
-use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use serde_json::json;
 
-use crate::config::{load_project_config, LoadOptions, ProjectConfig, ProjectPaths};
-use crate::diagnostic::{Diagnostic, Severity};
-use crate::error::{CoreError, CoreResult};
-use crate::graph::{discover_markdown_content, load_markdown_node, ContentGraph, ContentId};
-use crate::i18n::I18n;
-use crate::protocol::{
-    BuildMode, BuildPhase, BuildPlan, BuildResult, ExplainRebuild, ExtensionKind,
-    ExtensionSourceKind, FileChange, FileChangeKind, HookKind, HookWorkItem, InvalidationResult,
-    PluginResult, ResolvedExtension,
+use crate::{
+    config::{LoadOptions, ProjectConfig, ProjectPaths, load_project_config},
+    diagnostic::{Diagnostic, Severity},
+    error::{CoreError, CoreResult},
+    graph::{ContentGraph, ContentId, discover_markdown_content, load_markdown_node},
+    i18n::I18n,
+    protocol::{
+        BuildMode, BuildPhase, BuildPlan, BuildResult, ExplainRebuild, ExtensionKind, ExtensionSourceKind, FileChange,
+        FileChangeKind, HookKind, HookWorkItem, InvalidationResult, PluginResult, ResolvedExtension,
+    },
+    render::{RenderedPage, render_page, render_taxonomy_page},
+    site::{ROUTE_CONFLICT_CODE, SiteModel, SitePage, output_rel},
+    staging::StagingArea,
 };
-use crate::render::{RenderedPage, render_page, render_taxonomy_page};
-use crate::site::{output_rel, SiteModel, SitePage, ROUTE_CONFLICT_CODE};
-use crate::staging::StagingArea;
 
 static SESSION_SEQ: AtomicU64 = AtomicU64::new(1);
 static BUILD_SEQ: AtomicU64 = AtomicU64::new(1);
@@ -78,10 +81,7 @@ pub struct BuildSession {
 
 impl BuildSession {
     /// Load config, discover markdown content, resolve declared extensions (path/package only).
-    pub fn open_project(
-        root: impl AsRef<std::path::Path>,
-        options: LoadOptions,
-    ) -> CoreResult<Self> {
+    pub fn open_project(root: impl AsRef<std::path::Path>, options: LoadOptions) -> CoreResult<Self> {
         let (paths, config) = load_project_config(root, options.clone())?;
         let graph = discover_markdown_content(&paths.root, &config.content_dir)?;
         let extensions = resolve_declared_extensions(&config);
@@ -140,12 +140,7 @@ impl BuildSession {
     /// Serialized site pages visible to plugins in the active build mode.
     fn pages_json(&self, active: &ActiveBuild) -> serde_json::Value {
         let include_drafts = self.include_drafts(active.mode);
-        let pages: Vec<&SitePage> = active
-            .site
-            .pages()
-            .iter()
-            .filter(|page| include_drafts || !page.draft)
-            .collect();
+        let pages: Vec<&SitePage> = active.site.pages().iter().filter(|page| include_drafts || !page.draft).collect();
         serde_json::to_value(pages).expect("site pages serialize")
     }
 
@@ -166,9 +161,7 @@ impl BuildSession {
         self.ensure_alive()?;
         if let Some(active) = &self.active {
             if !active.cancelled && active.phase != BuildPhase::Committed {
-                return Err(CoreError::build(
-                    "a build is already active; commit, cancel, or dispose first",
-                ));
+                return Err(CoreError::build("a build is already active; commit, cancel, or dispose first"));
             }
         }
 
@@ -185,18 +178,12 @@ impl BuildSession {
             }
             // Drop drafts from incremental render set in production.
             if !self.include_drafts(mode) {
-                ids.retain(|id| {
-                    self.graph
-                        .nodes
-                        .get(id)
-                        .map(|n| !n.front_matter.draft)
-                        .unwrap_or(false)
-                });
+                ids.retain(|id| self.graph.nodes.get(id).map(|n| !n.front_matter.draft).unwrap_or(false));
             }
             (Some(ids), false)
-        } else {
-            if self.needs_full_rediscover || self.dirty.is_empty() || self.last_committed.is_empty()
-            {
+        }
+        else {
+            if self.needs_full_rediscover || self.dirty.is_empty() || self.last_committed.is_empty() {
                 self.graph = discover_markdown_content(&self.paths.root, &self.config.content_dir)?;
             }
             let previous = self.extensions.clone();
@@ -216,20 +203,13 @@ impl BuildSession {
         let output_root = self.paths.root.join(&self.config.output_dir);
         let staging = StagingArea::create(&output_root, &build_id)?;
 
-        let (site, mut diagnostics) =
-            SiteModel::build(&self.graph, self.include_drafts(mode), &self.config.lang);
-        let conflicts: Vec<Diagnostic> = diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.code == ROUTE_CONFLICT_CODE)
-            .cloned()
-            .collect();
+        let (site, mut diagnostics) = SiteModel::build(&self.graph, self.include_drafts(mode), &self.config.lang);
+        let conflicts: Vec<Diagnostic> =
+            diagnostics.iter().filter(|diagnostic| diagnostic.code == ROUTE_CONFLICT_CODE).cloned().collect();
 
         let (i18n, i18n_diagnostics) = I18n::load(&self.paths.root, &self.config);
-        let i18n_errors: Vec<Diagnostic> = i18n_diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.severity == Severity::Error)
-            .cloned()
-            .collect();
+        let i18n_errors: Vec<Diagnostic> =
+            i18n_diagnostics.iter().filter(|diagnostic| diagnostic.severity == Severity::Error).cloned().collect();
         diagnostics.extend(i18n_diagnostics);
 
         let active = ActiveBuild {
@@ -273,29 +253,18 @@ impl BuildSession {
     pub fn continue_build(&mut self, results: Vec<PluginResult>) -> CoreResult<BuildPlan> {
         self.ensure_alive()?;
         {
-            let active = self
-                .active
-                .as_mut()
-                .ok_or_else(|| CoreError::build("no active build; call prepare_build first"))?;
+            let active = self.active.as_mut().ok_or_else(|| CoreError::build("no active build; call prepare_build first"))?;
             if active.cancelled {
                 return Err(CoreError::build("build was cancelled"));
             }
-            if matches!(
-                active.phase,
-                BuildPhase::ReadyToCommit | BuildPhase::Committed
-            ) {
-                return Err(CoreError::build(
-                    "build is ready to commit or already committed; call commit_build",
-                ));
+            if matches!(active.phase, BuildPhase::ReadyToCommit | BuildPhase::Committed) {
+                return Err(CoreError::build("build is ready to commit or already committed; call commit_build"));
             }
 
             for result in &results {
                 active.diagnostics.extend(result.diagnostics.clone());
                 if !result.ok {
-                    return Err(CoreError::build(format!(
-                        "plugin `{}` failed hook {:?}",
-                        result.plugin_id, result.hook
-                    )));
+                    return Err(CoreError::build(format!("plugin `{}` failed hook {:?}", result.plugin_id, result.hook)));
                 }
                 if let Some(patch) = &result.patch {
                     apply_artifact_patch(&mut active.staging, patch)?;
@@ -316,11 +285,7 @@ impl BuildSession {
 
     fn skip_empty_hook_phases(&mut self) -> CoreResult<BuildPlan> {
         loop {
-            let phase = self
-                .active
-                .as_ref()
-                .ok_or_else(|| CoreError::build("no active build"))?
-                .phase;
+            let phase = self.active.as_ref().ok_or_else(|| CoreError::build("no active build"))?.phase;
 
             if matches!(phase, BuildPhase::ReadyToCommit | BuildPhase::Committed) {
                 return Ok(self.plan_for_current_phase());
@@ -353,18 +318,12 @@ impl BuildSession {
     /// Promote staging into `output_dir`.
     pub fn commit_build(&mut self) -> CoreResult<BuildResult> {
         self.ensure_alive()?;
-        let active = self
-            .active
-            .as_ref()
-            .ok_or_else(|| CoreError::build("no active build"))?;
+        let active = self.active.as_ref().ok_or_else(|| CoreError::build("no active build"))?;
         if active.cancelled {
             return Err(CoreError::build("build was cancelled"));
         }
         if active.phase != BuildPhase::ReadyToCommit {
-            return Err(CoreError::build(format!(
-                "cannot commit in phase {:?}; finish continue_build first",
-                active.phase
-            )));
+            return Err(CoreError::build(format!("cannot commit in phase {:?}; finish continue_build first", active.phase)));
         }
 
         let active = self.active.take().expect("active build");
@@ -384,12 +343,7 @@ impl BuildSession {
             .filter(|page| include_drafts || !page.draft)
             .map(|page| page.id.clone())
             .collect();
-        let pages: Vec<&SitePage> = active
-            .site
-            .pages()
-            .iter()
-            .filter(|page| include_drafts || !page.draft)
-            .collect();
+        let pages: Vec<&SitePage> = active.site.pages().iter().filter(|page| include_drafts || !page.draft).collect();
         let page_files: Vec<String> = pages.iter().map(|page| page.output.clone()).collect();
         let manifest = json!({
             "buildId": build_id,
@@ -400,16 +354,9 @@ impl BuildSession {
         });
 
         let staging = active.staging;
-        staging.write_file(
-            "doki-manifest.json",
-            serde_json::to_vec_pretty(&manifest).expect("manifest serialize"),
-        )?;
+        staging.write_file("doki-manifest.json", serde_json::to_vec_pretty(&manifest).expect("manifest serialize"))?;
 
-        let replace_set = if full_replace {
-            Some(self.last_committed.clone())
-        } else {
-            None
-        };
+        let replace_set = if full_replace { Some(self.last_committed.clone()) } else { None };
         let mut committed = staging.commit_into(&output_dir, replace_set.as_ref())?;
 
         for rel in std::mem::take(&mut self.pending_deletes) {
@@ -422,7 +369,8 @@ impl BuildSession {
 
         if full_replace {
             self.last_committed = committed.iter().cloned().collect();
-        } else {
+        }
+        else {
             for f in &committed {
                 self.last_committed.insert(f.clone());
             }
@@ -447,11 +395,8 @@ impl BuildSession {
             "diagnostics": &diagnostics,
         });
         let manifest_rel = ".doki/build-manifest.json";
-        fs::write(
-            doki_meta.join("build-manifest.json"),
-            serde_json::to_vec_pretty(&build_manifest).expect("build manifest"),
-        )
-        .map_err(|source| CoreError::Io { source })?;
+        fs::write(doki_meta.join("build-manifest.json"), serde_json::to_vec_pretty(&build_manifest).expect("build manifest"))
+            .map_err(|source| CoreError::Io { source })?;
         if !committed.iter().any(|f| f == manifest_rel) {
             committed.push(manifest_rel.into());
             self.last_committed.insert(manifest_rel.into());
@@ -467,10 +412,7 @@ impl BuildSession {
     }
 
     /// Replace extension list with Node-resolved absolute paths (same ids).
-    pub fn set_resolved_extensions(
-        &mut self,
-        extensions: Vec<ResolvedExtension>,
-    ) -> CoreResult<()> {
+    pub fn set_resolved_extensions(&mut self, extensions: Vec<ResolvedExtension>) -> CoreResult<()> {
         self.ensure_alive()?;
         self.extensions = extensions;
         Ok(())
@@ -479,21 +421,18 @@ impl BuildSession {
     /// Explain whether a relative project path would force a rebuild.
     pub fn explain_rebuild(&mut self, path: &str) -> CoreResult<ExplainRebuild> {
         self.ensure_alive()?;
-        let change = FileChange {
-            path: path.replace('\\', "/"),
-            kind: FileChangeKind::Modify,
-        };
+        let change = FileChange { path: path.replace('\\', "/"), kind: FileChangeKind::Modify };
         let inv = self.invalidate(std::slice::from_ref(&change))?;
         let reason = if is_config_path(&change.path) {
             "project config change requires full rediscovery".into()
-        } else if !inv.invalidated_content.is_empty() {
-            format!(
-                "content graph invalidates {} page(s)",
-                inv.invalidated_content.len()
-            )
-        } else if inv.rebuild_required {
+        }
+        else if !inv.invalidated_content.is_empty() {
+            format!("content graph invalidates {} page(s)", inv.invalidated_content.len())
+        }
+        else if inv.rebuild_required {
             "non-content path marked rebuild (theme/public/other)".into()
-        } else {
+        }
+        else {
             "no rebuild required for this path".into()
         };
         Ok(ExplainRebuild {
@@ -519,10 +458,7 @@ impl BuildSession {
                 // Reload config immediately so subsequent prepare sees new values.
                 let (paths, config) = load_project_config(
                     &self.paths.root,
-                    LoadOptions {
-                        allow_local: self.allow_local,
-                        theme_defaults: self.theme_defaults.clone(),
-                    },
+                    LoadOptions { allow_local: self.allow_local, theme_defaults: self.theme_defaults.clone() },
                 )?;
                 self.paths = paths;
                 self.config = config;
@@ -530,7 +466,8 @@ impl BuildSession {
                 continue;
             }
 
-            let Some(rel) = content_rel(&norm, &content_prefix, &self.config.content_dir) else {
+            let Some(rel) = content_rel(&norm, &content_prefix, &self.config.content_dir)
+            else {
                 // Non-content change (public/theme later) → full rediscover for safety.
                 self.needs_full_rediscover = true;
                 continue;
@@ -559,7 +496,8 @@ impl BuildSession {
                         self.graph.insert(node);
                         invalidated.extend(closure);
                         self.dirty.insert(id);
-                    } else if change.kind == FileChangeKind::Modify {
+                    }
+                    else if change.kind == FileChangeKind::Modify {
                         let closure = self.graph.invalidate_closure(&id);
                         if let Some(node) = self.graph.remove(&id) {
                             self.pending_deletes.insert(output_rel(&node.rel_path));
@@ -572,10 +510,7 @@ impl BuildSession {
         }
 
         let rebuild_required = self.needs_full_rediscover || !invalidated.is_empty();
-        Ok(InvalidationResult {
-            invalidated_content: invalidated.into_iter().collect(),
-            rebuild_required,
-        })
+        Ok(InvalidationResult { invalidated_content: invalidated.into_iter().collect(), rebuild_required })
     }
 
     pub fn cancel(&mut self) -> CoreResult<()> {
@@ -597,18 +532,11 @@ impl BuildSession {
     }
 
     fn enabled_plugin_ids(&self) -> Vec<String> {
-        self.extensions
-            .iter()
-            .filter(|e| e.kind == ExtensionKind::Plugin && e.enabled)
-            .map(|e| e.id.clone())
-            .collect()
+        self.extensions.iter().filter(|e| e.kind == ExtensionKind::Plugin && e.enabled).map(|e| e.id.clone()).collect()
     }
 
     fn theme_fs_root(&self) -> Option<PathBuf> {
-        let theme = self
-            .extensions
-            .iter()
-            .find(|e| e.kind == ExtensionKind::Theme)?;
+        let theme = self.extensions.iter().find(|e| e.kind == ExtensionKind::Theme)?;
         if let Some(resolved) = &theme.resolved_path {
             return Some(PathBuf::from(resolved));
         }
@@ -634,9 +562,7 @@ impl BuildSession {
                         "pages": pages,
                     })
                 });
-                items.extend(
-                    self.hooks_for(HookKind::GenerateContent, |id| json!({ "pluginId": id })),
-                );
+                items.extend(self.hooks_for(HookKind::GenerateContent, |id| json!({ "pluginId": id })));
                 items
             }
             BuildPhase::ContributeArtifacts => {
@@ -674,20 +600,12 @@ impl BuildSession {
         }
     }
 
-    fn hooks_for(
-        &self,
-        hook: HookKind,
-        input: impl Fn(&str) -> serde_json::Value,
-    ) -> Vec<HookWorkItem> {
+    fn hooks_for(&self, hook: HookKind, input: impl Fn(&str) -> serde_json::Value) -> Vec<HookWorkItem> {
         self.enabled_plugin_ids()
             .into_iter()
             .map(|plugin_id| {
                 let input = input(&plugin_id);
-                HookWorkItem {
-                    hook,
-                    plugin_id,
-                    input,
-                }
+                HookWorkItem { hook, plugin_id, input }
             })
             .collect()
     }
@@ -696,10 +614,7 @@ impl BuildSession {
     /// active render set, plus every derived taxonomy aggregate (its members
     /// can change whenever any post changes).
     fn render_queue(&self) -> CoreResult<Vec<ContentId>> {
-        let active = self
-            .active
-            .as_ref()
-            .ok_or_else(|| CoreError::build("no active build"))?;
+        let active = self.active.as_ref().ok_or_else(|| CoreError::build("no active build"))?;
         let include_drafts = self.include_drafts(active.mode);
         Ok(active
             .site
@@ -731,37 +646,17 @@ impl BuildSession {
                 .pages()
                 .iter()
                 .find(|page| &page.id == id)
-                .ok_or_else(|| {
-                    CoreError::build(format!("render queue names unknown page `{}`", id.0))
-                })?;
+                .ok_or_else(|| CoreError::build(format!("render queue names unknown page `{}`", id.0)))?;
             let rendered = if let Some(node) = self.graph.nodes.get(id) {
-                let rendered = render_page(
-                    &root,
-                    &self.config,
-                    theme_root.as_deref(),
-                    node,
-                    site,
-                    i18n,
-                    include_drafts,
-                )?;
+                let rendered = render_page(&root, &self.config, theme_root.as_deref(), node, site, i18n, include_drafts)?;
                 layout_deps.push((id.clone(), rendered.layout_id.clone()));
                 rendered
-            } else if let Some(view) = site.taxonomy(id) {
-                render_taxonomy_page(
-                    &root,
-                    &self.config,
-                    theme_root.as_deref(),
-                    page,
-                    view,
-                    site,
-                    i18n,
-                    include_drafts,
-                )?
-            } else {
-                return Err(CoreError::build(format!(
-                    "page `{}` has neither a content node nor a taxonomy view",
-                    id.0
-                )));
+            }
+            else if let Some(view) = site.taxonomy(id) {
+                render_taxonomy_page(&root, &self.config, theme_root.as_deref(), page, view, site, i18n, include_drafts)?
+            }
+            else {
+                return Err(CoreError::build(format!("page `{}` has neither a content node nor a taxonomy view", id.0)));
             };
             let RenderedPage { html, diagnostics, .. } = rendered;
             render_diagnostics.extend(diagnostics);
@@ -773,20 +668,12 @@ impl BuildSession {
             self.graph.edges.entry(id.clone()).or_default().insert(dep);
         }
 
-        self.active
-            .as_mut()
-            .expect("active build")
-            .diagnostics
-            .extend(render_diagnostics);
+        self.active.as_mut().expect("active build").diagnostics.extend(render_diagnostics);
 
         let public_dir = self.paths.root.join(&self.config.public_dir);
         let theme_assets = self.theme_fs_root().map(|r| r.join("assets"));
 
-        let staging = &mut self
-            .active
-            .as_mut()
-            .ok_or_else(|| CoreError::build("no active build"))?
-            .staging;
+        let staging = &mut self.active.as_mut().ok_or_else(|| CoreError::build("no active build"))?.staging;
         for (rel, html) in jobs {
             staging.write_file(&rel, html)?;
         }
@@ -800,11 +687,7 @@ impl BuildSession {
     }
 }
 
-fn copy_dir_into_staging(
-    staging: &StagingArea,
-    src: &std::path::Path,
-    dest_prefix: &str,
-) -> CoreResult<()> {
+fn copy_dir_into_staging(staging: &StagingArea, src: &std::path::Path, dest_prefix: &str) -> CoreResult<()> {
     if !src.is_dir() {
         return Ok(());
     }
@@ -817,14 +700,11 @@ fn copy_dir_into_staging(
             if name == ".gitkeep" || name == ".DS_Store" {
                 continue;
             }
-            let rel = if prefix.is_empty() {
-                name.to_string()
-            } else {
-                format!("{prefix}/{name}")
-            };
+            let rel = if prefix.is_empty() { name.to_string() } else { format!("{prefix}/{name}") };
             if path.is_dir() {
                 walk(staging, &path, &rel)?;
-            } else if path.is_file() {
+            }
+            else if path.is_file() {
                 let bytes = fs::read(&path).map_err(|source| CoreError::Io { source })?;
                 staging.write_file(&rel, bytes)?;
             }
@@ -835,23 +715,15 @@ fn copy_dir_into_staging(
 }
 
 fn apply_artifact_patch(staging: &mut StagingArea, patch: &serde_json::Value) -> CoreResult<()> {
-    let Some(artifacts) = patch.get("artifacts").and_then(|v| v.as_array()) else {
+    let Some(artifacts) = patch.get("artifacts").and_then(|v| v.as_array())
+    else {
         return Ok(());
     };
     for item in artifacts {
-        let path = item
-            .get("path")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| CoreError::build("artifact patch missing path"))?;
+        let path = item.get("path").and_then(|v| v.as_str()).ok_or_else(|| CoreError::build("artifact patch missing path"))?;
         let norm = path.replace('\\', "/");
-        if norm.is_empty()
-            || norm.starts_with('/')
-            || norm.contains("..")
-            || PathBuf::from(&norm).is_absolute()
-        {
-            return Err(CoreError::build(format!(
-                "refusing unsafe artifact path `{norm}`"
-            )));
+        if norm.is_empty() || norm.starts_with('/') || norm.contains("..") || PathBuf::from(&norm).is_absolute() {
+            return Err(CoreError::build(format!("refusing unsafe artifact path `{norm}`")));
         }
         let contents = item
             .get("contents")
@@ -880,10 +752,7 @@ fn content_rel(norm: &str, content_prefix: &str, content_dir: &str) -> Option<St
 }
 
 fn is_markdown_rel(rel: &str) -> bool {
-    matches!(
-        rel.rsplit('.').next().unwrap_or(""),
-        "md" | "mdx" | "markdown"
-    )
+    matches!(rel.rsplit('.').next().unwrap_or(""), "md" | "mdx" | "markdown")
 }
 
 fn resolve_declared_extensions(config: &ProjectConfig) -> Vec<ResolvedExtension> {
@@ -891,13 +760,11 @@ fn resolve_declared_extensions(config: &ProjectConfig) -> Vec<ResolvedExtension>
     if let Some(theme) = &config.theme {
         let (source, path, package) = if theme.path.is_some() {
             (ExtensionSourceKind::LocalPath, theme.path.clone(), None)
-        } else {
+        }
+        else {
             (ExtensionSourceKind::Package, None, theme.package.clone())
         };
-        let id = path
-            .clone()
-            .or_else(|| package.clone())
-            .unwrap_or_else(|| "theme".into());
+        let id = path.clone().or_else(|| package.clone()).unwrap_or_else(|| "theme".into());
         out.push(ResolvedExtension {
             id,
             kind: ExtensionKind::Theme,
@@ -911,13 +778,11 @@ fn resolve_declared_extensions(config: &ProjectConfig) -> Vec<ResolvedExtension>
     for (i, plugin) in config.plugins.iter().enumerate() {
         let (source, path, package) = if plugin.path.is_some() {
             (ExtensionSourceKind::LocalPath, plugin.path.clone(), None)
-        } else {
+        }
+        else {
             (ExtensionSourceKind::Package, None, plugin.package.clone())
         };
-        let id = path
-            .clone()
-            .or_else(|| package.clone())
-            .unwrap_or_else(|| format!("plugin-{i}"));
+        let id = path.clone().or_else(|| package.clone()).unwrap_or_else(|| format!("plugin-{i}"));
         out.push(ResolvedExtension {
             id,
             kind: ExtensionKind::Plugin,
@@ -964,11 +829,7 @@ incremental = true
         )
         .unwrap();
         fs::create_dir_all(dir.join("content")).unwrap();
-        fs::write(
-            dir.join("content/hello.md"),
-            "---\ntitle: Hello\n---\n\n# Hello\n",
-        )
-        .unwrap();
+        fs::write(dir.join("content/hello.md"), "---\ntitle: Hello\n---\n\n# Hello\n").unwrap();
         fs::write(dir.join("content/about.md"), "# About\n").unwrap();
     }
 
@@ -978,11 +839,7 @@ incremental = true
         write_min_project(dir.path());
         let session = BuildSession::open_project(dir.path(), LoadOptions::default()).unwrap();
         assert_eq!(session.graph().len(), 2);
-        let hello = session
-            .graph()
-            .nodes
-            .get(&ContentId("hello.md".into()))
-            .unwrap();
+        let hello = session.graph().nodes.get(&ContentId("hello.md".into())).unwrap();
         assert_eq!(hello.front_matter.title.as_deref(), Some("Hello"));
         assert!(!hello.content_hash.is_empty());
     }
@@ -991,11 +848,7 @@ incremental = true
     fn production_skips_drafts() {
         let dir = tempfile::tempdir().unwrap();
         write_min_project(dir.path());
-        fs::write(
-            dir.path().join("content/secret.md"),
-            "---\ntitle: Secret\ndraft: true\n---\n\nhidden\n",
-        )
-        .unwrap();
+        fs::write(dir.path().join("content/secret.md"), "---\ntitle: Secret\ndraft: true\n---\n\nhidden\n").unwrap();
         let mut session = BuildSession::open_project(dir.path(), LoadOptions::default()).unwrap();
         assert_eq!(session.graph().len(), 3);
         let plan = session.prepare_build(BuildMode::Production).unwrap();
@@ -1005,10 +858,8 @@ incremental = true
         assert_eq!(result.content_ids.len(), 2);
         assert!(!dir.path().join("dist/pages/secret.html").exists());
         assert!(dir.path().join("dist/pages/hello.html").is_file());
-        let manifest: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(dir.path().join("dist/doki-manifest.json")).unwrap(),
-        )
-        .unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dir.path().join("dist/doki-manifest.json")).unwrap()).unwrap();
         assert_eq!(manifest["content"], json!(["about.md", "hello.md"]));
         let pages = manifest["pages"].as_array().unwrap();
         assert_eq!(pages.len(), 2);
@@ -1024,21 +875,13 @@ incremental = true
         let plan = session.prepare_build(BuildMode::Production).unwrap();
         assert_eq!(plan.phase, BuildPhase::ReadyToCommit);
         let result = session.commit_build().unwrap();
-        assert!(result
-            .committed_files
-            .iter()
-            .any(|f| f == "doki-manifest.json"));
-        assert!(result
-            .committed_files
-            .iter()
-            .any(|f| f == "pages/hello.html"));
+        assert!(result.committed_files.iter().any(|f| f == "doki-manifest.json"));
+        assert!(result.committed_files.iter().any(|f| f == "pages/hello.html"));
         let html = fs::read_to_string(dir.path().join("dist/pages/hello.html")).unwrap();
         assert!(html.contains("<title>Hello</title>") || html.contains("Hello"));
         assert!(html.contains("<h1>Hello</h1>") || html.contains("Hello"));
-        let build_manifest: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(dir.path().join("dist/.doki/build-manifest.json")).unwrap(),
-        )
-        .unwrap();
+        let build_manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dir.path().join("dist/.doki/build-manifest.json")).unwrap()).unwrap();
         let pages = build_manifest["pages"].as_array().unwrap();
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[0]["id"], "about.md");
@@ -1057,27 +900,11 @@ incremental = true
         session.prepare_build(BuildMode::Production).unwrap();
         session.commit_build().unwrap();
 
-        fs::write(
-            dir.path().join("content/hello.md"),
-            "---\ntitle: Hello v2\n---\n\nupdated\n",
-        )
-        .unwrap();
-        let inv = session
-            .invalidate(&[FileChange {
-                path: "content/hello.md".into(),
-                kind: FileChangeKind::Modify,
-            }])
-            .unwrap();
+        fs::write(dir.path().join("content/hello.md"), "---\ntitle: Hello v2\n---\n\nupdated\n").unwrap();
+        let inv = session.invalidate(&[FileChange { path: "content/hello.md".into(), kind: FileChangeKind::Modify }]).unwrap();
         assert!(inv.rebuild_required);
         assert_eq!(
-            session
-                .graph()
-                .nodes
-                .get(&ContentId("hello.md".into()))
-                .unwrap()
-                .front_matter
-                .title
-                .as_deref(),
+            session.graph().nodes.get(&ContentId("hello.md".into())).unwrap().front_matter.title.as_deref(),
             Some("Hello v2")
         );
 
@@ -1096,15 +923,8 @@ incremental = true
         write_min_project(dir.path());
         let mut session = BuildSession::open_project(dir.path(), LoadOptions::default()).unwrap();
         fs::remove_file(dir.path().join("content/about.md")).unwrap();
-        let inv = session
-            .invalidate(&[FileChange {
-                path: "content/about.md".into(),
-                kind: FileChangeKind::Remove,
-            }])
-            .unwrap();
-        assert!(inv
-            .invalidated_content
-            .contains(&ContentId("about.md".into())));
+        let inv = session.invalidate(&[FileChange { path: "content/about.md".into(), kind: FileChangeKind::Remove }]).unwrap();
+        assert!(inv.invalidated_content.contains(&ContentId("about.md".into())));
         assert_eq!(session.graph().len(), 1);
     }
 
@@ -1118,12 +938,7 @@ incremental = true
         assert!(dir.path().join("dist/pages/about.html").is_file());
 
         fs::remove_file(dir.path().join("content/about.md")).unwrap();
-        session
-            .invalidate(&[FileChange {
-                path: "content/about.md".into(),
-                kind: FileChangeKind::Remove,
-            }])
-            .unwrap();
+        session.invalidate(&[FileChange { path: "content/about.md".into(), kind: FileChangeKind::Remove }]).unwrap();
         session.prepare_build(BuildMode::Production).unwrap();
         session.commit_build().unwrap();
         assert!(!dir.path().join("dist/pages/about.html").exists());
@@ -1140,19 +955,9 @@ incremental = true
         assert!(dir.path().join("dist/pages/about.html").is_file());
 
         fs::remove_file(dir.path().join("content/about.md")).unwrap();
-        session
-            .invalidate(&[FileChange {
-                path: "content/about.md".into(),
-                kind: FileChangeKind::Remove,
-            }])
-            .unwrap();
+        session.invalidate(&[FileChange { path: "content/about.md".into(), kind: FileChangeKind::Remove }]).unwrap();
         // Config touch forces full rediscover + output replace.
-        session
-            .invalidate(&[FileChange {
-                path: "doki.toml".into(),
-                kind: FileChangeKind::Modify,
-            }])
-            .unwrap();
+        session.invalidate(&[FileChange { path: "doki.toml".into(), kind: FileChangeKind::Modify }]).unwrap();
         session.prepare_build(BuildMode::Production).unwrap();
         session.commit_build().unwrap();
         assert!(!dir.path().join("dist/pages/about.html").exists());
@@ -1229,21 +1034,13 @@ enabled = false
         let dir = tempfile::tempdir().unwrap();
         write_min_project(dir.path());
         fs::create_dir_all(dir.path().join("content/posts")).unwrap();
-        fs::write(
-            dir.path().join("content/index.md"),
-            "---\ntitle: Home\n---\n\nhome\n",
-        )
-        .unwrap();
+        fs::write(dir.path().join("content/index.md"), "---\ntitle: Home\n---\n\nhome\n").unwrap();
         fs::write(
             dir.path().join("content/posts/2025-08-11-first.md"),
             "---\ntitle: First post\ndate: 2026-08-11\n---\n\npost\n",
         )
         .unwrap();
-        fs::write(
-            dir.path().join("content/secret.md"),
-            "---\ntitle: Secret\ndraft: true\n---\n\nhidden\n",
-        )
-        .unwrap();
+        fs::write(dir.path().join("content/secret.md"), "---\ntitle: Secret\ndraft: true\n---\n\nhidden\n").unwrap();
         fs::write(
             dir.path().join("doki.toml"),
             r#"
@@ -1269,10 +1066,7 @@ enabled = true
         assert!(input.get("contentIds").is_none(), "{input}");
         let pages = input["pages"].as_array().unwrap();
         assert_eq!(pages.len(), 5, "{input}");
-        let first = pages
-            .iter()
-            .find(|page| page["relPath"] == "posts/2025-08-11-first.md")
-            .unwrap();
+        let first = pages.iter().find(|page| page["relPath"] == "posts/2025-08-11-first.md").unwrap();
         assert_eq!(first["type"], "post");
         assert_eq!(first["route"], "/posts/first/");
         assert_eq!(first["output"], "pages/posts/2025-08-11-first.html");
@@ -1281,16 +1075,10 @@ enabled = true
         assert_eq!(first["date"], "2026-08-11");
         assert_eq!(first["draft"], false);
         assert_eq!(first["description"], serde_json::Value::Null);
-        let home = pages
-            .iter()
-            .find(|page| page["relPath"] == "index.md")
-            .unwrap();
+        let home = pages.iter().find(|page| page["relPath"] == "index.md").unwrap();
         assert_eq!(home["type"], "home");
         assert_eq!(home["route"], "/");
-        let draft = pages
-            .iter()
-            .find(|page| page["relPath"] == "secret.md")
-            .unwrap();
+        let draft = pages.iter().find(|page| page["relPath"] == "secret.md").unwrap();
         assert_eq!(draft["draft"], true, "development builds include drafts");
 
         let plan = advance(&mut session, plan);
@@ -1302,11 +1090,7 @@ enabled = true
         assert_eq!(input["site"]["baseUrl"], serde_json::Value::Null);
         assert_eq!(input["pages"].as_array().unwrap().len(), 5);
         assert!(input.get("contentIds").is_none(), "{input}");
-        let complete = plan
-            .pending_hooks
-            .iter()
-            .find(|hook| hook.hook == HookKind::BuildComplete)
-            .unwrap();
+        let complete = plan.pending_hooks.iter().find(|hook| hook.hook == HookKind::BuildComplete).unwrap();
         assert_eq!(complete.input["readOnly"], true);
         assert_eq!(complete.input["pages"].as_array().unwrap().len(), 5);
     }
@@ -1316,35 +1100,18 @@ enabled = true
         let dir = tempfile::tempdir().unwrap();
         write_min_project(dir.path());
         fs::create_dir_all(dir.path().join("content/posts")).unwrap();
-        fs::write(
-            dir.path().join("content/posts/hello.md"),
-            "---\ntitle: Plain\n---\n\nplain\n",
-        )
-        .unwrap();
-        fs::write(
-            dir.path().join("content/posts/2025-06-15-hello.md"),
-            "---\ntitle: Dated\n---\n\ndated\n",
-        )
-        .unwrap();
+        fs::write(dir.path().join("content/posts/hello.md"), "---\ntitle: Plain\n---\n\nplain\n").unwrap();
+        fs::write(dir.path().join("content/posts/2025-06-15-hello.md"), "---\ntitle: Dated\n---\n\ndated\n").unwrap();
 
         let mut session = BuildSession::open_project(dir.path(), LoadOptions::default()).unwrap();
         let err = session.prepare_build(BuildMode::Production).unwrap_err();
         let message = err.to_string();
-        assert!(
-            message.contains("doki.site.route-conflict"),
-            "diagnostic code must be in the error: {message}"
-        );
+        assert!(message.contains("doki.site.route-conflict"), "diagnostic code must be in the error: {message}");
         assert!(message.contains("posts/hello.md"), "{message}");
         assert!(message.contains("posts/2025-06-15-hello.md"), "{message}");
         assert!(message.contains("/posts/hello/"), "{message}");
-        assert!(
-            !dir.path().join("dist/pages/posts/hello.html").exists(),
-            "a conflicted build must not render"
-        );
-        assert!(!dir
-            .path()
-            .join("dist/pages/posts/2025-06-15-hello.html")
-            .exists());
+        assert!(!dir.path().join("dist/pages/posts/hello.html").exists(), "a conflicted build must not render");
+        assert!(!dir.path().join("dist/pages/posts/2025-06-15-hello.html").exists());
         assert!(session.active.is_none());
     }
 

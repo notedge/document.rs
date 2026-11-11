@@ -40,18 +40,7 @@ impl FrontMatter {
         let weight = i64_field(&fields, "weight");
         let tags = tags_field(&fields);
         let lang = string_field(&fields, "lang");
-        Self {
-            title,
-            description,
-            page_type,
-            layout,
-            date,
-            draft,
-            weight,
-            tags,
-            lang,
-            fields,
-        }
+        Self { title, description, page_type, layout, date, draft, weight, tags, lang, fields }
     }
 }
 
@@ -64,10 +53,7 @@ pub fn parse_document(source: &str) -> CoreResult<ParsedDocument> {
     if let Some(doc) = try_delimited(trimmed, "+++")? {
         return Ok(doc);
     }
-    Ok(ParsedDocument {
-        front_matter: FrontMatter::default(),
-        body: trimmed.to_string(),
-    })
+    Ok(ParsedDocument { front_matter: FrontMatter::default(), body: trimmed.to_string() })
 }
 
 fn try_delimited(source: &str, fence: &str) -> CoreResult<Option<ParsedDocument>> {
@@ -80,38 +66,26 @@ fn try_delimited(source: &str, fence: &str) -> CoreResult<Option<ParsedDocument>
         None => return Ok(None),
     };
     let close = format!("\n{fence}");
-    let Some(end) = rest.find(&close) else {
-        return Err(CoreError::build(format!(
-            "unclosed front matter delimiter `{fence}`"
-        )));
+    let Some(end) = rest.find(&close)
+    else {
+        return Err(CoreError::build(format!("unclosed front matter delimiter `{fence}`")));
     };
     let matter = &rest[..end];
     let after = &rest[end + close.len()..];
     let body = after.strip_prefix('\n').unwrap_or(after).to_string();
-    let fields = if fence == "---" {
-        parse_yaml_map(matter)?
-    } else {
-        parse_toml_map(matter)?
-    };
-    Ok(Some(ParsedDocument {
-        front_matter: FrontMatter::from_map(fields),
-        body,
-    }))
+    let fields = if fence == "---" { parse_yaml_map(matter)? } else { parse_toml_map(matter)? };
+    Ok(Some(ParsedDocument { front_matter: FrontMatter::from_map(fields), body }))
 }
 
 fn parse_yaml_map(matter: &str) -> CoreResult<Map<String, Value>> {
     if matter.trim().is_empty() {
         return Ok(Map::new());
     }
-    let value: Value = serde_yaml::from_str(matter).map_err(|e| {
-        CoreError::build(format!("invalid YAML front matter: {e}"))
-    })?;
+    let value: Value = serde_yaml::from_str(matter).map_err(|e| CoreError::build(format!("invalid YAML front matter: {e}")))?;
     match value {
         Value::Object(map) => Ok(map),
         Value::Null => Ok(Map::new()),
-        other => Err(CoreError::build(format!(
-            "front matter must be a mapping, got {other}"
-        ))),
+        other => Err(CoreError::build(format!("front matter must be a mapping, got {other}"))),
     }
 }
 
@@ -119,17 +93,11 @@ fn parse_toml_map(matter: &str) -> CoreResult<Map<String, Value>> {
     if matter.trim().is_empty() {
         return Ok(Map::new());
     }
-    let table: toml::Table = matter
-        .parse()
-        .map_err(|e| CoreError::build(format!("invalid TOML front matter: {e}")))?;
-    let value = serde_json::to_value(table).map_err(|e| {
-        CoreError::build(format!("toml front matter to json failed: {e}"))
-    })?;
+    let table: toml::Table = matter.parse().map_err(|e| CoreError::build(format!("invalid TOML front matter: {e}")))?;
+    let value = serde_json::to_value(table).map_err(|e| CoreError::build(format!("toml front matter to json failed: {e}")))?;
     match value {
         Value::Object(map) => Ok(map),
-        other => Err(CoreError::build(format!(
-            "front matter must be a mapping, got {other}"
-        ))),
+        other => Err(CoreError::build(format!("front matter must be a mapping, got {other}"))),
     }
 }
 
@@ -188,10 +156,7 @@ mod tests {
 
     #[test]
     fn parses_yaml_front_matter() {
-        let doc = parse_document(
-            "---\ntitle: Hello\ntype: page\ndraft: true\nweight: 3\n---\n\n# Body\n",
-        )
-        .unwrap();
+        let doc = parse_document("---\ntitle: Hello\ntype: page\ndraft: true\nweight: 3\n---\n\n# Body\n").unwrap();
         assert_eq!(doc.front_matter.title.as_deref(), Some("Hello"));
         assert_eq!(doc.front_matter.page_type.as_deref(), Some("page"));
         assert!(doc.front_matter.draft);

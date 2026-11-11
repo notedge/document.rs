@@ -1,8 +1,10 @@
 //! Staging directory + atomic-ish promote into `output_dir`.
 
-use std::collections::BTreeSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::error::{CoreError, CoreResult};
 
@@ -41,11 +43,7 @@ impl StagingArea {
     /// - When `replace_set` is `Some`, also deletes those relative paths from
     ///   output that are not present in the new committed set (full rebuild cleanup).
     /// - Staging root is removed on success.
-    pub fn commit_into(
-        self,
-        output_dir: &Path,
-        replace_set: Option<&BTreeSet<String>>,
-    ) -> CoreResult<Vec<String>> {
+    pub fn commit_into(self, output_dir: &Path, replace_set: Option<&BTreeSet<String>>) -> CoreResult<Vec<String>> {
         fs::create_dir_all(output_dir).map_err(|source| CoreError::Io { source })?;
 
         let mut committed = Vec::new();
@@ -73,27 +71,20 @@ impl StagingArea {
     }
 }
 
-fn copy_tree(
-    from: &Path,
-    to_root: &Path,
-    rel: &str,
-    committed: &mut Vec<String>,
-) -> CoreResult<()> {
+fn copy_tree(from: &Path, to_root: &Path, rel: &str, committed: &mut Vec<String>) -> CoreResult<()> {
     for entry in fs::read_dir(from).map_err(|source| CoreError::Io { source })? {
         let entry = entry.map_err(|source| CoreError::Io { source })?;
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        let child_rel = if rel.is_empty() {
-            name_str.replace('\\', "/")
-        } else {
-            format!("{rel}/{}", name_str.replace('\\', "/"))
-        };
+        let child_rel =
+            if rel.is_empty() { name_str.replace('\\', "/") } else { format!("{rel}/{}", name_str.replace('\\', "/")) };
         let src = entry.path();
         let dest = to_root.join(&child_rel);
         if src.is_dir() {
             fs::create_dir_all(&dest).map_err(|source| CoreError::Io { source })?;
             copy_tree(&src, to_root, &child_rel, committed)?;
-        } else {
+        }
+        else {
             if let Some(parent) = dest.parent() {
                 fs::create_dir_all(parent).map_err(|source| CoreError::Io { source })?;
             }

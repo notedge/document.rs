@@ -1,14 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
 use figment::{
-    providers::{Format, Serialized, Toml},
     Figment,
+    providers::{Format, Serialized, Toml},
 };
 use serde::{Deserialize, Serialize};
 
-use crate::error::{ConfigError, ConfigResult};
-use crate::i18n::is_valid_locale_id;
+use crate::{
+    error::{ConfigError, ConfigResult},
+    i18n::is_valid_locale_id,
+};
 
 /// Absolute project root that contains `doki.toml`.
 #[derive(Debug, Clone)]
@@ -32,12 +36,8 @@ impl ExtensionRef {
         match (&self.path, &self.package) {
             (Some(p), None) if !p.trim().is_empty() => Ok(()),
             (None, Some(pkg)) if !pkg.trim().is_empty() => Ok(()),
-            (Some(_), Some(_)) => Err(ConfigError::invalid(format!(
-                "{field}: set either `path` or `package`, not both"
-            ))),
-            _ => Err(ConfigError::invalid(format!(
-                "{field}: require exactly one of `path` or `package`"
-            ))),
+            (Some(_), Some(_)) => Err(ConfigError::invalid(format!("{field}: set either `path` or `package`, not both"))),
+            _ => Err(ConfigError::invalid(format!("{field}: require exactly one of `path` or `package`"))),
         }
     }
 }
@@ -61,15 +61,11 @@ fn default_true() -> bool {
 
 impl PluginEntry {
     pub fn as_extension_ref(&self) -> ExtensionRef {
-        ExtensionRef {
-            path: self.path.clone(),
-            package: self.package.clone(),
-        }
+        ExtensionRef { path: self.path.clone(), package: self.package.clone() }
     }
 
     pub fn validate(&self, index: usize) -> ConfigResult<()> {
-        self.as_extension_ref()
-            .validate(&format!("plugins[{index}]"))
+        self.as_extension_ref().validate(&format!("plugins[{index}]"))
     }
 }
 
@@ -167,10 +163,7 @@ impl ProjectConfig {
             return Err(ConfigError::invalid("`title` must not be empty"));
         }
         if !is_valid_locale_id(&self.lang) {
-            return Err(ConfigError::invalid(format!(
-                "`lang` must be a locale id like `en` or `zh-CN`, got `{}`",
-                self.lang
-            )));
+            return Err(ConfigError::invalid(format!("`lang` must be a locale id like `en` or `zh-CN`, got `{}`", self.lang)));
         }
         if let Some(theme) = &self.theme {
             theme.validate("theme")?;
@@ -180,9 +173,7 @@ impl ProjectConfig {
         }
         for (name, target) in &self.overrides {
             if name.trim().is_empty() || target.path.trim().is_empty() {
-                return Err(ConfigError::invalid(
-                    "overrides entries require non-empty package name and path",
-                ));
+                return Err(ConfigError::invalid("overrides entries require non-empty package name and path"));
             }
         }
         if let Some(i18n) = &self.i18n {
@@ -193,34 +184,23 @@ impl ProjectConfig {
 
     fn validate_i18n(&self, i18n: &I18nConfig) -> ConfigResult<()> {
         if i18n.locales.is_empty() {
-            return Err(ConfigError::invalid(
-                "`i18n.locales` must list at least one locale",
-            ));
+            return Err(ConfigError::invalid("`i18n.locales` must list at least one locale"));
         }
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         for locale in &i18n.locales {
             if !is_valid_locale_id(locale) {
-                return Err(ConfigError::invalid(format!(
-                    "`i18n.locales` entry `{locale}` is not a valid locale id"
-                )));
+                return Err(ConfigError::invalid(format!("`i18n.locales` entry `{locale}` is not a valid locale id")));
             }
             if !seen.insert(locale.as_str()) {
-                return Err(ConfigError::invalid(format!(
-                    "`i18n.locales` lists `{locale}` more than once"
-                )));
+                return Err(ConfigError::invalid(format!("`i18n.locales` lists `{locale}` more than once")));
             }
         }
         if !seen.contains(self.lang.as_str()) {
-            return Err(ConfigError::invalid(format!(
-                "`i18n.locales` must include the site `lang` `{}`",
-                self.lang
-            )));
+            return Err(ConfigError::invalid(format!("`i18n.locales` must include the site `lang` `{}`", self.lang)));
         }
         for (child, parent) in &i18n.fallback {
             if !seen.contains(child.as_str()) {
-                return Err(ConfigError::invalid(format!(
-                    "`i18n.fallback` key `{child}` is not listed in `i18n.locales`"
-                )));
+                return Err(ConfigError::invalid(format!("`i18n.fallback` key `{child}` is not listed in `i18n.locales`")));
             }
             if !seen.contains(parent.as_str()) {
                 return Err(ConfigError::invalid(format!(
@@ -248,10 +228,7 @@ pub struct LoadOptions {
 
 impl Default for LoadOptions {
     fn default() -> Self {
-        Self {
-            allow_local: false,
-            theme_defaults: None,
-        }
+        Self { allow_local: false, theme_defaults: None }
     }
 }
 
@@ -265,15 +242,10 @@ pub fn peek_theme_ref(root: impl AsRef<Path>) -> ConfigResult<Option<ExtensionRe
     let root = root.as_ref();
     let config_file = root.join("doki.toml");
     if !config_file.is_file() {
-        return Err(ConfigError::invalid(format!(
-            "missing doki.toml under {}",
-            root.display()
-        )));
+        return Err(ConfigError::invalid(format!("missing doki.toml under {}", root.display())));
     }
-    let peek: ThemePeek = Figment::new()
-        .merge(Toml::file(&config_file))
-        .extract()
-        .map_err(|source| ConfigError::Extract { source })?;
+    let peek: ThemePeek =
+        Figment::new().merge(Toml::file(&config_file)).extract().map_err(|source| ConfigError::Extract { source })?;
     if let Some(theme) = &peek.theme {
         theme.validate("theme")?;
     }
@@ -296,20 +268,11 @@ pub fn theme_defaults_file(theme_root: impl AsRef<Path>) -> Option<PathBuf> {
 ///
 /// Layer order: core defaults → theme defaults → `doki.toml` → optional `doki.local.toml`.
 /// Process env is not merged — stray `DOKI_*` vars are not part of the locked config surface.
-pub fn load_project_config(
-    root: impl AsRef<Path>,
-    options: LoadOptions,
-) -> ConfigResult<(ProjectPaths, ProjectConfig)> {
-    let root = root
-        .as_ref()
-        .canonicalize()
-        .map_err(|source| ConfigError::Io { source })?;
+pub fn load_project_config(root: impl AsRef<Path>, options: LoadOptions) -> ConfigResult<(ProjectPaths, ProjectConfig)> {
+    let root = root.as_ref().canonicalize().map_err(|source| ConfigError::Io { source })?;
     let config_file = root.join("doki.toml");
     if !config_file.is_file() {
-        return Err(ConfigError::invalid(format!(
-            "missing doki.toml under {}",
-            root.display()
-        )));
+        return Err(ConfigError::invalid(format!("missing doki.toml under {}", root.display())));
     }
 
     let theme_defaults_path = resolve_theme_defaults_path(&root, &options)?;
@@ -327,30 +290,16 @@ pub fn load_project_config(
         figment = figment.merge(Toml::file(&local));
     }
 
-    let config: ProjectConfig = figment
-        .extract()
-        .map_err(|source| ConfigError::Extract { source })?;
+    let config: ProjectConfig = figment.extract().map_err(|source| ConfigError::Extract { source })?;
     config.validate()?;
 
-    Ok((
-        ProjectPaths {
-            root,
-            config_file,
-        },
-        config,
-    ))
+    Ok((ProjectPaths { root, config_file }, config))
 }
 
-fn resolve_theme_defaults_path(
-    root: &Path,
-    options: &LoadOptions,
-) -> ConfigResult<Option<PathBuf>> {
+fn resolve_theme_defaults_path(root: &Path, options: &LoadOptions) -> ConfigResult<Option<PathBuf>> {
     if let Some(explicit) = &options.theme_defaults {
         if !explicit.is_file() {
-            return Err(ConfigError::invalid(format!(
-                "theme defaults file not found: {}",
-                explicit.display()
-            )));
+            return Err(ConfigError::invalid(format!("theme defaults file not found: {}", explicit.display())));
         }
         return Ok(Some(explicit.clone()));
     }
@@ -401,10 +350,7 @@ enabled = true
         assert_eq!(cfg.theme.as_ref().unwrap().path.as_deref(), Some("./themes/docs"));
         assert_eq!(cfg.plugins.len(), 2);
         assert_eq!(cfg.plugins[0].path.as_deref(), Some("./plugins/related-pages"));
-        assert_eq!(
-            cfg.plugins[1].package.as_deref(),
-            Some("@doki-land/plugin-search")
-        );
+        assert_eq!(cfg.plugins[1].package.as_deref(), Some("@doki-land/plugin-search"));
     }
 
     #[test]
@@ -423,10 +369,7 @@ package = "@scope/theme"
 
         let err = load_project_config(dir.path(), LoadOptions::default()).unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("path") || msg.contains("package") || format!("{err:?}").contains("path"),
-            "{err:?}"
-        );
+        assert!(msg.contains("path") || msg.contains("package") || format!("{err:?}").contains("path"), "{err:?}");
     }
 
     #[test]
@@ -449,24 +392,10 @@ title = "LocalDev"
         )
         .unwrap();
 
-        let (_, prod) = load_project_config(
-            dir.path(),
-            LoadOptions {
-                allow_local: false,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let (_, prod) = load_project_config(dir.path(), LoadOptions { allow_local: false, ..Default::default() }).unwrap();
         assert_eq!(prod.title, "Base");
 
-        let (_, dev) = load_project_config(
-            dir.path(),
-            LoadOptions {
-                allow_local: true,
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let (_, dev) = load_project_config(dir.path(), LoadOptions { allow_local: true, ..Default::default() }).unwrap();
         assert_eq!(dev.title, "LocalDev");
     }
 
@@ -518,14 +447,8 @@ package = "@acme/theme"
         )
         .unwrap();
 
-        let (_, cfg) = load_project_config(
-            dir.path(),
-            LoadOptions {
-                theme_defaults: Some(defaults),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        let (_, cfg) =
+            load_project_config(dir.path(), LoadOptions { theme_defaults: Some(defaults), ..Default::default() }).unwrap();
         assert_eq!(cfg.lang, "ja");
     }
 
@@ -555,10 +478,7 @@ locales = ["en", "zh", "zh-TW"]
         // locales must contain the site lang
         let bad = ProjectConfig {
             lang: "en".into(),
-            i18n: Some(I18nConfig {
-                locales: vec!["zh".into()],
-                fallback: BTreeMap::new(),
-            }),
+            i18n: Some(I18nConfig { locales: vec!["zh".into()], fallback: BTreeMap::new() }),
             ..ProjectConfig::default()
         };
         assert!(bad.validate().unwrap_err().to_string().contains("lang"));
@@ -572,13 +492,7 @@ locales = ["en", "zh", "zh-TW"]
             }),
             ..ProjectConfig::default()
         };
-        assert!(
-            bad_parent
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("i18n.locales")
-        );
+        assert!(bad_parent.validate().unwrap_err().to_string().contains("i18n.locales"));
 
         // the site lang never gets a fallback parent
         let bad_lang_parent = ProjectConfig {
@@ -588,19 +502,10 @@ locales = ["en", "zh", "zh-TW"]
             }),
             ..ProjectConfig::default()
         };
-        assert!(
-            bad_lang_parent
-                .validate()
-                .unwrap_err()
-                .to_string()
-                .contains("chain ends at `lang`")
-        );
+        assert!(bad_lang_parent.validate().unwrap_err().to_string().contains("chain ends at `lang`"));
 
         // locale ids reject traversal and separators
-        let bad_id = ProjectConfig {
-            lang: "../evil".into(),
-            ..ProjectConfig::default()
-        };
+        let bad_id = ProjectConfig { lang: "../evil".into(), ..ProjectConfig::default() };
         assert!(bad_id.validate().unwrap_err().to_string().contains("lang"));
     }
 }

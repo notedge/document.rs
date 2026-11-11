@@ -5,8 +5,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::diagnostic::Diagnostic;
-use crate::graph::ContentId;
+use crate::{diagnostic::Diagnostic, graph::ContentId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

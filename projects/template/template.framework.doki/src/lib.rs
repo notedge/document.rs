@@ -19,9 +19,7 @@ mod staging;
 
 use serde_json::Value;
 
-use template::{
-    MapTemplateLoader, RenderOptions, TemplateContentKind, TemplateError, TemplateId, TemplateStatus,
-};
+use template::{MapTemplateLoader, RenderOptions, TemplateContentKind, TemplateError, TemplateId, TemplateStatus};
 use template_framework::{FrameworkCapability, FrameworkOutput, FrameworkRequest, TemplateFramework};
 use template_input_dejavu::{
     CustomRegistry, ParseError, language_for_path, parse_with, render_ir_opts, template_error_from_diagnostic,
@@ -29,8 +27,8 @@ use template_input_dejavu::{
 };
 
 pub use config::{
-    ExtensionRef, I18nConfig, LoadOptions, OverrideTarget, PluginEntry, ProjectConfig, ProjectPaths,
-    load_project_config, peek_theme_ref, theme_defaults_file,
+    ExtensionRef, I18nConfig, LoadOptions, OverrideTarget, PluginEntry, ProjectConfig, ProjectPaths, load_project_config,
+    peek_theme_ref, theme_defaults_file,
 };
 pub use diagnostic::{Diagnostic, Severity};
 pub use error::{ConfigError, ConfigResult, CoreError, CoreResult};
@@ -39,16 +37,13 @@ pub use graph::{
     ContentGraph, ContentId, ContentKind, ContentNode, FrontMatterDto, discover_markdown_content, load_markdown_node,
 };
 pub use i18n::{
-    CATALOG_IO_CODE, CATALOG_SYNTAX_CODE, DUPLICATE_KEY_CODE, FALLBACK_CYCLE_CODE, I18n, MISSING_CATALOG_CODE,
-    MISSING_KEY_CODE,
+    CATALOG_IO_CODE, CATALOG_SYNTAX_CODE, DUPLICATE_KEY_CODE, FALLBACK_CYCLE_CODE, I18n, MISSING_CATALOG_CODE, MISSING_KEY_CODE,
 };
 pub use protocol::{
     BuildMode, BuildPhase, BuildPlan, BuildResult, ExplainRebuild, ExtensionKind, ExtensionSourceKind, FileChange,
     FileChangeKind, HookKind, HookWorkItem, InvalidationResult, PluginResult, ResolvedExtension,
 };
-pub use render::{
-    DEFAULT_LAYOUT, RenderedPage, language_for_ext, markdown_to_html, render_page, render_taxonomy_page,
-};
+pub use render::{DEFAULT_LAYOUT, RenderedPage, language_for_ext, markdown_to_html, render_page, render_taxonomy_page};
 pub use session::BuildSession;
 pub use site::{
     INVALID_LOCALE_CODE, INVALID_TYPE_CODE, PageType, ROUTE_CONFLICT_CODE, SiteModel, SitePage, TAGS_INDEX_ID,

@@ -28,9 +28,7 @@ pub enum ConfigError {
 
 impl ConfigError {
     pub fn invalid(message: impl Into<String>) -> Self {
-        Self::Invalid {
-            message: message.into(),
-        }
+        Self::Invalid { message: message.into() }
     }
 }
 
@@ -72,14 +70,10 @@ pub enum CoreError {
 
 impl CoreError {
     pub fn session(message: impl Into<String>) -> Self {
-        Self::Session {
-            message: message.into(),
-        }
+        Self::Session { message: message.into() }
     }
 
     pub fn build(message: impl Into<String>) -> Self {
-        Self::Build {
-            message: message.into(),
-        }
+        Self::Build { message: message.into() }
     }
 }

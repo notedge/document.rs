@@ -1,11 +1,15 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::error::{CoreError, CoreResult};
-use crate::frontmatter::{parse_document, FrontMatter};
+use crate::{
+    error::{CoreError, CoreResult},
+    frontmatter::{FrontMatter, parse_document},
+};
 
 /// Stable content identity within a project (POSIX-ish relative path from content root).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -120,10 +124,7 @@ impl ContentGraph {
 }
 
 /// Scan `content_dir` and parse Markdown + front matter.
-pub fn discover_markdown_content(
-    project_root: &Path,
-    content_dir: &str,
-) -> CoreResult<ContentGraph> {
+pub fn discover_markdown_content(project_root: &Path, content_dir: &str) -> CoreResult<ContentGraph> {
     let root = project_root.join(content_dir);
     let mut graph = ContentGraph::default();
     if !root.exists() {
@@ -134,11 +135,7 @@ pub fn discover_markdown_content(
 }
 
 pub fn load_markdown_node(content_root: &Path, abs_path: &Path) -> CoreResult<ContentNode> {
-    let rel = abs_path
-        .strip_prefix(content_root)
-        .unwrap_or(abs_path)
-        .to_string_lossy()
-        .replace('\\', "/");
+    let rel = abs_path.strip_prefix(content_root).unwrap_or(abs_path).to_string_lossy().replace('\\', "/");
     let raw = std::fs::read(abs_path).map_err(|source| CoreError::Io { source })?;
     let content_hash = hex::encode(Sha256::digest(&raw));
     let source = String::from_utf8_lossy(&raw);
@@ -163,7 +160,8 @@ fn walk_md(dir: &Path, content_root: &Path, graph: &mut ContentGraph) -> CoreRes
             walk_md(&path, content_root, graph)?;
             continue;
         }
-        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        let Some(ext) = path.extension().and_then(|e| e.to_str())
+        else {
             continue;
         };
         if !matches!(ext, "md" | "mdx" | "markdown") {

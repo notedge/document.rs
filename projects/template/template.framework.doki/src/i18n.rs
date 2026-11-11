@@ -8,14 +8,15 @@
 //! the filesystem. Nested objects flatten to dot-separated message keys;
 //! `t`/`locale` reach templates through the Dejavu host registry in `render`.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::config::ProjectConfig;
-use crate::diagnostic::Diagnostic;
+use crate::{config::ProjectConfig, diagnostic::Diagnostic};
 
 /// Explicit fallback chain contains a cycle (`[i18n.fallback]`).
 pub const FALLBACK_CYCLE_CODE: &str = "doki.i18n.fallback-cycle";
@@ -36,9 +37,7 @@ pub(crate) fn is_valid_locale_id(value: &str) -> bool {
     !value.is_empty()
         && !value.contains('/')
         && !value.contains('\\')
-        && value.split('-').all(|part| {
-            !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric())
-        })
+        && value.split('-').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
 // ---------------------------------------------------------------------------
@@ -79,17 +78,12 @@ impl I18n {
                     break;
                 }
                 if let Some(idx) = seen.iter().position(|s| *s == cur) {
-                    let cycle: Vec<&str> = seen[idx..]
-                        .iter()
-                        .map(String::as_str)
-                        .chain(std::iter::once(cur.as_str()))
-                        .collect();
+                    let cycle: Vec<&str> =
+                        seen[idx..].iter().map(String::as_str).chain(std::iter::once(cur.as_str())).collect();
                     let key = cycle.join(" -> ");
                     if reported.insert(key.clone()) {
-                        diagnostics.push(Diagnostic::error(
-                            FALLBACK_CYCLE_CODE,
-                            format!("`[i18n.fallback]` forms a cycle: {key}"),
-                        ));
+                        diagnostics
+                            .push(Diagnostic::error(FALLBACK_CYCLE_CODE, format!("`[i18n.fallback]` forms a cycle: {key}")));
                     }
                     break;
                 }
@@ -123,10 +117,7 @@ impl I18n {
             let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,
                 Err(e) => {
-                    let mut d = Diagnostic::error(
-                        CATALOG_IO_CODE,
-                        format!("cannot read `{rel}`: {e}"),
-                    );
+                    let mut d = Diagnostic::error(CATALOG_IO_CODE, format!("cannot read `{rel}`: {e}"));
                     d.file = Some(rel.clone());
                     diagnostics.push(d);
                     continue;
@@ -136,10 +127,7 @@ impl I18n {
             let text = match std::str::from_utf8(&bytes) {
                 Ok(text) => text,
                 Err(e) => {
-                    let mut d = Diagnostic::error(
-                        CATALOG_SYNTAX_CODE,
-                        format!("`{rel}` is not valid UTF-8: {e}"),
-                    );
+                    let mut d = Diagnostic::error(CATALOG_SYNTAX_CODE, format!("`{rel}` is not valid UTF-8: {e}"));
                     d.file = Some(rel.clone());
                     diagnostics.push(d);
                     continue;
@@ -148,10 +136,8 @@ impl I18n {
             match parse_json5(text) {
                 Ok((value, issues)) => {
                     if !value.is_object() {
-                        let mut d = Diagnostic::error(
-                            CATALOG_SYNTAX_CODE,
-                            format!("`{rel}` must be a JSON5 object at the top level"),
-                        );
+                        let mut d =
+                            Diagnostic::error(CATALOG_SYNTAX_CODE, format!("`{rel}` must be a JSON5 object at the top level"));
                         d.file = Some(rel.clone());
                         diagnostics.push(d);
                         continue;
@@ -188,13 +174,7 @@ impl I18n {
             }
         }
 
-        let i18n = I18n {
-            default_locale,
-            locales,
-            fallback,
-            catalogs,
-            catalog_hashes,
-        };
+        let i18n = I18n { default_locale, locales, fallback, catalogs, catalog_hashes };
         (i18n, diagnostics)
     }
 
@@ -246,18 +226,15 @@ impl I18n {
     /// Resolve `key` for `locale` along the fallback chain and interpolate
     /// `{name}` placeholders from `args`. On a miss the key literal is
     /// returned plus a `missing-key` Warning diagnostic.
-    pub fn translate(
-        &self,
-        locale: &str,
-        key: &str,
-        args: Option<&Map<String, Value>>,
-    ) -> (String, Option<Diagnostic>) {
+    pub fn translate(&self, locale: &str, key: &str, args: Option<&Map<String, Value>>) -> (String, Option<Diagnostic>) {
         let chain = self.chain(locale);
         for loc in &chain {
-            let Some(cat) = self.catalogs.get(loc) else {
+            let Some(cat) = self.catalogs.get(loc)
+            else {
                 continue;
             };
-            let Some(value) = cat.get(key) else {
+            let Some(value) = cat.get(key)
+            else {
                 continue;
             };
             return match value {
@@ -279,10 +256,7 @@ impl I18n {
         }
         let d = Diagnostic::warning(
             MISSING_KEY_CODE,
-            format!(
-                "missing message key `{key}` for locale `{locale}` (tried: {})",
-                chain.join(" -> ")
-            ),
+            format!("missing message key `{key}` for locale `{locale}` (tried: {})", chain.join(" -> ")),
         );
         (key.to_string(), Some(d))
     }
@@ -304,11 +278,7 @@ fn flatten_into(prefix: &str, value: Value, out: &mut BTreeMap<String, Value>) {
     match value {
         Value::Object(map) => {
             for (k, v) in map {
-                let key = if prefix.is_empty() {
-                    k.clone()
-                } else {
-                    format!("{prefix}.{k}")
-                };
+                let key = if prefix.is_empty() { k.clone() } else { format!("{prefix}.{k}") };
                 flatten_into(&key, v, out);
             }
         }
@@ -327,10 +297,7 @@ fn interpolate(template: &str, args: Option<&Map<String, Value>>) -> String {
         if bytes[i] == b'{' {
             if let Some(end) = template[i + 1..].find('}') {
                 let name = &template[i + 1..i + 1 + end];
-                let valid = !name.is_empty()
-                    && name
-                        .chars()
-                        .all(|c| c.is_alphanumeric() || c == '_' || c == '.');
+                let valid = !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.');
                 if valid {
                     if let Some(args) = args {
                         if let Some(v) = args.get(name) {
@@ -389,13 +356,7 @@ struct Json5Parser {
 
 impl Json5Parser {
     fn new(text: &str) -> Self {
-        Self {
-            chars: text.chars().collect(),
-            pos: 0,
-            line: 1,
-            col: 1,
-            issues: Vec::new(),
-        }
+        Self { chars: text.chars().collect(), pos: 0, line: 1, col: 1, issues: Vec::new() }
     }
 
     fn peek(&self) -> Option<char> {
@@ -416,27 +377,23 @@ impl Json5Parser {
         if c == '\n' {
             self.line += 1;
             self.col = 1;
-        } else {
+        }
+        else {
             self.col += 1;
         }
         c
     }
 
     fn error(&self, message: impl Into<String>) -> Json5Issue {
-        Json5Issue {
-            message: message.into(),
-            line: self.line,
-            column: self.col,
-            kind: Json5IssueKind::Syntax,
-            key: None,
-        }
+        Json5Issue { message: message.into(), line: self.line, column: self.col, kind: Json5IssueKind::Syntax, key: None }
     }
 
     fn eat(&mut self, c: char) -> Result<(), Json5Issue> {
         if self.peek() == Some(c) {
             self.advance();
             Ok(())
-        } else {
+        }
+        else {
             Err(self.error(format!("expected `{c}`")))
         }
     }
@@ -481,17 +438,14 @@ impl Json5Parser {
             Some('{') => self.parse_object(base),
             Some('[') => self.parse_array(base),
             Some('"') | Some('\'') => Ok(Value::String(self.parse_string()?)),
-            Some(c) if c == '+' || c == '-' || c == '.' || c.is_ascii_digit() => {
-                self.parse_number()
-            }
+            Some(c) if c == '+' || c == '-' || c == '.' || c.is_ascii_digit() => self.parse_number(),
             Some(_) => {
                 let id = self.parse_identifier();
                 match id.as_str() {
                     "true" => Ok(Value::Bool(true)),
                     "false" => Ok(Value::Bool(false)),
                     "null" => Ok(Value::Null),
-                    "Infinity" | "NaN" => Err(self
-                        .error("Infinity and NaN are not allowed in message catalogs")),
+                    "Infinity" | "NaN" => Err(self.error("Infinity and NaN are not allowed in message catalogs")),
                     _ => Err(self.error(format!("unexpected token `{id}`; expected a value"))),
                 }
             }
@@ -515,11 +469,7 @@ impl Json5Parser {
             };
             self.skip_trivia()?;
             self.eat(':')?;
-            let full = if base.is_empty() {
-                key.clone()
-            } else {
-                format!("{base}.{key}")
-            };
+            let full = if base.is_empty() { key.clone() } else { format!("{base}.{key}") };
             let value = self.parse_value(&full)?;
             if map.contains_key(&key) {
                 self.issues.push(Json5Issue {
@@ -627,9 +577,7 @@ impl Json5Parser {
                         'x' => {
                             self.advance();
                             let v = self.read_hex(2)?;
-                            out.push(
-                                char::from_u32(v).ok_or_else(|| self.error("invalid \\x escape"))?,
-                            );
+                            out.push(char::from_u32(v).ok_or_else(|| self.error("invalid \\x escape"))?);
                         }
                         'u' => {
                             self.advance();
@@ -640,25 +588,22 @@ impl Json5Parser {
                                     self.advance();
                                     let lo = self.read_hex(4)?;
                                     if (0xDC00..=0xDFFF).contains(&lo) {
-                                        let cp =
-                                            0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
-                                        out.push(
-                                            char::from_u32(cp)
-                                                .ok_or_else(|| self.error("invalid surrogate pair"))?,
-                                        );
-                                    } else {
+                                        let cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+                                        out.push(char::from_u32(cp).ok_or_else(|| self.error("invalid surrogate pair"))?);
+                                    }
+                                    else {
                                         return Err(self.error("invalid surrogate pair"));
                                     }
-                                } else {
+                                }
+                                else {
                                     return Err(self.error("lone high surrogate"));
                                 }
-                            } else if (0xDC00..=0xDFFF).contains(&hi) {
+                            }
+                            else if (0xDC00..=0xDFFF).contains(&hi) {
                                 return Err(self.error("lone low surrogate"));
-                            } else {
-                                out.push(
-                                    char::from_u32(hi)
-                                        .ok_or_else(|| self.error("invalid \\u escape"))?,
-                                );
+                            }
+                            else {
+                                out.push(char::from_u32(hi).ok_or_else(|| self.error("invalid \\u escape"))?);
                             }
                         }
                         other => {
@@ -681,7 +626,8 @@ impl Json5Parser {
         while let Some(c) = self.peek() {
             if c.is_alphanumeric() || c == '_' || c == '$' {
                 s.push(self.advance());
-            } else {
+            }
+            else {
                 break;
             }
         }
@@ -703,19 +649,19 @@ impl Json5Parser {
             if hex.is_empty() {
                 return Err(self.error("hex number has no digits"));
             }
-            let mag = u64::from_str_radix(&hex, 16)
-                .map_err(|_| self.error("hex number out of range"))?;
+            let mag = u64::from_str_radix(&hex, 16).map_err(|_| self.error("hex number out of range"))?;
             let num = if tok.starts_with('-') {
                 match i64::try_from(mag) {
                     Ok(v) => Value::Number((-v).into()),
                     Err(_) => Value::Number(
-                        serde_json::Number::from_f64(-(mag as f64))
-                            .ok_or_else(|| self.error("hex number out of range"))?,
+                        serde_json::Number::from_f64(-(mag as f64)).ok_or_else(|| self.error("hex number out of range"))?,
                     ),
                 }
-            } else if let Ok(v) = i64::try_from(mag) {
+            }
+            else if let Ok(v) = i64::try_from(mag) {
                 Value::Number(v.into())
-            } else {
+            }
+            else {
                 Value::Number(mag.into())
             };
             return Ok(num);
@@ -723,14 +669,17 @@ impl Json5Parser {
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() {
                 tok.push(self.advance());
-            } else if c == '.' {
+            }
+            else if c == '.' {
                 tok.push(self.advance());
-            } else if c == 'e' || c == 'E' {
+            }
+            else if c == 'e' || c == 'E' {
                 tok.push(self.advance());
                 if matches!(self.peek(), Some('+') | Some('-')) {
                     tok.push(self.advance());
                 }
-            } else {
+            }
+            else {
                 break;
             }
         }
@@ -740,19 +689,14 @@ impl Json5Parser {
         let cleaned = tok.strip_prefix('+').unwrap_or(&tok);
         let is_float = cleaned.contains('.') || cleaned.contains('e') || cleaned.contains('E');
         if is_float {
-            let f: f64 = cleaned
-                .parse()
-                .map_err(|_| self.error(format!("invalid number `{tok}`")))?;
+            let f: f64 = cleaned.parse().map_err(|_| self.error(format!("invalid number `{tok}`")))?;
             if !f.is_finite() {
                 return Err(self.error("number out of range"));
             }
-            Ok(Value::Number(
-                serde_json::Number::from_f64(f).ok_or_else(|| self.error("invalid number"))?,
-            ))
-        } else {
-            let i: i64 = cleaned
-                .parse()
-                .map_err(|_| self.error(format!("integer out of range `{tok}`")))?;
+            Ok(Value::Number(serde_json::Number::from_f64(f).ok_or_else(|| self.error("invalid number"))?))
+        }
+        else {
+            let i: i64 = cleaned.parse().map_err(|_| self.error(format!("integer out of range `{tok}`")))?;
             Ok(Value::Number(i.into()))
         }
     }
@@ -761,9 +705,7 @@ impl Json5Parser {
         let mut v: u32 = 0;
         for _ in 0..n {
             let c = self.peek().ok_or_else(|| self.error("unexpected end in escape"))?;
-            let d = c
-                .to_digit(16)
-                .ok_or_else(|| self.error("invalid hex digit in escape"))?;
+            let d = c.to_digit(16).ok_or_else(|| self.error("invalid hex digit in escape"))?;
             v = v * 16 + d;
             self.advance();
         }
@@ -819,10 +761,7 @@ mod tests {
     #[test]
     fn json5_detects_duplicate_keys_with_dotted_path() {
         let (_, issues) = parse_json5("{ a: 1, a: 2, nested: { b: 1, b: 2 } }").unwrap();
-        let keys: Vec<&str> = issues
-            .iter()
-            .map(|i| i.key.as_deref().unwrap_or_default())
-            .collect();
+        let keys: Vec<&str> = issues.iter().map(|i| i.key.as_deref().unwrap_or_default()).collect();
         assert_eq!(keys, ["a", "nested.b"]);
         assert!(issues.iter().all(|i| i.kind == Json5IssueKind::DuplicateKey));
     }
@@ -837,10 +776,7 @@ mod tests {
 
     #[test]
     fn json5_string_escapes_and_hex_and_leading_dot() {
-        let (value, _) = parse_json5(
-            r#"{ s: "a\nb\tA😀", h: 0xFF, d: .25, e: 1e3, q: 'it\'s' }"#,
-        )
-        .unwrap();
+        let (value, _) = parse_json5(r#"{ s: "a\nb\tA😀", h: 0xFF, d: .25, e: 1e3, q: 'it\'s' }"#).unwrap();
         let mut flat = BTreeMap::new();
         flatten_into("", value, &mut flat);
         assert_eq!(flat["s"], Value::String("a\nb\tA\u{1F600}".into()));
@@ -855,10 +791,7 @@ mod tests {
         let mut args = Map::new();
         args.insert("name".into(), Value::String("world".into()));
         args.insert("count".into(), Value::Number(7.into()));
-        assert_eq!(
-            interpolate("hi {name} x{count} {missing}", Some(&args)),
-            "hi world x7 {missing}"
-        );
+        assert_eq!(interpolate("hi {name} x{count} {missing}", Some(&args)), "hi world x7 {missing}");
         assert_eq!(interpolate("no {name} here", None), "no {name} here");
     }
 
@@ -904,15 +837,10 @@ mod tests {
         };
         let (_i18n, diagnostics) = I18n::load(dir.path(), &config);
         assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.code == MISSING_CATALOG_CODE && d.file.as_deref() == Some("locales/zh.json5")),
+            diagnostics.iter().any(|d| d.code == MISSING_CATALOG_CODE && d.file.as_deref() == Some("locales/zh.json5")),
             "{diagnostics:?}"
         );
-        assert!(
-            diagnostics.iter().any(|d| d.code == FALLBACK_CYCLE_CODE),
-            "{diagnostics:?}"
-        );
+        assert!(diagnostics.iter().any(|d| d.code == FALLBACK_CYCLE_CODE), "{diagnostics:?}");
     }
 
     #[test]
@@ -952,10 +880,7 @@ mod tests {
     #[test]
     fn single_locale_project_without_locales_dir_is_clean() {
         let dir = tempfile::tempdir().unwrap();
-        let config = ProjectConfig {
-            lang: "en".into(),
-            ..ProjectConfig::default()
-        };
+        let config = ProjectConfig { lang: "en".into(), ..ProjectConfig::default() };
         let (i18n, diagnostics) = I18n::load(dir.path(), &config);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert!(!i18n.is_multi());
