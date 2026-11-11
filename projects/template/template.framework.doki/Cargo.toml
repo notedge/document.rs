@@ -1,0 +1,15 @@
+[package]
+name = "template-framework-doki"
+version.workspace = true
+authors.workspace = true
+description = "Doki 构建框架：登记为 template.framework.doki"
+repository = "https://github.com/notedge/document.rs"
+readme = "readme.md"
+license.workspace = true
+edition.workspace = true
+
+[dependencies]
+template = { workspace = true }
+template-framework = { workspace = true }
+template-input-dejavu = { workspace = true }
+serde_json = { workspace = true }

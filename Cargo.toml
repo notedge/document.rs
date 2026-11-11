@@ -22,6 +22,7 @@ default-members = [
     "projects/template/template.input.jinja",
     "projects/template/template.input.dejavu",
     "projects/template/template.framework",
+    "projects/template/template.framework.doki",
     "projects/crawler/crawler",
     "projects/crawler/crawler.types",
 ]
@@ -86,6 +87,7 @@ template-input-hbs = { path = "projects/template/template.input.hbs" }
 template-input-jinja = { path = "projects/template/template.input.jinja" }
 template-input-dejavu = { path = "projects/template/template.input.dejavu" }
 template-framework = { path = "projects/template/template.framework" }
+template-framework-doki = { path = "projects/template/template.framework.doki" }
 
 # --- Crawler ---
 crawler-types = { path = "projects/crawler/crawler.types" }

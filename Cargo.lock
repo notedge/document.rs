@@ -2527,6 +2527,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "template-framework-doki"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "template",
+ "template-framework",
+ "template-input-dejavu",
+]
+
+[[package]]
 name = "template-input-dejavu"
 version = "0.1.0"
 dependencies = [
